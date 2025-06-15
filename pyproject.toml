@@ -1,0 +1,46 @@
+[project]
+name = "trust5"
+version = "0.1.0"
+description = "Trust5 - AI code generation with absolute correctness"
+requires-python = ">=3.10"
+dependencies = [
+    "rich>=13.0,<14",
+    "typer>=0.9,<1",
+    "requests>=2.28,<3",
+    "pyyaml>=6.0,<7",
+    "stabilize>=0.5,<1",
+    "cryptography>=41,<44",
+    "pydantic>=2.0,<3",
+    "textual>=1.0.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-timeout",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+trust5 = "trust5.main:app"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+mypy_path = "."
+explicit_package_bases = true
+
+[tool.setuptools]
+packages = ["trust5"]
+
+[tool.setuptools.package-data]
+trust5 = ["assets/**/*"]
