@@ -218,3 +218,48 @@ class TestCreateParallelDevelopWorkflow:
         assert "validate_a" in int_val.requisite_stage_ref_ids
         assert "validate_b" in int_val.requisite_stage_ref_ids
         assert "validate_c" in int_val.requisite_stage_ref_ids
+
+    def test_module_context_propagated_to_validate(self) -> None:
+        modules = [
+            ModuleSpec(
+                id="db",
+                name="Database",
+                files=["src/db.py"],
+                test_files=["tests/test_db.py"],
+            )
+        ]
+        wf = create_parallel_develop_workflow(modules, "req", "plan")
+        stage_map = {s.ref_id: s for s in wf.stages}
+
+        val = stage_map["validate_db"]
+        assert val.context["jump_repair_ref"] == "repair_db"
+        assert val.context["jump_validate_ref"] == "validate_db"
+        assert val.context["jump_implement_ref"] == "implement_db"
+        assert val.context["owned_files"] == ["src/db.py"]
+        assert val.context["test_files"] == ["tests/test_db.py"]
+        assert val.context["module_name"] == "Database"
+
+    def test_repair_stage_has_module_context(self) -> None:
+        modules = [ModuleSpec(id="x", name="X")]
+        wf = create_parallel_develop_workflow(modules, "req", "plan")
+        stage_map = {s.ref_id: s for s in wf.stages}
+
+        rep = stage_map["repair_x"]
+        assert rep.context["jump_repair_ref"] == "repair_x"
+        assert rep.context["jump_validate_ref"] == "validate_x"
+
+    def test_quality_stage_jumps_to_integration_repair(self) -> None:
+        modules = [ModuleSpec(id="m", name="M")]
+        wf = create_parallel_develop_workflow(modules, "req", "plan")
+        stage_map = {s.ref_id: s for s in wf.stages}
+
+        quality = stage_map["quality"]
+        assert quality.context["jump_repair_ref"] == "integration_repair"
+
+    def test_workflow_name(self) -> None:
+        modules = [ModuleSpec(id="m", name="M")]
+        wf = create_parallel_develop_workflow(modules, "req", "plan")
+        assert wf.name == "Parallel Develop Pipeline"
+
+class TestModuleSpec:
+    pass
