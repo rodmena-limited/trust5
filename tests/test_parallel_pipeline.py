@@ -1,7 +1,12 @@
+"""Tests for parallel pipeline DAG builder and helpers."""
+
 from __future__ import annotations
+
 from unittest.mock import MagicMock
+
 from stabilize import StageExecution, TaskExecution, Workflow
 from stabilize.models.status import WorkflowStatus
+
 from trust5.workflows.parallel_pipeline import (
     ModuleSpec,
     create_parallel_develop_workflow,
@@ -9,6 +14,7 @@ from trust5.workflows.parallel_pipeline import (
     parse_modules,
 )
 from trust5.workflows.pipeline import strip_plan_stage
+
 
 def _make_workflow(plan_output: str) -> Workflow:
     plan_stage = MagicMock(spec=StageExecution)
@@ -20,8 +26,8 @@ def _make_workflow(plan_output: str) -> Workflow:
     wf.stages = [plan_stage]
     return wf
 
-class TestParseModules:
 
+class TestParseModules:
     def test_no_modules_block_returns_default(self) -> None:
         wf = _make_workflow("Just a regular plan with no modules.")
         result = parse_modules(wf)
@@ -78,8 +84,8 @@ class TestParseModules:
         assert result[0].files == []
         assert result[0].deps == []
 
-class TestExtractPlanOutput:
 
+class TestExtractPlanOutput:
     def test_extracts_response_from_plan_stage(self) -> None:
         wf = _make_workflow("Hello plan output")
         assert extract_plan_output(wf) == "Hello plan output"
@@ -111,8 +117,8 @@ class TestExtractPlanOutput:
         wf.stages = [stage]
         assert extract_plan_output(wf) == "fallback output"
 
-class TestStripPlanStage:
 
+class TestStripPlanStage:
     def test_removes_plan_stage(self) -> None:
         plan = StageExecution(
             ref_id="plan",
@@ -169,8 +175,8 @@ class TestStripPlanStage:
         result = strip_plan_stage([impl], "")
         assert "ancestor_outputs" not in result[0].context
 
-class TestCreateParallelDevelopWorkflow:
 
+class TestCreateParallelDevelopWorkflow:
     def test_single_module_creates_correct_stages(self) -> None:
         modules = [
             ModuleSpec(
@@ -261,5 +267,22 @@ class TestCreateParallelDevelopWorkflow:
         wf = create_parallel_develop_workflow(modules, "req", "plan")
         assert wf.name == "Parallel Develop Pipeline"
 
+
 class TestModuleSpec:
-    pass
+    def test_defaults(self) -> None:
+        m = ModuleSpec(id="test", name="Test")
+        assert m.files == []
+        assert m.test_files == []
+        assert m.deps == []
+
+    def test_with_all_fields(self) -> None:
+        m = ModuleSpec(
+            id="auth",
+            name="Auth",
+            files=["a.py"],
+            test_files=["t.py"],
+            deps=["core"],
+        )
+        assert m.id == "auth"
+        assert m.files == ["a.py"]
+        assert m.deps == ["core"]
