@@ -1,12 +1,18 @@
+"""Workflow execution helpers extracted from main.py."""
+
 from __future__ import annotations
+
 import signal
 import sys
 import threading
 import time
 from typing import Any
+
 from stabilize import Orchestrator, QueueProcessor, SqliteWorkflowStore, Workflow
 from stabilize.models.status import WorkflowStatus
+
 from .message import M, emit
+
 TERMINAL_STATUSES: frozenset[WorkflowStatus] = frozenset(
     {
         WorkflowStatus.SUCCEEDED,
@@ -15,7 +21,9 @@ TERMINAL_STATUSES: frozenset[WorkflowStatus] = frozenset(
         WorkflowStatus.CANCELED,
     }
 )
+
 POLL_INTERVAL: float = 0.5
+
 
 def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, list[str]]:
     """Inspect stage outputs for test/quality/compliance failures hidden behind SUCCEEDED.
@@ -74,6 +82,7 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, list[str
 
     return has_test_failures, has_quality_failure, has_compliance_failure, details
 
+
 def finalize_status(
     result: Workflow,
     store: SqliteWorkflowStore,
@@ -127,6 +136,7 @@ def finalize_status(
     else:
         emit(M.WFAL, f"{prefix}: {status_name}")
 
+
 def wait_for_completion(
     store: SqliteWorkflowStore,
     workflow_id: str,
@@ -148,3 +158,54 @@ def wait_for_completion(
             return result
         time.sleep(POLL_INTERVAL)
     return store.retrieve(workflow_id)
+
+
+def run_workflow(
+    processor: QueueProcessor,
+    orchestrator: Orchestrator,
+    store: SqliteWorkflowStore,
+    workflow: Workflow,
+    timeout: float,
+    label: str,
+    db_path: str = "",
+) -> Workflow:
+    """Run a workflow to completion with signal handling and status finalization."""
+    store.store(workflow)
+    orchestrator.start(workflow)
+
+    emit(M.WSTR, f"{label} started: {workflow.id}")
+
+    def handle_signal(sig: int, frame: Any) -> None:
+        emit(M.WINT, f"Interrupted. Workflow {workflow.id} state preserved in {db_path}.")
+        processor.request_stop()
+        processor.stop(wait=False)
+        sys.exit(130)
+
+    original_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, handle_signal)
+
+    try:
+        processor.start()
+        result = wait_for_completion(store, workflow.id, timeout)
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+        processor.request_stop()
+        processor.stop(wait=False)
+
+    if result.status == WorkflowStatus.RUNNING:
+        emit(
+            M.WTMO,
+            f"Workflow {workflow.id} still RUNNING after timeout ({timeout:.0f}s). Force-canceling.",
+        )
+        try:
+            orchestrator.cancel(result, user="trust5-timeout", reason=f"Timed out after {timeout}s")
+            processor.process_all(timeout=30)
+        except Exception as e:
+            emit(M.SERR, f"Force-cancel failed: {e}. Marking TERMINAL directly.")
+            result.status = WorkflowStatus.TERMINAL
+            store.update_status(result)
+
+        result = store.retrieve(workflow.id)
+
+    finalize_status(result, store, prefix="Status")
+    return result
