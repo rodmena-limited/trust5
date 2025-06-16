@@ -149,3 +149,72 @@ class TestStripPlanStage:
         assert result[0].ref_id == "implement"
         assert result[0].requisite_stage_ref_ids == set()
         assert result[0].context["ancestor_outputs"] == {"plan": "plan text"}
+
+    def test_empty_plan_output_no_ancestor(self) -> None:
+        impl = StageExecution(
+            ref_id="implement",
+            type="agent",
+            name="Implement",
+            context={},
+            requisite_stage_ref_ids={"plan"},
+            tasks=[
+                TaskExecution.create(
+                    name="Code",
+                    implementing_class="agent",
+                    stage_start=True,
+                    stage_end=True,
+                )
+            ],
+        )
+        result = strip_plan_stage([impl], "")
+        assert "ancestor_outputs" not in result[0].context
+
+class TestCreateParallelDevelopWorkflow:
+
+    def test_single_module_creates_correct_stages(self) -> None:
+        modules = [
+            ModuleSpec(
+                id="core",
+                name="Core",
+                files=["src/core.py"],
+                test_files=["tests/test_core.py"],
+            )
+        ]
+        wf = create_parallel_develop_workflow(modules, "Build a CLI", "plan text")
+        ref_ids = [s.ref_id for s in wf.stages]
+
+        assert "implement_core" in ref_ids
+        assert "validate_core" in ref_ids
+        assert "repair_core" in ref_ids
+        assert "integration_validate" in ref_ids
+        assert "integration_repair" in ref_ids
+        assert "quality" in ref_ids
+
+    def test_two_modules_with_dependency(self) -> None:
+        modules = [
+            ModuleSpec(id="auth", name="Auth", files=["src/auth.py"]),
+            ModuleSpec(id="api", name="API", files=["src/api.py"], deps=["auth"]),
+        ]
+        wf = create_parallel_develop_workflow(modules, "req", "plan")
+        stage_map = {s.ref_id: s for s in wf.stages}
+
+        wt_deps = stage_map.get(
+            "write_tests_api",
+            MagicMock(requisite_stage_ref_ids=set()),
+        ).requisite_stage_ref_ids
+        impl_deps = stage_map["implement_api"].requisite_stage_ref_ids
+        assert "validate_auth" in impl_deps or "validate_auth" in wt_deps
+
+    def test_integration_validate_depends_on_all_module_validates(self) -> None:
+        modules = [
+            ModuleSpec(id="a", name="A"),
+            ModuleSpec(id="b", name="B"),
+            ModuleSpec(id="c", name="C"),
+        ]
+        wf = create_parallel_develop_workflow(modules, "req", "plan")
+        stage_map = {s.ref_id: s for s in wf.stages}
+
+        int_val = stage_map["integration_validate"]
+        assert "validate_a" in int_val.requisite_stage_ref_ids
+        assert "validate_b" in int_val.requisite_stage_ref_ids
+        assert "validate_c" in int_val.requisite_stage_ref_ids
