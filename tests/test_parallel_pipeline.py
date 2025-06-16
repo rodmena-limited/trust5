@@ -54,3 +54,32 @@ class TestParseModules:
         result = parse_modules(wf)
         assert len(result) == 1
         assert result[0].id == "main"
+
+    def test_empty_array_returns_default(self) -> None:
+        plan = "<!-- MODULES\n[]\n-->"
+        wf = _make_workflow(plan)
+        result = parse_modules(wf)
+        assert len(result) == 1
+        assert result[0].id == "main"
+
+    def test_empty_plan_output_returns_default(self) -> None:
+        wf = _make_workflow("")
+        result = parse_modules(wf)
+        assert len(result) == 1
+        assert result[0].id == "main"
+
+    def test_modules_without_optional_fields(self) -> None:
+        plan = '<!-- MODULES\n[{"id": "core"}]\n-->'
+        wf = _make_workflow(plan)
+        result = parse_modules(wf)
+        assert len(result) == 1
+        assert result[0].id == "core"
+        assert result[0].name == "core"
+        assert result[0].files == []
+        assert result[0].deps == []
+
+class TestExtractPlanOutput:
+
+    def test_extracts_response_from_plan_stage(self) -> None:
+        wf = _make_workflow("Hello plan output")
+        assert extract_plan_output(wf) == "Hello plan output"
