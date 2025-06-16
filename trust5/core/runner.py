@@ -126,3 +126,25 @@ def finalize_status(
         emit(M.WFAL, f"{prefix}: FAILED (incomplete)")
     else:
         emit(M.WFAL, f"{prefix}: {status_name}")
+
+def wait_for_completion(
+    store: SqliteWorkflowStore,
+    workflow_id: str,
+    timeout: float,
+    stop_event: threading.Event | None = None,
+) -> Workflow:
+    """Poll workflow status until it reaches a terminal state, timeout, or stop signal.
+
+    When *stop_event* is provided and becomes set (e.g. TUI exits via Ctrl+C),
+    the poll loop exits immediately so the calling thread can clean up its
+    QueueProcessor and other resources without blocking for the full timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if stop_event is not None and stop_event.is_set():
+            return store.retrieve(workflow_id)
+        result = store.retrieve(workflow_id)
+        if result.status in TERMINAL_STATUSES:
+            return result
+        time.sleep(POLL_INTERVAL)
+    return store.retrieve(workflow_id)
