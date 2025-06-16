@@ -15,3 +15,4 @@ TERMINAL_STATUSES: frozenset[WorkflowStatus] = frozenset(
         WorkflowStatus.CANCELED,
     }
 )
+POLL_INTERVAL: float = 0.5
