@@ -83,3 +83,69 @@ class TestExtractPlanOutput:
     def test_extracts_response_from_plan_stage(self) -> None:
         wf = _make_workflow("Hello plan output")
         assert extract_plan_output(wf) == "Hello plan output"
+
+    def test_no_plan_stage_returns_empty(self) -> None:
+        stage = MagicMock(spec=StageExecution)
+        stage.ref_id = "implement"
+        stage.outputs = {"response": "code"}
+
+        wf = MagicMock(spec=Workflow)
+        wf.stages = [stage]
+        assert extract_plan_output(wf) == ""
+
+    def test_plan_stage_no_outputs_returns_empty(self) -> None:
+        stage = MagicMock(spec=StageExecution)
+        stage.ref_id = "plan"
+        stage.outputs = None
+
+        wf = MagicMock(spec=Workflow)
+        wf.stages = [stage]
+        assert extract_plan_output(wf) == ""
+
+    def test_plan_stage_uses_result_key_fallback(self) -> None:
+        stage = MagicMock(spec=StageExecution)
+        stage.ref_id = "plan"
+        stage.outputs = {"result": "fallback output"}
+
+        wf = MagicMock(spec=Workflow)
+        wf.stages = [stage]
+        assert extract_plan_output(wf) == "fallback output"
+
+class TestStripPlanStage:
+
+    def test_removes_plan_stage(self) -> None:
+        plan = StageExecution(
+            ref_id="plan",
+            type="agent",
+            name="Plan",
+            context={},
+            requisite_stage_ref_ids=set(),
+            tasks=[
+                TaskExecution.create(
+                    name="Plan",
+                    implementing_class="agent",
+                    stage_start=True,
+                    stage_end=True,
+                )
+            ],
+        )
+        impl = StageExecution(
+            ref_id="implement",
+            type="agent",
+            name="Implement",
+            context={},
+            requisite_stage_ref_ids={"plan"},
+            tasks=[
+                TaskExecution.create(
+                    name="Code",
+                    implementing_class="agent",
+                    stage_start=True,
+                    stage_end=True,
+                )
+            ],
+        )
+        result = strip_plan_stage([plan, impl], "plan text")
+        assert len(result) == 1
+        assert result[0].ref_id == "implement"
+        assert result[0].requisite_stage_ref_ids == set()
+        assert result[0].context["ancestor_outputs"] == {"plan": "plan text"}
