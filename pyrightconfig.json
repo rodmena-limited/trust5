@@ -1,0 +1,22 @@
+{
+  "include": ["trust5"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "standard",
+  "reportMissingTypeStubs": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownLambdaType": false,
+  "reportUnknownParameterType": false,
+  "reportImplicitStringConcatenation": false,
+  "reportImplicitOverride": false,
+  "reportUnusedCallResult": false,
+  "reportUnnecessaryComparison": false,
+  "reportUnnecessaryIsInstance": false,
+  "reportCallInDefaultInitializer": false,
+  "reportPrivateUsage": false,
+  "reportConstantRedefinition": false,
+  "reportUnusedImport": false
+}
