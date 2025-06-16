@@ -73,3 +73,56 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, list[str
             details.append(f"  - Stage '{stage.ref_id}': quality gate failed (score: {score})")
 
     return has_test_failures, has_quality_failure, has_compliance_failure, details
+
+def finalize_status(
+    result: Workflow,
+    store: SqliteWorkflowStore,
+    prefix: str = "Status",
+) -> None:
+    """Check stage-level failures hidden behind SUCCEEDED.
+
+    Only TEST failures override to TERMINAL (code is broken, needs resume).
+    Quality-only failures keep SUCCEEDED with a warning — the code works,
+    quality is advisory.
+    """
+    status_name = result.status.name if hasattr(result.status, "name") else str(result.status)
+
+    if status_name in ("SUCCEEDED", "COMPLETED"):
+        has_test_fail, has_quality_fail, has_compliance_fail, details = check_stage_failures(result)
+
+        if has_test_fail:
+            # Tests failing = code is broken → TERMINAL (resumable)
+            result.status = WorkflowStatus.TERMINAL
+            store.update_status(result)
+
+            problems = ["tests failing"]
+            if has_quality_fail:
+                problems.append("quality gate failed")
+            if has_compliance_fail:
+                problems.append("SPEC compliance below threshold")
+            emit(M.WFAL, f"{prefix}: FAILED ({', '.join(problems)})")
+            for detail in details:
+                emit(M.WFAL, detail)
+            emit(M.WFAL, "Run 'trust5 resume' to retry from the failed stage.")
+        elif has_compliance_fail:
+            # SPEC compliance failed but tests pass → code works but is incomplete
+            warnings = ["SPEC compliance below threshold"]
+            if has_quality_fail:
+                warnings.append("quality gate failed")
+            emit(M.WSUC, f"{prefix}: {status_name} (with SPEC compliance warnings)")
+            emit(M.SWRN, "SPEC COMPLIANCE WARNING — the following criteria are not addressed:")
+            for detail in details:
+                emit(M.SWRN, detail)
+            emit(M.SWRN, "The code works but may be missing features from the SPEC.")
+        elif has_quality_fail:
+            # Quality failed but tests pass → code works, warn but keep SUCCEEDED
+            emit(M.WSUC, f"{prefix}: {status_name} (with quality warnings)")
+            for detail in details:
+                emit(M.SWRN, detail)
+            emit(M.SWRN, "Quality gate did not pass. Run 'trust5 loop' to improve.")
+        else:
+            emit(M.WSUC, f"{prefix}: {status_name}")
+    elif status_name in ("FAILED_CONTINUE",):
+        emit(M.WFAL, f"{prefix}: FAILED (incomplete)")
+    else:
+        emit(M.WFAL, f"{prefix}: {status_name}")
