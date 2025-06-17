@@ -31,3 +31,38 @@ class TestParseSetupCommands:
     """
         config = parse_plan_output(raw)
         assert config.setup_commands == ()
+
+class TestParseQualityConfig:
+
+    def test_extracts_quality_threshold(self) -> None:
+        raw = """
+    QUALITY_CONFIG:
+      quality_threshold: 0.90
+      test_command: .venv/bin/python -m pytest -v
+      lint_command: .venv/bin/python -m ruff check .
+    """
+        config = parse_plan_output(raw)
+        assert config.quality_threshold == 0.90
+        assert config.test_command == ".venv/bin/python -m pytest -v"
+        assert config.lint_command == ".venv/bin/python -m ruff check ."
+
+    def test_clamps_threshold_to_range(self) -> None:
+        raw = """
+    QUALITY_CONFIG:
+      quality_threshold: 0.99
+    """
+        config = parse_plan_output(raw)
+        assert config.quality_threshold == 0.95
+
+        raw_low = """
+    QUALITY_CONFIG:
+      quality_threshold: 0.50
+    """
+        config_low = parse_plan_output(raw_low)
+        assert config_low.quality_threshold == 0.70
+
+    def test_no_quality_config_returns_defaults(self) -> None:
+        config = parse_plan_output("Just a plan.")
+        assert config.quality_threshold == 0.85
+        assert config.test_command is None
+        assert config.lint_command is None
