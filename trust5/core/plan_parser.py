@@ -19,3 +19,13 @@ class PlanConfig:
     lint_command: str | None = None
     coverage_command: str | None = None
     acceptance_criteria: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "setup_commands": list(self.setup_commands),
+            "quality_threshold": self.quality_threshold,
+            "test_command": self.test_command,
+            "lint_command": self.lint_command,
+            "coverage_command": self.coverage_command,
+            "acceptance_criteria": list(self.acceptance_criteria),
+        }
