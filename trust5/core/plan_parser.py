@@ -76,6 +76,37 @@ def _parse_setup_commands(raw: str) -> list[str]:
 
     return commands
 
+def _parse_quality_config(raw: str) -> dict[str, str]:
+    block_lines = _extract_block(raw, "QUALITY_CONFIG:")
+    # Strip potential markdown code block fences
+    clean_lines = [l for l in block_lines if not l.strip().startswith("```")]
+    block = "\n".join(clean_lines)
+
+    if not block.strip():
+        return {}
+
+    # Try YAML first
+    try:
+        data = yaml.safe_load(block)
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except yaml.YAMLError:
+        pass
+
+    # Fallback: simple key: value parsing
+    result: dict[str, str] = {}
+    for line in clean_lines:
+        if ":" in line:
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.strip()
+            # Handle "key: value # comment"
+            if "#" in val:
+                val = val.split("#", 1)[0].strip()
+            if key and val:
+                result[key] = val
+    return result
+
 @dataclass(frozen=True)
 class PlanConfig:
     """Configuration extracted from the planner's output."""
