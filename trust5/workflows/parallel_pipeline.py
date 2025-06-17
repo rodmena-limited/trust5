@@ -15,6 +15,13 @@ _FACADE_FILES = frozenset({
     "mod.rs", "lib.rs", "main.go",
 })
 
+def extract_plan_output(workflow: Workflow) -> str:
+    for stage in workflow.stages:
+        if stage.ref_id == "plan":
+            outputs = stage.outputs or {}
+            return str(outputs.get("response", outputs.get("result", "")))
+    return ""
+
 @dataclass
 class ModuleSpec:
     id: str
