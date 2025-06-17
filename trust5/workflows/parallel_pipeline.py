@@ -22,6 +22,40 @@ def extract_plan_output(workflow: Workflow) -> str:
             return str(outputs.get("response", outputs.get("result", "")))
     return ""
 
+def parse_modules(workflow: Workflow) -> list[ModuleSpec]:
+    raw = extract_plan_output(workflow)
+    if not raw:
+        return [ModuleSpec(id="main", name="Main")]
+
+    match = _MODULES_RE.search(raw)
+    if not match:
+        return [ModuleSpec(id="main", name="Main")]
+
+    try:
+        data = json.loads(match.group(1))
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Failed to parse MODULES JSON, falling back to serial")
+        return [ModuleSpec(id="main", name="Main")]
+
+    if not isinstance(data, list) or len(data) == 0:
+        return [ModuleSpec(id="main", name="Main")]
+
+    modules: list[ModuleSpec] = []
+    for item in data:
+        if not isinstance(item, dict) or "id" not in item:
+            continue
+        modules.append(
+            ModuleSpec(
+                id=str(item["id"]),
+                name=str(item.get("name", item["id"])),
+                files=item.get("files", []),
+                test_files=item.get("test_files", []),
+                deps=item.get("deps", []),
+            )
+        )
+
+    return modules if modules else [ModuleSpec(id="main", name="Main")]
+
 @dataclass
 class ModuleSpec:
     id: str
