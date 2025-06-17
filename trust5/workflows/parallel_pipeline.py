@@ -118,6 +118,19 @@ def _detect_dependency_cycle(modules: list[ModuleSpec]) -> None:
             else:
                 color[node] = BLACK
 
+def _validate_module_completeness(modules: list[ModuleSpec]) -> None:
+    """Warn about modules whose sole source file is likely a facade."""
+    for mod in modules:
+        if len(mod.files) == 1:
+            basename = os.path.basename(mod.files[0])
+            if basename in _FACADE_FILES:
+                logger.warning(
+                    "Module '%s' has only one file (%s) which is typically a facade/re-export. "
+                    "This may indicate the module is missing its actual implementation files.",
+                    mod.name,
+                    mod.files[0],
+                )
+
 @dataclass
 class ModuleSpec:
     id: str
