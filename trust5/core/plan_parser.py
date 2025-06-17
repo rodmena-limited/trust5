@@ -10,6 +10,17 @@ _EARS_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _parse_acceptance_criteria(raw: str) -> list[str]:
+    """Extract EARS-tagged acceptance criteria from plan text."""
+    criteria: list[str] = []
+    for line in raw.splitlines():
+        m = _EARS_TAG_RE.match(line.strip())
+        if m:
+            tag = m.group(1).upper()
+            text = m.group(2).strip()
+            criteria.append(f"[{tag}] {text}")
+    return criteria
+
 @dataclass(frozen=True)
 class PlanConfig:
     """Configuration extracted from the planner's output."""
