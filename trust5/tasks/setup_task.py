@@ -23,3 +23,6 @@ def _run_setup_command(cmd: str, cwd: str) -> tuple[int, str]:
         return 124, f"command timed out after {SETUP_TIMEOUT}s"
     except Exception as e:
         return 1, str(e)
+
+class SetupTask(Task):
+    """Runs planner-specified setup commands to bootstrap the project environment."""
