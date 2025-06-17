@@ -1,11 +1,70 @@
+"""Setup task — runs planner-specified environment setup commands.
+
+Executes commands like ``python3 -m venv .venv`` and ``pip install -r
+requirements.txt`` that the planner determined are needed for the project.
+This replaces the old "NEVER run pip install" prohibition with LLM-driven
+environment bootstrapping.
+"""
+
 from __future__ import annotations
+
 import logging
 import os
 import subprocess
+
 from stabilize import StageExecution, Task, TaskResult
+
 from ..core.message import M, emit
+
 logger = logging.getLogger(__name__)
+
 SETUP_TIMEOUT = 120
+
+
+class SetupTask(Task):
+    """Runs planner-specified setup commands to bootstrap the project environment."""
+
+    def execute(self, stage: StageExecution) -> TaskResult:
+        project_root = stage.context.get("project_root", os.getcwd())
+        setup_commands: list[str] = stage.context.get("setup_commands", [])
+
+        if not setup_commands:
+            emit(M.SINF, "No setup commands specified by planner — skipping setup.")
+            return TaskResult.success(outputs={"setup_completed": True, "setup_skipped": True})
+
+        emit(M.SINF, f"Running {len(setup_commands)} setup command(s) in {project_root}")
+
+        failed: list[str] = []
+        for i, cmd in enumerate(setup_commands, 1):
+            emit(M.SINF, f"  [{i}/{len(setup_commands)}] {cmd}")
+            rc, out = _run_setup_command(cmd, project_root)
+            if rc != 0:
+                emit(M.SWRN, f"  Setup command failed (rc={rc}): {cmd}\n{out[:500]}")
+                failed.append(cmd)
+            else:
+                emit(M.SINF, f"  OK ({len(out)} chars output)")
+
+        if failed:
+            emit(
+                M.SWRN,
+                f"Setup completed with {len(failed)} failure(s). Agent may need to fix environment issues.",
+            )
+            return TaskResult.failed_continue(
+                error=f"Setup failed for {len(failed)} command(s): {failed}",
+                outputs={
+                    "setup_completed": False,
+                    "setup_failed_commands": failed,
+                },
+            )
+
+        emit(M.SINF, "All setup commands completed successfully.")
+        return TaskResult.success(
+            outputs={
+                "setup_completed": True,
+                "setup_failed_commands": [],
+            }
+        )
+
 
 def _run_setup_command(cmd: str, cwd: str) -> tuple[int, str]:
     """Run a single shell command, returning (exit_code, combined_output)."""
@@ -23,6 +82,3 @@ def _run_setup_command(cmd: str, cwd: str) -> tuple[int, str]:
         return 124, f"command timed out after {SETUP_TIMEOUT}s"
     except Exception as e:
         return 1, str(e)
-
-class SetupTask(Task):
-    """Runs planner-specified setup commands to bootstrap the project environment."""
