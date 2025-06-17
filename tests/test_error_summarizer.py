@@ -1,8 +1,9 @@
 from unittest.mock import MagicMock, patch
+
 from trust5.core.error_summarizer import summarize_errors
 
-class TestSummarizeErrors:
 
+class TestSummarizeErrors:
     def test_short_input_returned_as_is(self) -> None:
         short = "Error: x"
         assert summarize_errors(short) == short
@@ -52,3 +53,12 @@ class TestSummarizeErrors:
             llm_cls.for_tier.return_value = mock_llm
             result = summarize_errors(raw, failure_type="lint")
         assert "ROOT_CAUSE" in result
+
+    def test_truncates_to_max_summary(self) -> None:
+        raw = "A" * 500
+        mock_llm = MagicMock()
+        mock_llm.chat.return_value = {"content": "B" * 5000}
+        with patch("trust5.core.error_summarizer.LLM") as llm_cls:
+            llm_cls.for_tier.return_value = mock_llm
+            result = summarize_errors(raw)
+        assert len(result) <= 3000
