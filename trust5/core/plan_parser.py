@@ -1,14 +1,51 @@
+"""Parse planner output for LLM-driven environment and quality configuration.
+
+The planner outputs SETUP_COMMANDS and QUALITY_CONFIG blocks that replace
+hardcoded language-profile commands.  This module extracts them into a
+typed PlanConfig dataclass that the pipeline injects into stage contexts.
+"""
+
 from __future__ import annotations
+
 import logging
 import re
 from dataclasses import dataclass
+
 import yaml
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PlanConfig:
+    """Configuration extracted from the planner's output."""
+
+    setup_commands: tuple[str, ...] = ()
+    quality_threshold: float = 0.85
+    test_command: str | None = None
+    lint_command: str | None = None
+    coverage_command: str | None = None
+    acceptance_criteria: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "setup_commands": list(self.setup_commands),
+            "quality_threshold": self.quality_threshold,
+            "test_command": self.test_command,
+            "lint_command": self.lint_command,
+            "coverage_command": self.coverage_command,
+            "acceptance_criteria": list(self.acceptance_criteria),
+        }
+
+
 _DEFAULT = PlanConfig()
+
+
 _EARS_TAG_RE = re.compile(
     r"^\s*-\s*\[(UBIQ|EVENT|STATE|UNWNT|OPTNL|COMPLX)\]\s*(.+)",
     re.IGNORECASE,
 )
+
 
 def _parse_acceptance_criteria(raw: str) -> list[str]:
     """Extract EARS-tagged acceptance criteria from plan text."""
@@ -20,6 +57,33 @@ def _parse_acceptance_criteria(raw: str) -> list[str]:
             text = m.group(2).strip()
             criteria.append(f"[{tag}] {text}")
     return criteria
+
+
+def parse_plan_output(raw: str) -> PlanConfig:
+    """Extract ``SETUP_COMMANDS``, ``QUALITY_CONFIG``, and acceptance criteria from plan text.
+
+    Returns :class:`PlanConfig` with defaults for any missing fields.
+    """
+    setup_commands = _parse_setup_commands(raw)
+    quality = _parse_quality_config(raw)
+    acceptance_criteria = _parse_acceptance_criteria(raw)
+
+    threshold = quality.get("quality_threshold", _DEFAULT.quality_threshold)
+    try:
+        threshold = float(threshold)
+        threshold = max(0.70, min(0.95, threshold))
+    except (ValueError, TypeError):
+        threshold = _DEFAULT.quality_threshold
+
+    return PlanConfig(
+        setup_commands=tuple(setup_commands),
+        quality_threshold=threshold,
+        test_command=quality.get("test_command") or None,
+        lint_command=quality.get("lint_command") or None,
+        coverage_command=quality.get("coverage_command") or None,
+        acceptance_criteria=tuple(acceptance_criteria),
+    )
+
 
 def _extract_block(raw: str, header: str) -> list[str]:
     """Robustly extract a text block following a header line."""
@@ -52,6 +116,7 @@ def _extract_block(raw: str, header: str) -> list[str]:
 
     return captured
 
+
 def _parse_setup_commands(raw: str) -> list[str]:
     block_lines = _extract_block(raw, "SETUP_COMMANDS:")
     commands: list[str] = []
@@ -75,6 +140,7 @@ def _parse_setup_commands(raw: str) -> list[str]:
             pass
 
     return commands
+
 
 def _parse_quality_config(raw: str) -> dict[str, str]:
     block_lines = _extract_block(raw, "QUALITY_CONFIG:")
@@ -106,23 +172,3 @@ def _parse_quality_config(raw: str) -> dict[str, str]:
             if key and val:
                 result[key] = val
     return result
-
-@dataclass(frozen=True)
-class PlanConfig:
-    """Configuration extracted from the planner's output."""
-    setup_commands: tuple[str, ...] = ()
-    quality_threshold: float = 0.85
-    test_command: str | None = None
-    lint_command: str | None = None
-    coverage_command: str | None = None
-    acceptance_criteria: tuple[str, ...] = ()
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "setup_commands": list(self.setup_commands),
-            "quality_threshold": self.quality_threshold,
-            "test_command": self.test_command,
-            "lint_command": self.lint_command,
-            "coverage_command": self.coverage_command,
-            "acceptance_criteria": list(self.acceptance_criteria),
-        }
