@@ -21,6 +21,37 @@ def _parse_acceptance_criteria(raw: str) -> list[str]:
             criteria.append(f"[{tag}] {text}")
     return criteria
 
+def _extract_block(raw: str, header: str) -> list[str]:
+    """Robustly extract a text block following a header line."""
+    lines = raw.splitlines()
+    captured: list[str] = []
+    in_block = False
+
+    # Normalize header for matching (ignore case/spacing)
+    norm_header = header.strip().lower()
+
+    for line in lines:
+        stripped = line.strip()
+        if not in_block:
+            if stripped.lower().startswith(norm_header):
+                in_block = True
+            continue
+
+        # In block: stop at next section header (ALL CAPS followed by :)
+        # but allow "## Header" or "### Header" styles too
+        if stripped and stripped[0].isupper() and stripped.endswith(":") and " " not in stripped:
+            break
+        if stripped.startswith("##"):
+            break
+
+        # Skip empty lines at start, but keep them inside
+        if not captured and not stripped:
+            continue
+
+        captured.append(line)
+
+    return captured
+
 @dataclass(frozen=True)
 class PlanConfig:
     """Configuration extracted from the planner's output."""
