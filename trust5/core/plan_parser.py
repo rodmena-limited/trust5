@@ -52,6 +52,30 @@ def _extract_block(raw: str, header: str) -> list[str]:
 
     return captured
 
+def _parse_setup_commands(raw: str) -> list[str]:
+    block_lines = _extract_block(raw, "SETUP_COMMANDS:")
+    commands: list[str] = []
+
+    for line in block_lines:
+        stripped = line.strip()
+        # Handle bullet points (- or *)
+        if stripped.startswith(("- ", "* ")):
+            cmd = stripped[2:].strip()
+            if cmd:
+                commands.append(cmd)
+        # Handle numbered lists (1. 2.)
+        elif re.match(r"^\d+\.\s", stripped):
+            parts = stripped.split(" ", 1)
+            if len(parts) > 1:
+                commands.append(parts[1].strip())
+        # Handle plain commands in code blocks (if user wrapped them)
+        elif stripped and not stripped.startswith("```"):
+            # Fallback: if it looks like a command (no spaces? no, commands have spaces)
+            # Better to be strict about list format to avoid capturing prose
+            pass
+
+    return commands
+
 @dataclass(frozen=True)
 class PlanConfig:
     """Configuration extracted from the planner's output."""
