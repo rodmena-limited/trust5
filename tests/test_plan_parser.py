@@ -94,4 +94,49 @@ class TestPlanConfigToDict:
         assert d["coverage_command"] is None
 
 class TestParseAcceptanceCriteria:
-    pass
+
+    def test_extracts_ears_tagged_lines(self) -> None:
+        raw = """
+    ## Acceptance Criteria (EARS Format)
+
+    - [UBIQ] The system shall return JSON responses.
+    - [EVENT] When a user submits invalid input, the system shall return a 422 error.
+    - [STATE] While the database is read-only, the system shall queue writes.
+    - [UNWNT] If the auth token expires, then the system shall return 401.
+    - [OPTNL] Where caching is enabled, the system shall cache responses.
+    - [COMPLX] While in maintenance mode, when a request arrives, the system shall return 503.
+    """
+        criteria = _parse_acceptance_criteria(raw)
+        assert len(criteria) == 6
+        assert criteria[0] == "[UBIQ] The system shall return JSON responses."
+        assert criteria[1] == "[EVENT] When a user submits invalid input, the system shall return a 422 error."
+        assert criteria[5] == "[COMPLX] While in maintenance mode, when a request arrives, the system shall return 503."
+
+    def test_returns_empty_when_no_criteria(self) -> None:
+        raw = "Just a plan with no EARS tags at all."
+        criteria = _parse_acceptance_criteria(raw)
+        assert criteria == []
+
+    def test_works_with_mixed_content(self) -> None:
+        raw = """
+    SETUP_COMMANDS:
+    - pip install flask
+
+    ## Acceptance Criteria
+    - [UBIQ] The API shall use UTF-8 encoding.
+    - This line is not tagged and should be ignored.
+    - [EVENT] When health check is called, the system shall return 200.
+
+    QUALITY_CONFIG:
+      quality_threshold: 0.85
+    """
+        config = parse_plan_output(raw)
+        assert len(config.acceptance_criteria) == 2
+        assert config.acceptance_criteria[0] == "[UBIQ] The API shall use UTF-8 encoding."
+        assert config.acceptance_criteria[1] == "[EVENT] When health check is called, the system shall return 200."
+
+    def test_case_insensitive_tags(self) -> None:
+        raw = "- [ubiq] The system shall do something."
+        criteria = _parse_acceptance_criteria(raw)
+        assert len(criteria) == 1
+        assert criteria[0] == "[UBIQ] The system shall do something."
