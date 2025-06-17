@@ -6,3 +6,6 @@ class TestSummarizeErrors:
     def test_short_input_returned_as_is(self) -> None:
         short = "Error: x"
         assert summarize_errors(short) == short
+
+    def test_empty_input_returned_as_is(self) -> None:
+        assert summarize_errors("") == ""
