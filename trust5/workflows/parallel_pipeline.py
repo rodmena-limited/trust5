@@ -10,3 +10,7 @@ from ..core.lang import detect_language, get_profile
 from .pipeline import MAX_REPAIR_JUMPS, _load_mutation_enabled
 logger = logging.getLogger(__name__)
 _MODULES_RE = re.compile(r"<!--\s*MODULES\s*\n(.*?)\n\s*-->", re.DOTALL)
+_FACADE_FILES = frozenset({
+    "__init__.py", "base.py", "index.py", "index.ts", "index.js",
+    "mod.rs", "lib.rs", "main.go",
+})
