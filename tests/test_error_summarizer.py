@@ -25,3 +25,10 @@ class TestSummarizeErrors:
         llm_cls.for_tier.assert_called_once_with("fast", thinking_level=None)
         mock_llm.chat.assert_called_once()
         assert "ROOT_CAUSE" in result
+
+    def test_llm_failure_returns_truncated_raw(self) -> None:
+        raw = "X" * 500
+        with patch("trust5.core.error_summarizer.LLM") as llm_cls:
+            llm_cls.for_tier.side_effect = Exception("LLM down")
+            result = summarize_errors(raw)
+        assert result == raw[:3000]
