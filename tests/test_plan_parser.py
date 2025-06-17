@@ -66,3 +66,32 @@ class TestParseQualityConfig:
         assert config.quality_threshold == 0.85
         assert config.test_command is None
         assert config.lint_command is None
+
+    def test_coverage_command_extracted(self) -> None:
+        raw = """
+    QUALITY_CONFIG:
+      quality_threshold: 0.85
+      coverage_command: .venv/bin/python -m pytest --cov=. -q
+    """
+        config = parse_plan_output(raw)
+        assert config.coverage_command == ".venv/bin/python -m pytest --cov=. -q"
+
+class TestPlanConfigToDict:
+
+    def test_round_trips(self) -> None:
+        config = PlanConfig(
+            setup_commands=("cmd1", "cmd2"),
+            quality_threshold=0.88,
+            test_command="pytest -v",
+            lint_command="ruff check .",
+            coverage_command=None,
+        )
+        d = config.to_dict()
+        assert d["setup_commands"] == ["cmd1", "cmd2"]
+        assert d["quality_threshold"] == 0.88
+        assert d["test_command"] == "pytest -v"
+        assert d["lint_command"] == "ruff check ."
+        assert d["coverage_command"] is None
+
+class TestParseAcceptanceCriteria:
+    pass
