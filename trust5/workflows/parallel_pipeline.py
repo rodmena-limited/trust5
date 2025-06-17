@@ -14,3 +14,11 @@ _FACADE_FILES = frozenset({
     "__init__.py", "base.py", "index.py", "index.ts", "index.js",
     "mod.rs", "lib.rs", "main.go",
 })
+
+@dataclass
+class ModuleSpec:
+    id: str
+    name: str
+    files: list[str] = field(default_factory=list)
+    test_files: list[str] = field(default_factory=list)
+    deps: list[str] = field(default_factory=list)
