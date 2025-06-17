@@ -41,3 +41,14 @@ class TestSummarizeErrors:
             llm_cls.for_tier.return_value = mock_llm
             result = summarize_errors(raw)
         assert result == raw[:3000]
+
+    def test_llm_content_is_list(self) -> None:
+        raw = "Z" * 33_000  # Must exceed 32k threshold to trigger LLM path
+        mock_llm = MagicMock()
+        mock_llm.chat.return_value = {
+            "content": [{"type": "text", "text": "FAILURE_TYPE: lint\nROOT_CAUSE: Missing semicolons everywhere"}]
+        }
+        with patch("trust5.core.error_summarizer.LLM") as llm_cls:
+            llm_cls.for_tier.return_value = mock_llm
+            result = summarize_errors(raw, failure_type="lint")
+        assert "ROOT_CAUSE" in result
