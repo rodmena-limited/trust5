@@ -32,3 +32,12 @@ class TestSummarizeErrors:
             llm_cls.for_tier.side_effect = Exception("LLM down")
             result = summarize_errors(raw)
         assert result == raw[:3000]
+
+    def test_llm_returns_short_response_uses_raw(self) -> None:
+        raw = "Y" * 500
+        mock_llm = MagicMock()
+        mock_llm.chat.return_value = {"content": "ok"}
+        with patch("trust5.core.error_summarizer.LLM") as llm_cls:
+            llm_cls.for_tier.return_value = mock_llm
+            result = summarize_errors(raw)
+        assert result == raw[:3000]
