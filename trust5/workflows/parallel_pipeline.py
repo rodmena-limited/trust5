@@ -9,3 +9,4 @@ from ..core.config import ConfigManager
 from ..core.lang import detect_language, get_profile
 from .pipeline import MAX_REPAIR_JUMPS, _load_mutation_enabled
 logger = logging.getLogger(__name__)
+_MODULES_RE = re.compile(r"<!--\s*MODULES\s*\n(.*?)\n\s*-->", re.DOTALL)
