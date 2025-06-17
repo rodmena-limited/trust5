@@ -56,6 +56,14 @@ def parse_modules(workflow: Workflow) -> list[ModuleSpec]:
 
     return modules if modules else [ModuleSpec(id="main", name="Main")]
 
+def _load_development_mode(project_root: str) -> str:
+    try:
+        mgr = ConfigManager(project_root)
+        cfg = mgr.load_config()
+        return cfg.quality.development_mode
+    except Exception:
+        return "hybrid"
+
 @dataclass
 class ModuleSpec:
     id: str
