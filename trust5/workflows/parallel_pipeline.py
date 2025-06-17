@@ -64,6 +64,26 @@ def _load_development_mode(project_root: str) -> str:
     except Exception:
         return "hybrid"
 
+def _validate_file_ownership(modules: list[ModuleSpec]) -> None:
+    """Raise if any file appears in more than one module's owned_files.
+
+    Parallel execution with overlapping file ownership leads to concurrent
+    writes that corrupt files.  Fail fast with a clear error message.
+    """
+    seen: dict[str, str] = {}  # file -> module_id
+    conflicts: list[str] = []
+    for mod in modules:
+        for f in mod.files:
+            if f in seen:
+                conflicts.append(f"{f!r} claimed by both {seen[f]!r} and {mod.id!r}")
+            else:
+                seen[f] = mod.id
+    if conflicts:
+        raise ValueError(
+            f"File ownership conflict in parallel pipeline — "
+            f"{len(conflicts)} file(s) claimed by multiple modules:\n" + "\n".join(f"  - {c}" for c in conflicts)
+        )
+
 @dataclass
 class ModuleSpec:
     id: str
