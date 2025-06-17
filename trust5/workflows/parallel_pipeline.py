@@ -84,6 +84,40 @@ def _validate_file_ownership(modules: list[ModuleSpec]) -> None:
             f"{len(conflicts)} file(s) claimed by multiple modules:\n" + "\n".join(f"  - {c}" for c in conflicts)
         )
 
+def _detect_dependency_cycle(modules: list[ModuleSpec]) -> None:
+    """Raise if module dependencies form a cycle (would deadlock the DAG).
+
+    Uses iterative DFS with a coloring scheme:
+    WHITE=unvisited, GRAY=in-progress, BLACK=finished.
+    """
+    module_ids = {m.id for m in modules}
+    deps_map = {m.id: [d for d in m.deps if d in module_ids] for m in modules}
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = {mid: WHITE for mid in module_ids}
+
+    for start in module_ids:
+        if color[start] != WHITE:
+            continue
+        stack: list[tuple[str, int]] = [(start, 0)]
+        color[start] = GRAY
+        while stack:
+            node, idx = stack.pop()
+            children = deps_map.get(node, [])
+            if idx < len(children):
+                stack.append((node, idx + 1))
+                child = children[idx]
+                if color[child] == GRAY:
+                    raise ValueError(
+                        f"Module dependency cycle detected involving {child!r}. "
+                        f"Stabilize would deadlock. Fix the module dependency graph."
+                    )
+                if color[child] == WHITE:
+                    color[child] = GRAY
+                    stack.append((child, 0))
+            else:
+                color[node] = BLACK
+
 @dataclass
 class ModuleSpec:
     id: str
