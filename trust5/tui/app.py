@@ -3,9 +3,11 @@ import queue
 import re
 import time
 from typing import Any
+
 from textual import work
 from textual.app import App, ComposeResult
 from textual.worker import get_current_worker
+
 from ..core.event_bus import (
     K_BLOCK_END,
     K_BLOCK_LINE,
@@ -25,13 +27,23 @@ from .widgets import (
     _format_count,
     _parse_kv,
 )
+
 logger = logging.getLogger(__name__)
+
+# Max events to drain from queue in one batch (prevents call_from_thread flood)
 _BATCH_SIZE = 64
 
+
 class Trust5App(App[None]):
-    CSS_PATH = 'styles.tcss'
-    BINDINGS = [('ctrl+c', 'quit', 'Quit'), ('ctrl+q', 'quit', 'Quit'), ('c', 'clear_log', 'Clear Log'), ('s', 'toggle_scroll', 'Toggle Auto-Scroll')]
+    CSS_PATH = "styles.tcss"
+    BINDINGS = [
+        ("ctrl+c", "quit", "Quit"),
+        ("ctrl+q", "quit", "Quit"),
+        ("c", "clear_log", "Clear Log"),
+        ("s", "toggle_scroll", "Toggle Auto-Scroll"),
+    ]
     ENABLE_COMMAND_PALETTE = False
+
     def __init__(
         self,
         event_queue: queue.Queue[Event | None],
@@ -73,12 +85,15 @@ class Trust5App(App[None]):
         if self.store and self.workflow_id:
             self.watch_workflow()
 
+    # ─── Elapsed timer ─────────────────────────────────────────────────────────
+
     def _tick_elapsed(self) -> None:
         """Update elapsed display every second from a single workflow clock."""
         if self._workflow_start_time is not None and not self._workflow_ended:
             elapsed = time.monotonic() - self._workflow_start_time
             self._sb1.elapsed = self._format_elapsed(elapsed)
 
+    @staticmethod
     def _format_elapsed(seconds: float) -> str:
         s = int(seconds)
         if s < 60:
@@ -89,6 +104,9 @@ class Trust5App(App[None]):
         h, m = divmod(m, 60)
         return f"{h}h {m:02d}m"
 
+    # ─── Background workers ──────────────────────────────────────────────────
+
+    @work(thread=True)
     def watch_workflow(self) -> None:
         """Poll workflow status and store result when terminal.
 
@@ -119,6 +137,7 @@ class Trust5App(App[None]):
                 logger.debug("watch_workflow poll error: %s", exc)
             time.sleep(0.5)
 
+    @work(thread=True)
     def consume_events(self) -> None:
         """Background worker: drain events in batches and dispatch to main thread.
 
@@ -180,6 +199,8 @@ class Trust5App(App[None]):
         else:
             self._sb1.stage_name = "failed"
         self._workflow_ended = True
+
+    # ─── Event routing ───────────────────────────────────────────────────────
 
     def _route_batch(self, events: list[Event | None]) -> None:
         """Route a batch of events. One bad event won't kill the TUI."""
@@ -353,3 +374,78 @@ class Trust5App(App[None]):
             return
 
         self._trust5_log.write_event(event)
+
+    def _update_status_bars(self, code: str, content: str) -> None:
+        """Parse event content into structured status bar properties."""
+        try:
+            if code == M.MMDL:
+                kv = _parse_kv(content)
+                model = kv.get("model", content)
+                thinking = kv.get("thinking", "")
+                if thinking:
+                    self._sb0.model_name = f"{model} (think:{thinking})"
+                else:
+                    self._sb0.model_name = model
+            elif code == M.MPRF:
+                kv = _parse_kv(content)
+                self._sb0.provider = kv.get("provider", content)
+            elif code == M.MTKN:
+                kv = _parse_kv(content)
+                tok_in = int(kv.get("in", "0"))
+                tok_out = int(kv.get("out", "0"))
+                self._sb0.token_info = f"{_format_count(tok_in)} in / {_format_count(tok_out)} out"
+            elif code == M.MCTX:
+                kv = _parse_kv(content)
+                remaining = int(kv.get("remaining", "0"))
+                window = int(kv.get("window", "1"))
+                pct_free = int((remaining / window) * 100) if window else 0
+                self._sb0.context_info = f"ctx {pct_free}% free"
+            elif code == M.FCHG:
+                kv = _parse_kv(content)
+                path = kv.get("path", "")
+                if path:
+                    self._changed_files.add(path)
+                    self._sb1.files_changed = len(self._changed_files)
+            elif code == M.SPRG:
+                kv = _parse_kv(content)
+                self._header.stage_total = int(kv.get("total", "0"))
+                modules = int(kv.get("modules", "0"))
+                if modules > 0:
+                    self._header.module_count = modules
+            elif code == M.WSTG:
+                self._sb1.stage_name = content
+            # SELP ignored — TUI drives its own elapsed timer via _tick_elapsed
+            elif code == M.ATRN:
+                # Content: "[name] Turn 3/20 (history=12 msgs)" → "Turn 3/20"
+                m = re.search(r"Turn \d+/\d+", content)
+                self._sb1.turn_info = m.group(0) if m else content
+                # New turn starting → about to call LLM. Clear stale tool info
+                # and show "generating" spinner so user knows the system is alive.
+                self._sb1.current_tool = ""
+                self._sb1.waiting = True
+            elif code == M.CTLC:
+                # LLM responded with a tool call — stop the waiting indicator
+                self._sb1.waiting = False
+                # Strip [agent] prefix, truncate for status bar
+                display = content
+                if "] " in display:
+                    display = display.split("] ", 1)[1]
+                self._sb1.current_tool = display[:60]
+            elif code == M.ASUM:
+                # Agent finished (final text response, no more tools)
+                self._sb1.waiting = False
+                self._sb1.current_tool = ""
+        except (ValueError, KeyError):
+            pass
+
+    # ─── Actions ─────────────────────────────────────────────────────────────
+
+    def action_clear_log(self) -> None:
+        self._trust5_log.clear()
+
+    def action_toggle_scroll(self) -> None:
+        self._trust5_log._user_scrolled = not self._trust5_log._user_scrolled
+        if not self._trust5_log._user_scrolled:
+            self._trust5_log.scroll_end(animate=False)
+        state = "ON" if not self._trust5_log._user_scrolled else "OFF (scroll up to read)"
+        self.notify(f"Auto-scroll: {state}")
