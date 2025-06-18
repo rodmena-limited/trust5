@@ -118,3 +118,65 @@ class Trust5App(App[None]):
             except Exception as exc:
                 logger.debug("watch_workflow poll error: %s", exc)
             time.sleep(0.5)
+
+    def consume_events(self) -> None:
+        """Background worker: drain events in batches and dispatch to main thread.
+
+        When the event queue sends None (pipeline done), we stop consuming
+        but do NOT exit the TUI — the user quits when ready.
+
+        Resilience: transient errors don't kill the consumer. Only 10
+        consecutive failures (or a cancelled worker) cause the loop to stop.
+        """
+        worker = get_current_worker()
+        consecutive_errors = 0
+        while not worker.is_cancelled:
+            try:
+                event = self.event_queue.get(timeout=0.1)
+                consecutive_errors = 0
+            except queue.Empty:
+                continue
+            except Exception:
+                consecutive_errors += 1
+                if consecutive_errors >= 10:
+                    logger.debug("consume_events: %d consecutive errors, stopping", consecutive_errors)
+                    break
+                continue
+
+            if event is None:
+                break
+
+            # Drain up to _BATCH_SIZE more without blocking
+            batch = [event]
+            done = False
+            for _ in range(_BATCH_SIZE - 1):
+                try:
+                    ev = self.event_queue.get_nowait()
+                    if ev is None:
+                        done = True
+                        break
+                    batch.append(ev)
+                except queue.Empty:
+                    break
+
+            self.call_from_thread(self._route_batch, batch)
+            if done:
+                break
+
+    def _clear_status_bar_on_completion(self, status: Any) -> None:
+        """Reset status bar to reflect pipeline completion.
+
+        Called from both event routing (WFAL/WSUC) and watch_workflow
+        (safety net for missed events).
+        """
+        self._sb1.thinking = False
+        self._sb1.waiting = False
+        self._sb1.current_tool = ""
+        status_name = status.name if hasattr(status, "name") else str(status)
+        if status_name in ("SUCCEEDED", "COMPLETED"):
+            self._sb1.stage_name = "completed"
+        elif status_name in ("CANCELED",):
+            self._sb1.stage_name = "interrupted"
+        else:
+            self._sb1.stage_name = "failed"
+        self._workflow_ended = True
