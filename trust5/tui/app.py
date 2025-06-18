@@ -78,3 +78,43 @@ class Trust5App(App[None]):
         if self._workflow_start_time is not None and not self._workflow_ended:
             elapsed = time.monotonic() - self._workflow_start_time
             self._sb1.elapsed = self._format_elapsed(elapsed)
+
+    def _format_elapsed(seconds: float) -> str:
+        s = int(seconds)
+        if s < 60:
+            return f"{s}s"
+        m, s = divmod(s, 60)
+        if m < 60:
+            return f"{m}m {s:02d}s"
+        h, m = divmod(m, 60)
+        return f"{h}h {m:02d}m"
+
+    def watch_workflow(self) -> None:
+        """Poll workflow status and store result when terminal.
+
+        The TUI stays open — the user decides when to quit (q / Ctrl+C).
+        """
+        import time
+
+        from stabilize.models.status import WorkflowStatus
+
+        terminal_statuses = {
+            WorkflowStatus.SUCCEEDED,
+            WorkflowStatus.FAILED_CONTINUE,
+            WorkflowStatus.TERMINAL,
+            WorkflowStatus.CANCELED,
+        }
+
+        while True:
+            try:
+                wf = self.store.retrieve(self.workflow_id)
+                if wf.status in terminal_statuses:
+                    time.sleep(0.5)  # let events drain
+                    self._workflow_result = wf
+                    # Safety net: clear status bar in case terminal events
+                    # were missed (e.g. agent killed mid-turn without ASUM).
+                    self.call_from_thread(self._clear_status_bar_on_completion, wf.status)
+                    break
+            except Exception as exc:
+                logger.debug("watch_workflow poll error: %s", exc)
+            time.sleep(0.5)
