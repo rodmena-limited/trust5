@@ -1,0 +1,62 @@
+/* ─── Trust5 TUI Theme ───────────────────────────────────────────── */
+/* Warm posh dark: chocolate blacks, cream text, gold/copper accents  */
+
+Screen {
+    layout: vertical;
+    background: #0c0a08;
+    color: #e8ddd0;
+    overflow-x: hidden;
+}
+
+/* ─── Header ──────────────────────────────────────────────────────── */
+HeaderWidget {
+    height: 3;
+    background: #151210;
+    border-bottom: solid #2a2420;
+    content-align: left middle;
+    padding: 0 2;
+}
+
+/* ─── Main Log ────────────────────────────────────────────────────── */
+Trust5Log {
+    height: 1fr;
+    background: #0c0a08;
+    color: #e8ddd0;
+    border: none;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #3a322c;
+    scrollbar-color-hover: #d4a054;
+    scrollbar-color-active: #d4a054;
+    padding: 0 2;
+}
+
+/* ─── Status Bars ─────────────────────────────────────────────────── */
+StatusBar1 {
+    height: auto;
+    background: #151210;
+    color: #b08cb8;
+    text-style: bold;
+    padding: 0 2;
+    border-top: solid #2a2420;
+}
+
+StatusBar0 {
+    height: auto;
+    background: #100e0c;
+    color: #706860;
+    padding: 0 2;
+    border-top: solid #2a2420;
+}
+
+/* ─── Scrollbar ───────────────────────────────────────────────────── */
+Scrollbar {
+    background: #0c0a08;
+    color: #2a2420;
+    width: 1;
+}
+
+Scrollbar:hover {
+    color: #d4a054;
+}
