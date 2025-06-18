@@ -180,3 +180,176 @@ class Trust5App(App[None]):
         else:
             self._sb1.stage_name = "failed"
         self._workflow_ended = True
+
+    def _route_batch(self, events: list[Event | None]) -> None:
+        """Route a batch of events. One bad event won't kill the TUI."""
+        for event in events:
+            if event is None:
+                continue
+            try:
+                self._route_event(event)
+            except Exception as exc:
+                logger.debug("TUI event routing error: %s", exc)
+
+    def _route_event(self, event: Event) -> None:
+        """Dispatch a single event to the appropriate widget."""
+        code = event.code
+        content = event.msg
+        kind = event.kind
+
+        # ── Block events (accumulate and render as panels) ──
+        if kind == K_BLOCK_START:
+            self._trust5_log.write_event(event)
+            return
+
+        if kind == K_BLOCK_LINE:
+            self._trust5_log.write_event(event)
+            return
+
+        if kind == K_BLOCK_END:
+            self._trust5_log.write_event(event)
+            return
+
+        # ── Stream events (accumulate and write inline to log) ──
+        if kind == K_STREAM_START:
+            self._current_stream_label = event.label or "Streaming"
+            self._current_stream_code = code
+            self._trust5_log.write_stream_start(code, self._current_stream_label)
+            if code == M.ATHK:
+                self._sb1.waiting = False  # LLM responded — stop waiting
+                self._sb1.thinking = True
+            return
+
+        if kind == K_STREAM_TOKEN:
+            self._trust5_log.write_stream_token(content, code=code)
+            return
+
+        if kind == K_STREAM_END:
+            self._trust5_log.write_stream_end()
+            if self._current_stream_code == M.ATHK:
+                self._sb1.thinking = False
+            return
+
+        # ── Pipeline header updates ──
+        # Track actual stage progress and per-module phase completions.
+        # WSTR is a workflow-level event and must NOT trigger stage matching.
+        module = event.label or ""
+
+        if code == M.WSTG:
+            self._header.update_stage(content, "running")
+            ref = content.lower()
+            # When an implementer starts, the preceding test-writer is done.
+            if "implement" in ref:
+                if not self._setup_counted:
+                    self._header.count_stage_done("setup")
+                    self._setup_counted = True
+                if module:
+                    self._header.mark_module_done("write_tests", module)
+                self._header.count_stage_done(f"write_tests:{module}")
+            elif "test-writer" in ref or "test_writer" in ref:
+                if not self._setup_counted:
+                    self._header.count_stage_done("setup")
+                    self._setup_counted = True
+        elif code == M.WSUC:
+            current = self._header.current_stage
+            self._header.completed_stages = self._header.completed_stages | {current}
+        elif code == M.WFAL:
+            self._header.update_stage(content, "failed")
+
+        # Non-agent tasks: validate, repair, quality.
+        if code == M.VRUN:
+            self._header.update_stage("validate", "running")
+            # Validate starting means the implementer stage is done.
+            if module:
+                self._header.mark_module_done("implement", module)
+                self._header.count_stage_done(f"implement:{module}")
+            # Integration validate (empty module): no phantom "implement:" key
+
+        elif code == M.VFAL:
+            self._header.update_stage("validate", "failed")
+
+        elif code == M.RSTR:
+            self._header.update_stage("repair", "running")
+
+        elif code == M.RSKP:
+            # Repair skipped still counts as a completed stage.
+            if module:
+                self._header.count_stage_done(f"repair:{module}")
+            else:
+                self._header.count_stage_done("integration_repair")
+
+        elif code == M.RJMP:
+            # Repair completed and jumping back — count it.
+            if module:
+                self._header.count_stage_done(f"repair:{module}")
+            else:
+                self._header.count_stage_done("integration_repair")
+
+        elif code == M.RFAL:
+            self._header.update_stage("repair", "failed")
+
+        elif code == M.QRUN:
+            self._header.update_stage("quality", "running")
+
+        elif code == M.QFAL:
+            self._header.update_stage("quality", "failed")
+
+        elif code == M.QJMP:
+            self._sb1.stage_name = "quality -> repair"
+
+        # Per-stage success events.
+        elif code == M.VPAS:
+            self._header.update_stage("validate", "success")
+            if module:
+                self._header.mark_module_done("validate", module)
+                # Validate passed = no repair needed = repair phase done too.
+                self._header.mark_module_done("repair", module)
+                self._header.count_stage_done(f"validate:{module}")
+                self._header.count_stage_done(f"repair:{module}")
+            else:
+                # Integration stages use dedicated keys.
+                self._header.count_stage_done("integration_validate")
+                self._header.count_stage_done("integration_repair")
+
+        elif code == M.QPAS:
+            self._header.update_stage("quality", "success")
+            self._header.count_stage_done("quality")
+
+        # Loop workflow events (trust5 loop command).
+        elif code == M.LSTR:
+            self._sb1.stage_name = "loop"
+        elif code == M.LITR:
+            self._sb1.stage_name = f"loop {content}"
+        elif code == M.LEND:
+            self._sb1.stage_name = "loop complete"
+        elif code == M.LERR:
+            self._sb1.stage_name = "loop error"
+
+        # ── Elapsed timer: start on first WSTR, freeze on terminal events ──
+        if code == M.WSTR:
+            if self._workflow_start_time is None:
+                self._workflow_start_time = time.monotonic()
+            self._workflow_ended = False
+        elif code in (M.WSUC, M.WFAL, M.WTMO, M.WINT):
+            self._workflow_ended = True
+            # Clear transient agent state so the status bar reflects completion,
+            # not the last agent's stale thinking/tool state.
+            self._sb1.thinking = False
+            self._sb1.waiting = False
+            self._sb1.current_tool = ""
+            _terminal_stage_names: dict[str, str] = {
+                M.WSUC: "completed",
+                M.WFAL: "failed",
+                M.WTMO: "failed",
+                M.WINT: "interrupted",
+            }
+            self._sb1.stage_name = _terminal_stage_names.get(code, "done")
+
+        # ── Status bar routing ──
+        self._update_status_bars(code, content)
+
+        # ── Main log (skip status-bar-only noise) ──
+        if code in STATUS_BAR_ONLY:
+            return
+
+        self._trust5_log.write_event(event)
