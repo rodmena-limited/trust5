@@ -62,3 +62,19 @@ class Trust5App(App[None]):
         yield Trust5Log(markup=False, max_lines=5000, auto_scroll=False, wrap=True)
         yield StatusBar1()
         yield StatusBar0()
+
+    def on_mount(self) -> None:
+        self._trust5_log = self.query_one(Trust5Log)
+        self._header = self.query_one(HeaderWidget)
+        self._sb0 = self.query_one(StatusBar0)
+        self._sb1 = self.query_one(StatusBar1)
+        self.set_interval(1.0, self._tick_elapsed)
+        self.consume_events()
+        if self.store and self.workflow_id:
+            self.watch_workflow()
+
+    def _tick_elapsed(self) -> None:
+        """Update elapsed display every second from a single workflow clock."""
+        if self._workflow_start_time is not None and not self._workflow_ended:
+            elapsed = time.monotonic() - self._workflow_start_time
+            self._sb1.elapsed = self._format_elapsed(elapsed)
