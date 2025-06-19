@@ -143,3 +143,144 @@ def _parse_kv(raw: str) -> dict[str, str]:
             k, v = part.split("=", 1)
             result[k] = v
     return result
+
+def _format_count(n: int) -> str:
+    """Format large numbers concisely: 1234 -> '1.2K', 1234567 -> '1.2M'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+class Trust5Log(RichLog):
+    """Scrollable log with block accumulation, syntax highlighting, and markdown.
+
+    Auto-scroll: follows new content UNLESS the user scrolls up (mouse wheel).
+    Detection uses MouseScrollUp/Down events (only fired by user input, never
+    by programmatic scroll_end). scroll_end() is overridden as a guard so that
+    even deferred scrolls scheduled before the user scrolled are suppressed.
+    """
+    MAX_BLOCK_LINES = 500
+    MAX_THINKING_LINES = 50
+    _SCROLL_BOTTOM_THRESHOLD = 3
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Disable Textual's auto_scroll — we handle it ourselves
+        self.auto_scroll = False
+        self._block_buffer: list[str] = []
+        self._block_label: str = ""
+        self._block_code: str = ""
+        self._in_block = False
+        self._stream_code: str = ""
+        self._stream_label: str = ""
+        self._thinking_content: str = ""
+        self._thinking_line_buffer: str = ""
+        self._response_content: str = ""
+        self._response_line_buffer: str = ""
+        self._user_scrolled = False
+
+        # Deduplication tracking
+        self._last_displayed: dict[str, str] = {}
+        self._last_block_content: str = ""
+        self._last_block_code: str = ""
+
+    def _is_at_bottom(self) -> bool:
+        return self.scroll_offset.y >= (self.virtual_size.height - self.size.height - self._SCROLL_BOTTOM_THRESHOLD)
+
+    def scroll_end(self, *args: Any, **kwargs: Any) -> None:
+        """Guard: suppress ALL scroll-to-end calls while user has scrolled up.
+
+        This catches both direct calls from write() AND deferred calls
+        scheduled by Textual's internal call_after_refresh().
+        """
+        if self._user_scrolled:
+            return
+        super().scroll_end(*args, **kwargs)
+
+    def write(self, *args: Any, **kwargs: Any) -> Any:
+        """Write content, then scroll to bottom only if user hasn't scrolled up."""
+        result = super().write(*args, **kwargs)
+        if not self._user_scrolled:
+            self.scroll_end(animate=False)
+        return result
+
+    def on_mouse_scroll_up(self, event: Any) -> None:
+        """User scrolled up with mouse wheel — pause auto-scroll."""
+        self._user_scrolled = True
+
+    def on_mouse_scroll_down(self, event: Any) -> None:
+        """User scrolled down — resume auto-scroll if they reached the bottom."""
+        self.call_later(self._check_resume_scroll)
+
+    def _check_resume_scroll(self) -> None:
+        """Resume auto-scroll if the user has scrolled back to the bottom."""
+        if self._user_scrolled and self._is_at_bottom():
+            self._user_scrolled = False
+
+    def write_event(self, event: Event) -> None:
+        kind = event.kind
+        code = event.code
+        msg = event.msg
+        ts = event.ts
+
+        if kind == K_BLOCK_START:
+            self._in_block = True
+            self._block_code = code
+            self._block_label = event.label or ""
+            self._block_buffer = []
+            return
+
+        if kind == K_BLOCK_LINE:
+            if self._in_block and len(self._block_buffer) < self.MAX_BLOCK_LINES:
+                self._block_buffer.append(msg)
+            return
+
+        if kind == K_BLOCK_END:
+            if self._in_block:
+                self._flush_block()
+            self._in_block = False
+            return
+
+        if kind == K_MSG:
+            self._print_atomic(ts, code, msg)
+
+    def write_stream_start(self, code: str, label: str) -> None:
+        self._stream_code = code
+        self._stream_label = label
+        if code == M.ATHK:
+            # Thinking: suppress content, just track that it's happening
+            self._thinking_content = ""
+            self._thinking_line_buffer = ""
+        else:
+            self._response_content = ""
+            self._response_line_buffer = ""
+
+    def write_stream_token(self, token: str, code: str = "") -> None:
+        if not token:
+            return
+
+        effective_code = code or self._stream_code or M.ARSP
+        if effective_code == M.ATHK:
+            # Silently accumulate thinking — don't render to log
+            self._thinking_content += token
+        else:
+            self._response_content += token
+            self._response_line_buffer += token
+            while "\n" in self._response_line_buffer:
+                line, self._response_line_buffer = self._response_line_buffer.split("\n", 1)
+                if line.strip():
+                    self.write(Text(f"    {line}", style=C_TEXT))
+
+    def write_stream_end(self) -> None:
+        if self._stream_code == M.ATHK:
+            self._thinking_content = ""
+            self._thinking_line_buffer = ""
+        elif self._response_content:
+            if self._response_line_buffer.strip():
+                self.write(Text(f"    {self._response_line_buffer}", style=C_TEXT))
+            self._response_line_buffer = ""
+            self.write(Text("  " + "\u2500" * 50, style=C_DIM))
+            self._response_content = ""
+
+        self._stream_code = ""
+        self._stream_label = ""
