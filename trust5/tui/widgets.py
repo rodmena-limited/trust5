@@ -1,5 +1,6 @@
 import os
 from typing import Any
+
 from rich.box import ROUNDED
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -7,6 +8,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 from textual.reactive import reactive
 from textual.widgets import RichLog, Static
+
 from ..core.event_bus import (
     K_BLOCK_END,
     K_BLOCK_LINE,
@@ -15,25 +17,41 @@ from ..core.event_bus import (
     Event,
 )
 from ..core.message import M
+
+# ─── Color Palette ───────────────────────────────────────────────────────────
+# Warm "posh" palette: champagne whites, warm greys, gold/copper/rose accents.
+# Designed to feel welcoming and refined — not neon-hacker.
+
 C_BG = "#0c0a08"  # Near-black with warm brown undertone
 C_SURFACE = "#151210"  # Dark chocolate surface
 C_BORDER = "#2a2420"  # Warm dark border
 C_CHROME = "#3a322c"  # Warm separator
+
 C_TEXT = "#e8ddd0"  # Cream white — warm primary text
 C_SECONDARY = "#b0a898"  # Warm taupe — normal messages
 C_MUTED = "#706860"  # Warm grey — timestamps, noise
 C_DIM = "#483f38"  # Dark warm grey — decorative, faint
+
+# Semantic accents — warm hues, each visually distinct
 C_BLUE = "#d4a054"  # Warm gold — primary accent, headers, brand
 C_TEAL = "#7ab08a"  # Sage green — tool operations
 C_GREEN = "#8cc084"  # Warm green — success
 C_AMBER = "#d4943c"  # Copper — thinking, warnings, retries
 C_RED = "#c87070"  # Dusty rose — errors, failures
 C_LAVENDER = "#b08cb8"  # Dusty mauve — stages, validation
+
+# Dim variants for subtle/background use
 C_DIM_TEAL = "#5a8068"
 C_DIM_GREEN = "#68986c"
 C_DIM_AMBER = "#a07838"
 C_DIM_RED = "#985858"
 C_DIM_LAVENDER = "#887098"
+
+# ─── Theme Map ───────────────────────────────────────────────────────────────
+# marker: 4-char fixed-width badge text (for left-column alignment)
+# color: accent color for the marker
+# pill: True = render marker with colored background (major events)
+
 THEME: dict[str, dict[str, Any]] = {
     # Agent
     M.ATHK: {"marker": " .. ", "color": C_AMBER, "title": "Thinking", "pill": False},
@@ -106,7 +124,15 @@ THEME: dict[str, dict[str, Any]] = {
     M.UASK: {"marker": "  ?", "color": C_AMBER, "title": "Question", "pill": True},
     M.UAUT: {"marker": "AUTO", "color": C_AMBER, "title": "Auto-Answer", "pill": True},
 }
+
 _DEFAULT_THEME: dict[str, Any] = {"marker": "  . ", "color": C_SECONDARY, "title": "", "pill": False}
+
+
+def get_theme(code: str) -> dict[str, Any]:
+    return THEME.get(code, _DEFAULT_THEME)
+
+
+# Events that route ONLY to status bars, never to the main log.
 STATUS_BAR_ONLY: frozenset[str] = frozenset(
     {
         M.MMDL,
@@ -132,8 +158,9 @@ STATUS_BAR_ONLY: frozenset[str] = frozenset(
     }
 )
 
-def get_theme(code: str) -> dict[str, Any]:
-    return THEME.get(code, _DEFAULT_THEME)
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _parse_kv(raw: str) -> dict[str, str]:
     """Parse 'key=value key2=value2' into a dict."""
@@ -144,6 +171,7 @@ def _parse_kv(raw: str) -> dict[str, str]:
             result[k] = v
     return result
 
+
 def _format_count(n: int) -> str:
     """Format large numbers concisely: 1234 -> '1.2K', 1234567 -> '1.2M'."""
     if n >= 1_000_000:
@@ -151,6 +179,10 @@ def _format_count(n: int) -> str:
     if n >= 1_000:
         return f"{n / 1_000:.1f}K"
     return str(n)
+
+
+# ─── Widgets ─────────────────────────────────────────────────────────────────
+
 
 class Trust5Log(RichLog):
     """Scrollable log with block accumulation, syntax highlighting, and markdown.
@@ -160,9 +192,12 @@ class Trust5Log(RichLog):
     by programmatic scroll_end). scroll_end() is overridden as a guard so that
     even deferred scrolls scheduled before the user scrolled are suppressed.
     """
+
     MAX_BLOCK_LINES = 500
     MAX_THINKING_LINES = 50
+
     _SCROLL_BOTTOM_THRESHOLD = 3
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Disable Textual's auto_scroll — we handle it ourselves
@@ -244,6 +279,8 @@ class Trust5Log(RichLog):
         if kind == K_MSG:
             self._print_atomic(ts, code, msg)
 
+    # ── Streaming ─────────────────────────────────────────────────────────
+
     def write_stream_start(self, code: str, label: str) -> None:
         self._stream_code = code
         self._stream_label = label
@@ -284,6 +321,8 @@ class Trust5Log(RichLog):
 
         self._stream_code = ""
         self._stream_label = ""
+
+    # ── Block rendering ───────────────────────────────────────────────────
 
     def _flush_block(self) -> None:
         content = "\n".join(self._block_buffer)
@@ -398,6 +437,7 @@ class Trust5Log(RichLog):
             return "docker"
         return "text"
 
+    @staticmethod
     def _sniff_lexer(content: str) -> str:
         """Detect language from content when file extension is unknown."""
         head = content[:500]
@@ -413,6 +453,8 @@ class Trust5Log(RichLog):
             return "bash"
         return "text"
 
+    # ── Atomic messages ───────────────────────────────────────────────────
+
     def _is_duplicate(self, code: str, content: str) -> bool:
         key = f"{code}:{content[:200]}"
         if key in self._last_displayed:
@@ -422,6 +464,7 @@ class Trust5Log(RichLog):
             self._last_displayed.pop(next(iter(self._last_displayed)))
         return False
 
+    @staticmethod
     def _strip_agent_prefix(msg: str) -> tuple[str, str]:
         """Extract [agent_name] prefix from message if present.
 
@@ -500,6 +543,10 @@ class Trust5Log(RichLog):
         # Default — secondary (not bright, reserve cream for AI response content)
         return C_SECONDARY
 
+
+# ─── Header ──────────────────────────────────────────────────────────────────
+
+
 class HeaderWidget(Static):
     """Pipeline progress header with module-aware stage badges.
 
@@ -507,13 +554,32 @@ class HeaderWidget(Static):
     show accurate progress (e.g. "TEST 2/3" = 2 of 3 modules done).
     A phase badge turns green only when ALL modules have completed it.
     """
-    STAGES = [('plan', 'PLAN'), ('write_tests', 'TEST'), ('implement', 'CODE'), ('validate', 'VERIFY'), ('repair', 'FIX'), ('quality', 'GATE')]
-    _MODULE_PHASES: frozenset[str] = frozenset({'write_tests', 'implement', 'validate', 'repair'})
-    current_stage: reactive[str] = reactive('plan')
+
+    STAGES = [
+        ("plan", "PLAN"),
+        ("write_tests", "TEST"),
+        ("implement", "CODE"),
+        ("validate", "VERIFY"),
+        ("repair", "FIX"),
+        ("quality", "GATE"),
+    ]
+
+    # Phases that repeat per-module in parallel pipelines.
+    _MODULE_PHASES: frozenset[str] = frozenset(
+        {
+            "write_tests",
+            "implement",
+            "validate",
+            "repair",
+        }
+    )
+
+    current_stage: reactive[str] = reactive("plan")
     completed_stages: reactive[set[str]] = reactive(set)
     stage_total: reactive[int] = reactive(0)
     stages_done: reactive[int] = reactive(0)
     module_count: reactive[int] = reactive(0)
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Per-phase module tracking: {phase_key: set of module labels done}
@@ -586,6 +652,7 @@ class HeaderWidget(Static):
         if new_idx >= cur_idx or allow_cycle:
             self.current_stage = key
 
+    @staticmethod
     def _match_stage_key(ref: str) -> str | None:
         """Match event content to a header stage key."""
         if "test-writer" in ref or "test_writer" in ref or "write test" in ref:
@@ -635,16 +702,24 @@ class HeaderWidget(Static):
 
         return text
 
+
+# ─── Status Bars ─────────────────────────────────────────────────────────────
+
+
 class StatusBar1(Static):
     """Upper status bar: stage, elapsed, turn, tool, files, thinking/waiting."""
-    stage_name: reactive[str] = reactive('')
-    elapsed: reactive[str] = reactive('')
-    turn_info: reactive[str] = reactive('')
-    current_tool: reactive[str] = reactive('')
+
+    stage_name: reactive[str] = reactive("")
+    elapsed: reactive[str] = reactive("")
+    turn_info: reactive[str] = reactive("")
+    current_tool: reactive[str] = reactive("")
     files_changed: reactive[int] = reactive(0)
     thinking: reactive[bool] = reactive(False)
     waiting: reactive[bool] = reactive(False)
-    _SPINNER_FRAMES = ('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
+
+    # Braille spinner — 10 frames at 80ms = smooth 12.5 FPS rotation
+    _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._spinner_tick = 0
@@ -706,9 +781,36 @@ class StatusBar1(Static):
             self._spinner_tick += 1
             self.refresh()
 
+
 class StatusBar0(Static):
     """Lower status bar: model, tokens, context, keybindings."""
-    model_name: reactive[str] = reactive('')
-    provider: reactive[str] = reactive('')
-    token_info: reactive[str] = reactive('')
-    context_info: reactive[str] = reactive('')
+
+    model_name: reactive[str] = reactive("")
+    provider: reactive[str] = reactive("")
+    token_info: reactive[str] = reactive("")
+    context_info: reactive[str] = reactive("")
+
+    def render(self) -> Text:
+        text = Text()
+        if self.model_name:
+            text.append(f" {self.model_name}", style=f"bold {C_BLUE}")
+        else:
+            text.append(" Trust5", style=f"bold {C_BLUE}")
+
+        if self.provider:
+            text.append(f"  {self.provider}", style=C_MUTED)
+
+        if self.token_info:
+            text.append(f"  {self.token_info}", style=C_SECONDARY)
+        if self.context_info:
+            text.append(f"  {self.context_info}", style=C_AMBER)
+
+        # Keybindings
+        text.append("  ", style=C_DIM)
+        text.append("^C", style=C_SECONDARY)
+        text.append(" quit  ", style=C_DIM)
+        text.append("c", style=C_SECONDARY)
+        text.append(" clear  ", style=C_DIM)
+        text.append("s", style=C_SECONDARY)
+        text.append(" scroll", style=C_DIM)
+        return text
