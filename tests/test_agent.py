@@ -338,3 +338,104 @@ def test_summarize_args_unknown_tool(_emit, _emit_block):
     summary = agent._summarize_args("SomeTool", {"alpha": 1, "beta": 2})
     assert "alpha=..." in summary
     assert "beta=..." in summary
+
+def test_summarize_args_empty(_emit, _emit_block):
+    """_summarize_args with empty args returns empty string."""
+    agent = _make_agent(make_mock_llm([]))
+    summary = agent._summarize_args("SomeTool", {})
+    assert summary == ""
+
+def test_history_structure_after_run(_emit, _emit_block):
+    """After a simple run, history contains the user message and assistant reply."""
+    llm = make_mock_llm([_resp(content="reply")])
+    agent = _make_agent(llm)
+    agent.run("hi")
+
+    assert len(agent.history) == 2
+    assert agent.history[0] == {"role": "user", "content": "hi"}
+    assert agent.history[1]["content"] == "reply"
+
+def test_tool_result_truncated_in_run(_emit, _emit_block):
+    """Large tool results are truncated before being sent back to the LLM."""
+    big_output = "X" * (MAX_TOOL_RESULT_LENGTH + 500)
+    responses = [
+        _resp(content="", tool_calls=[_tool_call("Read", {"file_path": "big.txt"})]),
+        _resp(content="Got it."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm)
+
+    with patch.object(agent.tools, "read_file", return_value=big_output):
+        result = agent.run("read big file")
+
+    assert result == "Got it."
+    # Check that the tool result in the second call was truncated.
+    second_call_messages = llm.chat.call_args_list[1][0][0]
+    tool_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert "chars truncated" in tool_msgs[0]["content"]
+    assert len(tool_msgs[0]["content"]) < len(big_output)
+
+def test_mcp_list_tools_failure_non_fatal(_emit, _emit_block):
+    """If an MCP client's list_tools() raises, the agent still initializes."""
+    mock_mcp = MagicMock()
+    mock_mcp.list_tools.side_effect = RuntimeError("MCP server unreachable")
+
+    llm = make_mock_llm([_resp(content="ok")])
+    # Should not raise during construction.
+    agent = _make_agent(llm, mcp_clients=[mock_mcp])
+    result = agent.run("hello")
+    assert result == "ok"
+
+def test_mcp_call_tool_failure_falls_through(_emit, _emit_block):
+    """If all MCP clients fail call_tool, 'Unknown tool' error is returned."""
+    mock_mcp = MagicMock()
+    mock_mcp.list_tools.return_value = []
+    mock_mcp.call_tool.side_effect = RuntimeError("MCP call failed")
+
+    responses = [
+        _resp(content="", tool_calls=[_tool_call("McpTool", {"x": 1})]),
+        _resp(content="No luck."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm, mcp_clients=[mock_mcp])
+    result = agent.run("try mcp")
+
+    assert result == "No luck."
+    second_call_messages = llm.chat.call_args_list[1][0][0]
+    tool_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert any("Unknown tool" in m["content"] for m in tool_msgs)
+
+def test_agent_timeout_stops_at_turn_boundary(_emit, _emit_block):
+    """Agent.run() stops when wall-clock timeout is exceeded between turns."""
+    # Simulate time progressing: first call returns 0, then jumps past deadline.
+    call_count = 0
+    base_time = 1000.0
+
+    def mock_monotonic():
+        nonlocal call_count
+        call_count += 1
+        # First two calls: deadline computation + first turn check -> within budget
+        if call_count <= 2:
+            return base_time
+        # Subsequent calls: past deadline
+        return base_time + 999.0
+
+    tool_resp = _resp(content="partial", tool_calls=[_tool_call("Read", {"file_path": "f.txt"})])
+    llm = make_mock_llm([tool_resp] * 10)
+    agent = _make_agent(llm)
+
+    with patch.object(agent.tools, "read_file", return_value="data"), patch("trust5.core.agent.time") as mock_time:
+        mock_time.monotonic = mock_monotonic
+        result = agent.run("keep going", max_turns=10, timeout_seconds=30)
+
+    # Should have stopped early due to timeout, not exhausted all 10 turns.
+    assert llm.chat.call_count < 10
+    assert result == "partial"
+
+def test_agent_no_timeout_when_none(_emit, _emit_block):
+    """Agent.run() with timeout_seconds=None does not enforce a deadline."""
+    llm = make_mock_llm([_resp(content="done")])
+    agent = _make_agent(llm)
+    result = agent.run("hello", timeout_seconds=None)
+    assert result == "done"
+    llm.chat.assert_called_once()
