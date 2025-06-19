@@ -181,3 +181,22 @@ def test_flatten_lsp_gates():
     assert result["max_lint_errors"] == 1
     assert result["development_mode"] == "hybrid"
     assert "lsp_quality_gates" not in result
+
+def test_flatten_lsp_gates_no_override():
+    """Existing top-level keys are NOT overridden by lsp_quality_gates values."""
+    data = {
+        "max_errors": 10,
+        "lsp_quality_gates": {
+            "run": {
+                "max_errors": 0,
+            }
+        },
+    }
+    result = ConfigManager._flatten_lsp_gates(data)
+    assert result["max_errors"] == 10
+
+def test_flatten_lsp_gates_absent():
+    """When lsp_quality_gates is absent, data is returned unchanged."""
+    data = {"development_mode": "tdd", "coverage_threshold": 90.0}
+    result = ConfigManager._flatten_lsp_gates(data)
+    assert result == {"development_mode": "tdd", "coverage_threshold": 90.0}
