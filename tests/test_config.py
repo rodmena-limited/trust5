@@ -200,3 +200,17 @@ def test_flatten_lsp_gates_absent():
     data = {"development_mode": "tdd", "coverage_threshold": 90.0}
     result = ConfigManager._flatten_lsp_gates(data)
     assert result == {"development_mode": "tdd", "coverage_threshold": 90.0}
+
+def test_load_yaml_missing_file(tmp_path):
+    """Missing YAML file returns empty dict without error."""
+    mgr = ConfigManager(project_root=str(tmp_path))
+    result = mgr._load_yaml(str(tmp_path / "nonexistent.yaml"))
+    assert result == {}
+
+def test_load_yaml_invalid_file(tmp_path):
+    """Corrupt YAML returns empty dict (no crash)."""
+    bad_yaml = tmp_path / "bad.yaml"
+    bad_yaml.write_text("{{{{invalid yaml: [unterminated", encoding="utf-8")
+    mgr = ConfigManager(project_root=str(tmp_path))
+    result = mgr._load_yaml(str(bad_yaml))
+    assert result == {}
