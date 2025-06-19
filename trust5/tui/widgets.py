@@ -284,3 +284,265 @@ class Trust5Log(RichLog):
 
         self._stream_code = ""
         self._stream_label = ""
+
+    def _flush_block(self) -> None:
+        content = "\n".join(self._block_buffer)
+        if len(self._block_buffer) >= self.MAX_BLOCK_LINES:
+            content += f"\n... [{self.MAX_BLOCK_LINES}+ lines truncated]"
+        code = self._block_code
+
+        if code == self._last_block_code and content == self._last_block_content:
+            return
+        self._last_block_code = code
+        self._last_block_content = content
+
+        theme = get_theme(code)
+
+        # Skip system prompt and user input — internal noise, not useful to the user
+        if code in (M.CSYS, M.CUSR):
+            return
+        renderable: Any  # Text | Panel — varies by code
+        if code == M.CTLR:
+            renderable = Text(content, style=C_DIM)
+        elif code in (M.KCOD, M.TWRT, M.TRED, M.TEDT, M.KDIF):
+            lexer = self._guess_lexer(self._block_label)
+            if lexer == "text":
+                lexer = self._sniff_lexer(content)
+            syntax = Syntax(content, lexer, theme="monokai", line_numbers=True, word_wrap=True)
+            renderable = Panel(
+                syntax,
+                title=f" {theme['title']} ",
+                border_style=C_CHROME,
+                box=ROUNDED,
+            )
+        elif code == M.VTST:
+            # Test output: subdued — reference info, not what the user needs to focus on
+            renderable = Panel(
+                Text(content, style=C_MUTED),
+                title=f" {theme['title']} ",
+                border_style=C_DIM,
+                box=ROUNDED,
+            )
+        elif code in (M.QRPT, M.PPLN, M.ARSP, M.ASUM):
+            inner: Any
+            try:
+                inner = Markdown(content)
+            except Exception:
+                inner = Text(content)
+            renderable = Panel(
+                inner,
+                title=f" {theme['title']} ",
+                border_style=theme["color"],
+                box=ROUNDED,
+            )
+        elif code == M.TBSH:
+            renderable = Panel(
+                Text.from_ansi(content),
+                title=" Shell ",
+                border_style=C_CHROME,
+                box=ROUNDED,
+            )
+        else:
+            renderable = Panel(
+                Text(content),
+                title=f" {theme['title']} ",
+                border_style=C_CHROME,
+                box=ROUNDED,
+            )
+
+        self.write(renderable)
+
+    def _guess_lexer(self, label: str) -> str:
+        label_lower = label.lower()
+        if label_lower.endswith(".py"):
+            return "python"
+        if label_lower.endswith((".js", ".jsx")):
+            return "javascript"
+        if label_lower.endswith((".ts", ".tsx")):
+            return "typescript"
+        if label_lower.endswith(".go"):
+            return "go"
+        if label_lower.endswith(".rs"):
+            return "rust"
+        if label_lower.endswith(".md"):
+            return "markdown"
+        if label_lower.endswith(".json"):
+            return "json"
+        if label_lower.endswith((".yml", ".yaml")):
+            return "yaml"
+        if label_lower.endswith((".sh", ".bash")):
+            return "bash"
+        if label_lower.endswith((".html", ".htm")):
+            return "html"
+        if label_lower.endswith(".css"):
+            return "css"
+        if label_lower.endswith(".toml"):
+            return "toml"
+        if label_lower.endswith(".sql"):
+            return "sql"
+        if label_lower.endswith(".java"):
+            return "java"
+        if label_lower.endswith((".c", ".h")):
+            return "c"
+        if label_lower.endswith((".cpp", ".cc", ".hpp")):
+            return "cpp"
+        if label_lower.endswith(".rb"):
+            return "ruby"
+        if label_lower.endswith(".swift"):
+            return "swift"
+        if label_lower.endswith(".xml"):
+            return "xml"
+        if label_lower.endswith(".tf"):
+            return "terraform"
+        if os.path.basename(label_lower) == "dockerfile":
+            return "docker"
+        return "text"
+
+    def _sniff_lexer(content: str) -> str:
+        """Detect language from content when file extension is unknown."""
+        head = content[:500]
+        if any(kw in head for kw in ("import ", "from ", "def ", "class ", "#!/usr/bin/env python")):
+            return "python"
+        if any(kw in head for kw in ("package ", "func ", "import (")):
+            return "go"
+        if any(kw in head for kw in ("const ", "let ", "function ", "=> {", "require(")):
+            return "javascript"
+        if "fn " in head and ("let mut " in head or "use " in head):
+            return "rust"
+        if "#!/bin/bash" in head or "#!/bin/sh" in head:
+            return "bash"
+        return "text"
+
+    def _is_duplicate(self, code: str, content: str) -> bool:
+        key = f"{code}:{content[:200]}"
+        if key in self._last_displayed:
+            return True
+        self._last_displayed[key] = content
+        if len(self._last_displayed) > 200:
+            self._last_displayed.pop(next(iter(self._last_displayed)))
+        return False
+
+    def _strip_agent_prefix(msg: str) -> tuple[str, str]:
+        """Extract [agent_name] prefix from message if present.
+
+        Returns (agent_label, cleaned_message).  Agent label is empty
+        when the message has no bracket prefix.
+        """
+        if msg.startswith("[") and "] " in msg:
+            idx = msg.index("] ")
+            return msg[1:idx], msg[idx + 2 :]
+        return "", msg
+
+    def _print_atomic(self, ts: str, code: str, msg: str) -> None:
+        if code in STATUS_BAR_ONLY:
+            return
+        if code in (M.CSYS, M.CUSR):
+            return
+        if self._is_duplicate(code, msg):
+            return
+
+        theme = get_theme(code)
+        agent_label, display_msg = self._strip_agent_prefix(msg)
+        text = Text()
+
+        if theme.get("pill"):
+            # Pill badge: colored background — for major lifecycle events
+            text.append(f" {theme['marker']} ", style=f"bold {C_BG} on {theme['color']}")
+            text.append("  ")
+            if agent_label:
+                text.append(f"{agent_label}  ", style=C_DIM)
+            text.append(display_msg, style=self._msg_style(code))
+        else:
+            # Colored text marker — for tool calls and secondary events
+            text.append(f" {theme['marker']}", style=f"bold {theme['color']}")
+            text.append("  ")
+            if agent_label:
+                text.append(f"{agent_label}  ", style=C_DIM)
+            text.append(display_msg, style=self._msg_style(code))
+
+        self.write(text)
+
+    def _msg_style(self, code: str) -> str:
+        """Return text style based on event semantic category.
+
+        Hierarchy: bold+color for important, color for normal, dim for noise.
+        """
+        # Errors — bold rose, always prominent
+        if code in (M.WFAL, M.AERR, M.SERR, M.RFAL, M.QFAL, M.VFAL, M.LERR):
+            return f"bold {C_RED}"
+        # Success — bold green
+        if code in (M.WSUC, M.VPAS, M.QPAS, M.REND, M.LEND):
+            return f"bold {C_GREEN}"
+        # Warnings / retries — bold copper
+        if code in (M.SWRN, M.ARTY, M.WJMP, M.RJMP, M.AFBK):
+            return f"bold {C_AMBER}"
+        # Stage lifecycle — bold mauve
+        if code == M.WSTG:
+            return f"bold {C_LAVENDER}"
+        # Workflow start — bold gold
+        if code == M.WSTR:
+            return f"bold {C_BLUE}"
+        # Validation / quality running — bold mauve
+        if code in (M.VRUN, M.QRUN):
+            return f"bold {C_LAVENDER}"
+        # Repair start — bold copper
+        if code == M.RSTR:
+            return f"bold {C_AMBER}"
+        # Tool calls — sage (visible but subordinate)
+        if code in (M.TCAL, M.CTLC, M.TBSH, M.TRED, M.TWRT, M.TEDT, M.TGLB, M.TGRP, M.TPKG, M.TINI):
+            return C_TEAL
+        # Tool results — dim (background noise)
+        if code in (M.TRES, M.CTLR):
+            return C_DIM
+        # Info — bold gold
+        if code == M.SINF:
+            return f"bold {C_BLUE}"
+        # Default — secondary (not bright, reserve cream for AI response content)
+        return C_SECONDARY
+
+class HeaderWidget(Static):
+    """Pipeline progress header with module-aware stage badges.
+
+    Tracks per-module completion for each phase so that parallel pipelines
+    show accurate progress (e.g. "TEST 2/3" = 2 of 3 modules done).
+    A phase badge turns green only when ALL modules have completed it.
+    """
+    STAGES = [('plan', 'PLAN'), ('write_tests', 'TEST'), ('implement', 'CODE'), ('validate', 'VERIFY'), ('repair', 'FIX'), ('quality', 'GATE')]
+    _MODULE_PHASES: frozenset[str] = frozenset({'write_tests', 'implement', 'validate', 'repair'})
+    current_stage: reactive[str] = reactive('plan')
+    completed_stages: reactive[set[str]] = reactive(set)
+    stage_total: reactive[int] = reactive(0)
+    stages_done: reactive[int] = reactive(0)
+    module_count: reactive[int] = reactive(0)
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Per-phase module tracking: {phase_key: set of module labels done}
+        self._phase_modules: dict[str, set[str]] = {}
+        # Dedup for stage counter: set of "phase:module" keys
+        self._counted_stages: set[str] = set()
+
+    def _stage_index(self, key: str) -> int:
+        for i, (k, _) in enumerate(self.STAGES):
+            if k == key:
+                return i
+        return -1
+
+    def phase_done_count(self, phase_key: str) -> int:
+        return len(self._phase_modules.get(phase_key, set()))
+
+    def mark_module_done(self, phase_key: str, module: str) -> None:
+        """Record that a module completed this phase."""
+        if phase_key not in self._phase_modules:
+            self._phase_modules[phase_key] = set()
+        self._phase_modules[phase_key].add(module)
+        # Auto-complete the phase when all modules are done.
+        mc = self.module_count
+        if mc > 0 and len(self._phase_modules[phase_key]) >= mc:
+            self.completed_stages = self.completed_stages | {phase_key}
+        self.refresh()
+
+    def count_stage_done(self, stage_id: str) -> None:
+        """Increment the progress counter (deduped by stage_id)."""
+        if stage_id not in self._counted_stages:
+            self._counted_stages.add(stage_id)
+            self.stages_done = len(self._counted_stages)
