@@ -78,3 +78,69 @@ def test_quality_config_custom_values():
     # Unchanged defaults
     assert cfg.max_type_errors == 0
     assert cfg.max_file_lines == 500
+
+def test_load_config_missing_dir(tmp_path):
+    """ConfigManager with a nonexistent config directory returns all defaults."""
+    mgr = ConfigManager(project_root=str(tmp_path / "nonexistent"))
+    cfg = mgr.load_config()
+    assert cfg.quality.coverage_threshold == 80.0
+    assert cfg.quality.pass_score_threshold == 0.70
+    assert cfg.git.auto_branch is True
+    assert cfg.language.conversation_language == "en"
+    assert cfg.workflow.team == {"enabled": False}
+
+def test_load_config_from_yaml(tmp_path, config_dir):
+    """Loading real YAML files populates the config correctly."""
+    quality_yaml = {
+        "quality": {
+            "development_mode": "ddd",
+            "coverage_threshold": 90.0,
+            "pass_score_threshold": 0.85,
+            "max_errors": 2,
+        }
+    }
+    git_yaml = {
+        "git_strategy": {
+            "auto_branch": False,
+            "branch_prefix": "bugfix/",
+            "spec_git_workflow": "branch_per_spec",
+        }
+    }
+    lang_yaml = {
+        "language": {
+            "conversation_language": "ko",
+            "code_comments": "ko",
+            "language": "go",
+            "test_framework": "go test",
+            "lsp_command": ["gopls", "serve"],
+        }
+    }
+    workflow_yaml = {
+        "workflow": {
+            "team": {"enabled": True, "max_size": 5},
+        }
+    }
+
+    (config_dir / "quality.yaml").write_text(yaml.dump(quality_yaml), encoding="utf-8")
+    (config_dir / "git-strategy.yaml").write_text(yaml.dump(git_yaml), encoding="utf-8")
+    (config_dir / "language.yaml").write_text(yaml.dump(lang_yaml), encoding="utf-8")
+    (config_dir / "workflow.yaml").write_text(yaml.dump(workflow_yaml), encoding="utf-8")
+
+    mgr = ConfigManager(project_root=str(tmp_path))
+    cfg = mgr.load_config()
+
+    assert cfg.quality.development_mode == "ddd"
+    assert cfg.quality.coverage_threshold == 90.0
+    assert cfg.quality.pass_score_threshold == 0.85
+    assert cfg.quality.max_errors == 2
+
+    assert cfg.git.auto_branch is False
+    assert cfg.git.branch_prefix == "bugfix/"
+    assert cfg.git.spec_git_workflow == "branch_per_spec"
+
+    assert cfg.language.conversation_language == "ko"
+    assert cfg.language.language == "go"
+    assert cfg.language.test_framework == "go test"
+    assert cfg.language.lsp_command == ["gopls", "serve"]
+
+    assert cfg.workflow.team == {"enabled": True, "max_size": 5}
