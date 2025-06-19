@@ -144,3 +144,15 @@ def test_load_config_from_yaml(tmp_path, config_dir):
     assert cfg.language.lsp_command == ["gopls", "serve"]
 
     assert cfg.workflow.team == {"enabled": True, "max_size": 5}
+
+def test_unwrap_nested_key():
+    """_unwrap extracts the inner dict when the key matches a nested dict."""
+    data = {"quality": {"coverage_threshold": 95.0, "max_errors": 1}}
+    result = ConfigManager._unwrap(data, "quality")
+    assert result == {"coverage_threshold": 95.0, "max_errors": 1}
+
+def test_unwrap_flat():
+    """_unwrap returns original dict when the key is absent."""
+    data = {"coverage_threshold": 95.0, "max_errors": 1}
+    result = ConfigManager._unwrap(data, "quality")
+    assert result == {"coverage_threshold": 95.0, "max_errors": 1}
