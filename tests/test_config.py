@@ -1,5 +1,8 @@
+"""Tests for trust5.core.config module."""
+
 import pytest
 import yaml
+
 from trust5.core.config import (
     ConfigManager,
     GitStrategyConfig,
@@ -9,10 +12,18 @@ from trust5.core.config import (
     WorkflowConfig,
 )
 
+
+@pytest.fixture
 def config_dir(tmp_path):
     sections = tmp_path / ".moai" / "config" / "sections"
     sections.mkdir(parents=True)
     return sections
+
+
+# ---------------------------------------------------------------------------
+# Pydantic model defaults
+# ---------------------------------------------------------------------------
+
 
 def test_default_quality_config():
     cfg = QualityConfig()
@@ -44,6 +55,7 @@ def test_default_quality_config():
     assert cfg.simplicity.max_parallel_tasks == 5
     assert cfg.report_generation.enabled is True
 
+
 def test_default_moai_config():
     cfg = MoaiConfig()
     assert isinstance(cfg.quality, QualityConfig)
@@ -59,6 +71,7 @@ def test_default_moai_config():
     assert cfg.language.test_framework == "auto"
     assert cfg.language.lsp_command == []
     assert cfg.workflow.team == {"enabled": False}
+
 
 def test_quality_config_custom_values():
     cfg = QualityConfig(
@@ -79,6 +92,12 @@ def test_quality_config_custom_values():
     assert cfg.max_type_errors == 0
     assert cfg.max_file_lines == 500
 
+
+# ---------------------------------------------------------------------------
+# ConfigManager — load_config
+# ---------------------------------------------------------------------------
+
+
 def test_load_config_missing_dir(tmp_path):
     """ConfigManager with a nonexistent config directory returns all defaults."""
     mgr = ConfigManager(project_root=str(tmp_path / "nonexistent"))
@@ -88,6 +107,7 @@ def test_load_config_missing_dir(tmp_path):
     assert cfg.git.auto_branch is True
     assert cfg.language.conversation_language == "en"
     assert cfg.workflow.team == {"enabled": False}
+
 
 def test_load_config_from_yaml(tmp_path, config_dir):
     """Loading real YAML files populates the config correctly."""
@@ -145,11 +165,18 @@ def test_load_config_from_yaml(tmp_path, config_dir):
 
     assert cfg.workflow.team == {"enabled": True, "max_size": 5}
 
+
+# ---------------------------------------------------------------------------
+# ConfigManager — _unwrap
+# ---------------------------------------------------------------------------
+
+
 def test_unwrap_nested_key():
     """_unwrap extracts the inner dict when the key matches a nested dict."""
     data = {"quality": {"coverage_threshold": 95.0, "max_errors": 1}}
     result = ConfigManager._unwrap(data, "quality")
     assert result == {"coverage_threshold": 95.0, "max_errors": 1}
+
 
 def test_unwrap_flat():
     """_unwrap returns original dict when the key is absent."""
@@ -157,11 +184,18 @@ def test_unwrap_flat():
     result = ConfigManager._unwrap(data, "quality")
     assert result == {"coverage_threshold": 95.0, "max_errors": 1}
 
+
 def test_unwrap_non_dict_value():
     """_unwrap returns original dict when the key exists but value is not a dict."""
     data = {"quality": "high"}
     result = ConfigManager._unwrap(data, "quality")
     assert result == {"quality": "high"}
+
+
+# ---------------------------------------------------------------------------
+# ConfigManager — _flatten_lsp_gates
+# ---------------------------------------------------------------------------
+
 
 def test_flatten_lsp_gates():
     """lsp_quality_gates.run values are promoted to top-level keys."""
@@ -182,6 +216,7 @@ def test_flatten_lsp_gates():
     assert result["development_mode"] == "hybrid"
     assert "lsp_quality_gates" not in result
 
+
 def test_flatten_lsp_gates_no_override():
     """Existing top-level keys are NOT overridden by lsp_quality_gates values."""
     data = {
@@ -195,17 +230,25 @@ def test_flatten_lsp_gates_no_override():
     result = ConfigManager._flatten_lsp_gates(data)
     assert result["max_errors"] == 10
 
+
 def test_flatten_lsp_gates_absent():
     """When lsp_quality_gates is absent, data is returned unchanged."""
     data = {"development_mode": "tdd", "coverage_threshold": 90.0}
     result = ConfigManager._flatten_lsp_gates(data)
     assert result == {"development_mode": "tdd", "coverage_threshold": 90.0}
 
+
+# ---------------------------------------------------------------------------
+# ConfigManager — _load_yaml edge cases
+# ---------------------------------------------------------------------------
+
+
 def test_load_yaml_missing_file(tmp_path):
     """Missing YAML file returns empty dict without error."""
     mgr = ConfigManager(project_root=str(tmp_path))
     result = mgr._load_yaml(str(tmp_path / "nonexistent.yaml"))
     assert result == {}
+
 
 def test_load_yaml_invalid_file(tmp_path):
     """Corrupt YAML returns empty dict (no crash)."""
@@ -214,3 +257,29 @@ def test_load_yaml_invalid_file(tmp_path):
     mgr = ConfigManager(project_root=str(tmp_path))
     result = mgr._load_yaml(str(bad_yaml))
     assert result == {}
+
+
+def test_load_yaml_empty_file(tmp_path):
+    """Empty YAML file returns empty dict."""
+    empty_yaml = tmp_path / "empty.yaml"
+    empty_yaml.write_text("", encoding="utf-8")
+    mgr = ConfigManager(project_root=str(tmp_path))
+    result = mgr._load_yaml(str(empty_yaml))
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# ConfigManager — get_config
+# ---------------------------------------------------------------------------
+
+
+def test_get_config_returns_current_state(tmp_path):
+    """get_config returns the config object reflecting the latest load."""
+    mgr = ConfigManager(project_root=str(tmp_path))
+    cfg_before = mgr.get_config()
+    assert cfg_before.quality.coverage_threshold == 80.0
+
+    # After loading (even with no files), still returns default config
+    mgr.load_config()
+    cfg_after = mgr.get_config()
+    assert cfg_after.quality.coverage_threshold == 80.0
