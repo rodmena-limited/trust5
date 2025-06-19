@@ -156,3 +156,28 @@ def test_unwrap_flat():
     data = {"coverage_threshold": 95.0, "max_errors": 1}
     result = ConfigManager._unwrap(data, "quality")
     assert result == {"coverage_threshold": 95.0, "max_errors": 1}
+
+def test_unwrap_non_dict_value():
+    """_unwrap returns original dict when the key exists but value is not a dict."""
+    data = {"quality": "high"}
+    result = ConfigManager._unwrap(data, "quality")
+    assert result == {"quality": "high"}
+
+def test_flatten_lsp_gates():
+    """lsp_quality_gates.run values are promoted to top-level keys."""
+    data = {
+        "development_mode": "hybrid",
+        "lsp_quality_gates": {
+            "run": {
+                "max_errors": 3,
+                "max_type_errors": 2,
+                "max_lint_errors": 1,
+            }
+        },
+    }
+    result = ConfigManager._flatten_lsp_gates(data)
+    assert result["max_errors"] == 3
+    assert result["max_type_errors"] == 2
+    assert result["max_lint_errors"] == 1
+    assert result["development_mode"] == "hybrid"
+    assert "lsp_quality_gates" not in result
