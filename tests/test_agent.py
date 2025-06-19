@@ -229,3 +229,112 @@ def test_trim_history_no_trim_when_under_limit(_emit, _emit_block):
     agent.run("hello")
     # After one exchange: 1 user message + 1 assistant message = 2 messages.
     assert len(agent.history) == 2
+
+def test_trim_history(_emit, _emit_block):
+    """When history exceeds MAX_HISTORY_MESSAGES, it is trimmed from the front."""
+    # Build a scenario with many tool calls to inflate history beyond the limit.
+    # Each turn adds: 1 assistant message + 1 tool result = 2 messages.
+    # Plus the initial user message = 1.
+    # We need > MAX_HISTORY_MESSAGES (60). With 35 turns of tool calls, we get
+    # 1 (user) + 35 * (1 assistant + 1 tool) = 71 messages.
+    num_tool_turns = 35
+    tool_responses = [
+        _resp(content="", tool_calls=[_tool_call("Read", {"file_path": "f.txt"}, call_id=f"tc-{i}")])
+        for i in range(num_tool_turns)
+    ]
+    # Final response with no tool calls.
+    tool_responses.append(_resp(content="all done"))
+
+    llm = make_mock_llm(tool_responses)
+    # Use allowed_tools=["Read"] so idle detection (which tracks write-tool
+    # usage) is bypassed — this test exercises trimming, not idle detection.
+    agent = _make_agent(llm, allowed_tools=["Read"])
+
+    with patch.object(agent.tools, "read_file", return_value="data"):
+        result = agent.run("process many files", max_turns=num_tool_turns + 1)
+
+    assert result == "all done"
+    # Trimming happens after tool-call turns. The final turn (no tool calls)
+    # adds 1 assistant message without triggering trim, so we allow +1 slack.
+    assert len(agent.history) <= MAX_HISTORY_MESSAGES + 1
+    # Without any trimming, history would be 1 (user) + 35*2 (assistant+tool) + 1 (final) = 72.
+    # Verify trimming actually reduced the count.
+    untrimmed_count = 1 + num_tool_turns * 2 + 1
+    assert len(agent.history) < untrimmed_count
+
+def test_tool_call_id_propagated(_emit, _emit_block):
+    """The tool_call_id from the LLM response is included in the tool result message."""
+    responses = [
+        _resp(content="", tool_calls=[_tool_call("Read", {"file_path": "a.txt"}, call_id="call-42")]),
+        _resp(content="done"),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm)
+
+    with patch.object(agent.tools, "read_file", return_value="content"):
+        agent.run("read")
+
+    second_call_messages = llm.chat.call_args_list[1][0][0]
+    tool_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["tool_call_id"] == "call-42"
+
+def test_multiple_tool_calls_in_single_turn(_emit, _emit_block):
+    """Multiple tool_calls in a single LLM response are all dispatched."""
+    responses = [
+        _resp(
+            content="",
+            tool_calls=[
+                _tool_call("Read", {"file_path": "a.txt"}, call_id="tc-a"),
+                _tool_call("Read", {"file_path": "b.txt"}, call_id="tc-b"),
+            ],
+        ),
+        _resp(content="Read both files."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm)
+
+    with patch.object(agent.tools, "read_file", return_value="data") as mock_read:
+        result = agent.run("read two files")
+
+    assert result == "Read both files."
+    assert mock_read.call_count == 2
+    mock_read.assert_any_call("a.txt", offset=None, limit=None)
+    mock_read.assert_any_call("b.txt", offset=None, limit=None)
+
+def test_ask_user_non_interactive_auto_answers(_emit, _emit_block):
+    """In non_interactive mode, AskUserQuestion returns the first option automatically."""
+    responses = [
+        _resp(
+            content="", tool_calls=[_tool_call("AskUserQuestion", {"question": "Continue?", "options": ["yes", "no"]})]
+        ),
+        _resp(content="User said yes."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm, non_interactive=True)
+    result = agent.run("ask the user")
+
+    assert result == "User said yes."
+    # The tool result should be "yes" (auto-answered).
+    second_call_messages = llm.chat.call_args_list[1][0][0]
+    tool_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert tool_msgs[0]["content"] == "yes"
+
+def test_summarize_args_bash(_emit, _emit_block):
+    """_summarize_args for Bash includes the command."""
+    agent = _make_agent(make_mock_llm([]))
+    summary = agent._summarize_args("Bash", {"command": "ls -la"})
+    assert "ls -la" in summary
+
+def test_summarize_args_glob(_emit, _emit_block):
+    """_summarize_args for Glob includes the pattern."""
+    agent = _make_agent(make_mock_llm([]))
+    summary = agent._summarize_args("Glob", {"pattern": "**/*.py"})
+    assert "**/*.py" in summary
+
+def test_summarize_args_unknown_tool(_emit, _emit_block):
+    """_summarize_args for unknown tools lists first 3 keys."""
+    agent = _make_agent(make_mock_llm([]))
+    summary = agent._summarize_args("SomeTool", {"alpha": 1, "beta": 2})
+    assert "alpha=..." in summary
+    assert "beta=..." in summary
