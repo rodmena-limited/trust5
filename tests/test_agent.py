@@ -124,3 +124,108 @@ def test_agent_llm_error_returns_last_content(_emit, _emit_block):
         result = agent.run("do something")
 
     assert result == "turn 1 answer"
+
+def test_agent_llm_error_raises_when_no_content(_emit, _emit_block):
+    """If LLMError occurs on turn 1 with no prior content, the error is re-raised."""
+    llm = make_mock_llm([LLMError("auth failed", error_class="permanent")])
+    agent = _make_agent(llm)
+
+    with pytest.raises(LLMError, match="auth failed"):
+        agent.run("hello")
+
+def test_handle_malformed_json_args(_emit, _emit_block):
+    """Malformed JSON arguments return an error string to the LLM (not empty dict)."""
+    bad_tc = _tool_call("Read", "not valid json {{{")
+    # Turn 1: tool call with bad JSON. Turn 2: LLM acknowledges.
+    responses = [
+        _resp(content="", tool_calls=[bad_tc]),
+        _resp(content="I see there was an error."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm)
+    result = agent.run("read something")
+
+    assert result == "I see there was an error."
+    # The second chat call should have received the error message as a tool result.
+    second_call_messages = llm.chat.call_args_list[1][0][0]
+    tool_result_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert len(tool_result_msgs) == 1
+    assert "Invalid JSON arguments" in tool_result_msgs[0]["content"]
+
+def test_unknown_tool_falls_through_to_mcp(_emit, _emit_block):
+    """An unknown tool name triggers MCP fallback when MCP clients are present."""
+    mock_mcp = MagicMock()
+    mock_mcp.list_tools.return_value = []
+    mock_mcp.call_tool.return_value = "mcp result data"
+
+    responses = [
+        _resp(content="", tool_calls=[_tool_call("CustomMcpTool", {"key": "val"})]),
+        _resp(content="Got the MCP result."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm, mcp_clients=[mock_mcp])
+    result = agent.run("use custom tool")
+
+    assert result == "Got the MCP result."
+    mock_mcp.call_tool.assert_called_once_with("CustomMcpTool", {"key": "val"})
+
+def test_unknown_tool_no_mcp_returns_error(_emit, _emit_block):
+    """An unknown tool with no MCP clients returns 'Unknown tool' error string."""
+    responses = [
+        _resp(content="", tool_calls=[_tool_call("NonExistent", {"a": 1})]),
+        _resp(content="Tool not found."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm)
+    result = agent.run("call nonexistent")
+
+    assert result == "Tool not found."
+    # Check the tool result message sent back to LLM.
+    second_call_messages = llm.chat.call_args_list[1][0][0]
+    tool_result_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert any("Unknown tool" in m["content"] for m in tool_result_msgs)
+
+def test_tool_error_returns_error_string(_emit, _emit_block):
+    """An OSError in a tool handler returns an error string, not a crash."""
+    responses = [
+        _resp(content="", tool_calls=[_tool_call("Read", {"file_path": "/no/such/file"})]),
+        _resp(content="File not found, noted."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm)
+
+    with patch.object(agent.tools, "read_file", side_effect=OSError("No such file")):
+        result = agent.run("read missing file")
+
+    assert result == "File not found, noted."
+    # Verify the error was returned as a tool result, not raised.
+    second_call_messages = llm.chat.call_args_list[1][0][0]
+    tool_result_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert len(tool_result_msgs) == 1
+    assert "Tool Read error" in tool_result_msgs[0]["content"]
+    assert "No such file" in tool_result_msgs[0]["content"]
+
+def test_tool_valueerror_returns_error_string(_emit, _emit_block):
+    """A ValueError in a tool handler is caught and returned as an error string."""
+    responses = [
+        _resp(content="", tool_calls=[_tool_call("Write", {"file_path": "f.txt", "content": "x"})]),
+        _resp(content="Write failed, understood."),
+    ]
+    llm = make_mock_llm(responses)
+    agent = _make_agent(llm)
+
+    with patch.object(agent.tools, "write_file", side_effect=ValueError("bad value")):
+        result = agent.run("write file")
+
+    assert result == "Write failed, understood."
+    second_call_messages = llm.chat.call_args_list[1][0][0]
+    tool_result_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert any("Tool Write error" in m["content"] for m in tool_result_msgs)
+
+def test_trim_history_no_trim_when_under_limit(_emit, _emit_block):
+    """History is not trimmed when message count is at or below MAX_HISTORY_MESSAGES."""
+    llm = make_mock_llm([_resp(content="done")])
+    agent = _make_agent(llm)
+    agent.run("hello")
+    # After one exchange: 1 user message + 1 assistant message = 2 messages.
+    assert len(agent.history) == 2
