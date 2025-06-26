@@ -47,3 +47,36 @@ def test_event_to_json() -> None:
     assert d["m"] == "running tests"
     # Empty label should be omitted
     assert "l" not in d
+
+def test_event_to_json_with_label() -> None:
+    """When label is set, it appears in the JSON output under key 'l'."""
+    evt = Event(kind=K_BLOCK_START, code="BSTART", ts="11:00:00", msg="", label="build")
+    d = json.loads(evt.to_json())
+
+    assert d["k"] == K_BLOCK_START
+    assert d["l"] == "build"
+    # Empty msg should be omitted
+    assert "m" not in d
+
+def test_event_to_json_minimal() -> None:
+    """An event with no msg or label produces only k/c/t keys."""
+    evt = Event(kind=K_MSG, code="X", ts="00:00:00")
+    d = json.loads(evt.to_json())
+    assert set(d.keys()) == {"k", "c", "t"}
+
+def test_event_frozen() -> None:
+    """Event is a frozen dataclass; attribute assignment should raise."""
+    evt = _make_event()
+    with pytest.raises(AttributeError):
+        evt.msg = "modified"  # type: ignore[misc]
+
+def test_publish_to_subscriber(bus: EventBus) -> None:
+    """A subscriber receives events published after subscription."""
+    q = bus.subscribe()
+    evt = _make_event("test message")
+    bus.publish(evt)
+
+    received = q.get(timeout=1.0)
+    assert received is not None
+    assert received.msg == "test message"
+    assert received.kind == K_MSG
