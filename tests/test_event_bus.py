@@ -80,3 +80,66 @@ def test_publish_to_subscriber(bus: EventBus) -> None:
     assert received is not None
     assert received.msg == "test message"
     assert received.kind == K_MSG
+
+def test_publish_multiple_subscribers(bus: EventBus) -> None:
+    """All subscribers receive the same published event."""
+    q1 = bus.subscribe()
+    q2 = bus.subscribe()
+
+    evt = _make_event("broadcast")
+    bus.publish(evt)
+
+    assert q1.get(timeout=1.0) == evt
+    assert q2.get(timeout=1.0) == evt
+
+def test_publish_drops_when_queue_full(bus: EventBus) -> None:
+    """When a listener queue is full, publish drops the event silently (no block)."""
+    q = bus.subscribe()
+
+    # Fill the queue to capacity
+    for i in range(_MAX_QUEUE):
+        bus.publish(_make_event(f"fill-{i}"))
+
+    assert q.full()
+
+    # Publishing one more should not block or raise
+    start = time.monotonic()
+    bus.publish(_make_event("overflow"))
+    elapsed = time.monotonic() - start
+
+    # Should return almost instantly (non-blocking)
+    assert elapsed < 1.0
+
+    # Queue size should still be _MAX_QUEUE (overflow was dropped)
+    assert q.qsize() == _MAX_QUEUE
+
+def test_replay_buffer_on_subscribe(bus: EventBus) -> None:
+    """A late subscriber receives replayed events from the buffer."""
+    events = [_make_event(f"event-{i}") for i in range(5)]
+    for evt in events:
+        bus.publish(evt)
+
+    # Subscribe after publishing — should get replay of all 5
+    q = bus.subscribe()
+    replayed = []
+    while not q.empty():
+        replayed.append(q.get_nowait())
+
+    assert len(replayed) == 5
+    assert [e.msg for e in replayed] == [f"event-{i}" for i in range(5)]
+
+def test_replay_buffer_maxlen(bus: EventBus) -> None:
+    """Replay buffer is capped at _REPLAY_BUFFER_SIZE; oldest events are evicted."""
+    total = _REPLAY_BUFFER_SIZE + 50
+    for i in range(total):
+        bus.publish(_make_event(f"evt-{i}"))
+
+    q = bus.subscribe()
+    replayed = []
+    while not q.empty():
+        replayed.append(q.get_nowait())
+
+    assert len(replayed) == _REPLAY_BUFFER_SIZE
+    # The earliest retained event should be evt-50 (first 50 evicted)
+    assert replayed[0].msg == f"evt-{total - _REPLAY_BUFFER_SIZE}"
+    assert replayed[-1].msg == f"evt-{total - 1}"
