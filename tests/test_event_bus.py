@@ -143,3 +143,74 @@ def test_replay_buffer_maxlen(bus: EventBus) -> None:
     # The earliest retained event should be evt-50 (first 50 evicted)
     assert replayed[0].msg == f"evt-{total - _REPLAY_BUFFER_SIZE}"
     assert replayed[-1].msg == f"evt-{total - 1}"
+
+def test_replay_does_not_duplicate_for_existing_subscriber(bus: EventBus) -> None:
+    """An existing subscriber does not get replayed events again; only new ones."""
+    q = bus.subscribe()
+
+    bus.publish(_make_event("first"))
+    bus.publish(_make_event("second"))
+
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+
+    # Should only have the two events, no replay duplication
+    assert len(items) == 2
+
+def test_subscribe_unsubscribe(bus: EventBus) -> None:
+    """After unsubscribing, the queue no longer receives new events."""
+    q = bus.subscribe()
+    bus.unsubscribe(q)
+
+    bus.publish(_make_event("after-unsub"))
+
+    # Queue should remain empty (no new events delivered)
+    assert q.empty()
+
+def test_unsubscribe_nonexistent_queue(bus: EventBus) -> None:
+    """Unsubscribing a queue that was never subscribed does not raise."""
+    orphan: queue.Queue[Event | None] = queue.Queue()
+    # Should not raise
+    bus.unsubscribe(orphan)
+
+def test_thread_safety_publish_subscribe(bus: EventBus) -> None:
+    """Concurrent publish and subscribe/unsubscribe from multiple threads does not crash."""
+    errors: list[Exception] = []
+    barrier = threading.Barrier(4)
+
+    def publisher(count: int) -> None:
+        try:
+            barrier.wait(timeout=5.0)
+            for i in range(count):
+                bus.publish(_make_event(f"thread-{threading.current_thread().name}-{i}"))
+        except Exception as exc:
+            errors.append(exc)
+
+    def subscriber_cycle(count: int) -> None:
+        try:
+            barrier.wait(timeout=5.0)
+            for _ in range(count):
+                q = bus.subscribe()
+                # Briefly read some events
+                try:
+                    q.get(timeout=0.01)
+                except queue.Empty:
+                    pass
+                bus.unsubscribe(q)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=publisher, args=(200,), name="pub-1"),
+        threading.Thread(target=publisher, args=(200,), name="pub-2"),
+        threading.Thread(target=subscriber_cycle, args=(50,), name="sub-1"),
+        threading.Thread(target=subscriber_cycle, args=(50,), name="sub-2"),
+    ]
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+
+    assert errors == [], f"Thread safety errors: {errors}"
