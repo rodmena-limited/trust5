@@ -214,3 +214,42 @@ def test_thread_safety_publish_subscribe(bus: EventBus) -> None:
         t.join(timeout=10.0)
 
     assert errors == [], f"Thread safety errors: {errors}"
+
+def test_stop_sends_sentinel(bus: EventBus) -> None:
+    """stop() sends None sentinel to all listener queues."""
+    bus.start()
+    q = bus.subscribe()
+
+    bus.stop()
+
+    sentinel = q.get(timeout=2.0)
+    assert sentinel is None
+
+def test_stop_idempotent(bus: EventBus) -> None:
+    """Calling stop() twice does not raise or cause errors."""
+    bus.start()
+    bus.stop()
+    # Second stop should be a no-op
+    bus.stop()
+
+def test_stop_without_start(bus: EventBus) -> None:
+    """Calling stop() on a bus that was never started does not raise."""
+    bus.stop()
+
+def test_start_stop_lifecycle(short_tmp: Path) -> None:
+    """start() creates the socket, sets _running; stop() tears it down."""
+    sock = str(short_tmp / "lc.sock")
+    b = EventBus(sock)
+
+    assert not b._running
+
+    b.start()
+    assert b._running
+    assert os.path.exists(sock)
+    assert b._server_sock is not None
+
+    b.stop()
+    assert not b._running
+    assert b._server_sock is None
+    # Socket file should be cleaned up
+    assert not os.path.exists(sock)
