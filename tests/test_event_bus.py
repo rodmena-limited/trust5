@@ -253,3 +253,74 @@ def test_start_stop_lifecycle(short_tmp: Path) -> None:
     assert b._server_sock is None
     # Socket file should be cleaned up
     assert not os.path.exists(sock)
+
+def test_start_idempotent(short_tmp: Path) -> None:
+    """Calling start() twice does not create duplicate accept threads."""
+    sock = str(short_tmp / "idem.sock")
+    b = EventBus(sock)
+    try:
+        b.start()
+        thread1 = b._accept_thread
+        b.start()
+        thread2 = b._accept_thread
+        assert thread1 is thread2
+    finally:
+        b.stop()
+
+def test_start_cleans_stale_socket(short_tmp: Path) -> None:
+    """start() removes a stale socket file before binding."""
+    sock = str(short_tmp / "stale.sock")
+
+    # Create a stale file at the socket path
+    with open(sock, "w") as f:
+        f.write("stale")
+    assert os.path.exists(sock)
+
+    b = EventBus(sock)
+    try:
+        b.start()
+        # Should have replaced the stale file with a real socket
+        assert os.path.exists(sock)
+        assert b._running
+    finally:
+        b.stop()
+
+def test_socket_permissions(short_tmp: Path) -> None:
+    """After start(), the socket file has 0o600 permissions (owner-only)."""
+    sock = str(short_tmp / "perm.sock")
+    b = EventBus(sock)
+    try:
+        b.start()
+        mode = os.stat(sock).st_mode
+        # Check that the permission bits are exactly 0o600
+        assert stat.S_IMODE(mode) == 0o600
+    finally:
+        b.stop()
+
+def test_uds_client_receives_events(short_tmp: Path) -> None:
+    """A UDS client connected to the socket receives published events as JSON lines."""
+    sock_path = str(short_tmp / "uds.sock")
+    b = EventBus(sock_path)
+    b.start()
+    try:
+        # Connect a client
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(sock_path)
+        client.settimeout(2.0)
+
+        # Give the accept loop time to register the client
+        time.sleep(0.1)
+
+        evt = Event(kind=K_MSG, code="TEST", ts="09:00:00", msg="uds-test")
+        b.publish(evt)
+
+        data = client.recv(4096).decode("utf-8")
+        client.close()
+
+        lines = [line for line in data.strip().split("\n") if line]
+        assert len(lines) >= 1
+        d = json.loads(lines[0])
+        assert d["k"] == K_MSG
+        assert d["m"] == "uds-test"
+    finally:
+        b.stop()
