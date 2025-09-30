@@ -47,3 +47,36 @@ def test_check_stage_failures_detects_quality_failure():
     assert has_quality is True
     assert len(details) >= 1
     assert "quality" in details[0].lower()
+
+def test_check_stage_failures_detects_terminal_test_failure():
+    """TERMINAL stage with 'tests still failing' in error is detected."""
+    stages = [
+        make_stage(
+            "validate",
+            WorkflowStatus.TERMINAL,
+            outputs={},
+            error="Tests still failing after 3 reimplementations x 5 repairs",
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.TERMINAL, stages)
+
+    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+
+    assert has_test is True
+    assert len(details) >= 1
+
+def test_check_stage_failures_detects_reimplementation_error():
+    """TERMINAL stage with 'reimplementation' in error is detected."""
+    stages = [
+        make_stage(
+            "validate",
+            WorkflowStatus.TERMINAL,
+            outputs={},
+            error="All reimplementation attempts exhausted",
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.TERMINAL, stages)
+
+    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+
+    assert has_test is True
