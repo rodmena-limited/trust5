@@ -1,6 +1,11 @@
+"""Tests for trust5/tasks/quality_task.py — QualityTask class."""
+
 from __future__ import annotations
+
 from unittest.mock import MagicMock, patch
+
 from stabilize.models.status import WorkflowStatus
+
 from trust5.core.config import QualityConfig
 from trust5.core.quality import (
     PrincipleResult,
@@ -10,11 +15,13 @@ from trust5.core.quality import (
 )
 from trust5.tasks.quality_task import QualityTask
 
+
 def make_stage(context: dict | None = None) -> MagicMock:
     stage = MagicMock()
     stage.context = context or {}
     stage.context.setdefault("project_root", "/tmp/fake-project")
     return stage
+
 
 def _make_report(score: float = 0.90, passed: bool = True, errors: int = 0, warnings: int = 0) -> QualityReport:
     """Create a QualityReport with reasonable defaults."""
@@ -34,6 +41,7 @@ def _make_report(score: float = 0.90, passed: bool = True, errors: int = 0, warn
         timestamp="2026-02-15T12:00:00+00:00",
     )
 
+
 def _make_failing_report(score: float = 0.50) -> QualityReport:
     """Create a failing QualityReport."""
     return QualityReport(
@@ -52,6 +60,15 @@ def _make_failing_report(score: float = 0.50) -> QualityReport:
         timestamp="2026-02-15T12:00:00+00:00",
     )
 
+
+@patch("trust5.tasks.quality_task.emit")
+@patch("trust5.tasks.quality_task.emit_block")
+@patch("trust5.tasks.quality_task.TrustGate")
+@patch("trust5.tasks.quality_task.ConfigManager")
+@patch("trust5.tasks.quality_task.validate_phase", return_value=[])
+@patch("trust5.tasks.quality_task.validate_methodology", return_value=[])
+@patch("trust5.tasks.quality_task.build_snapshot_from_report")
+@patch("trust5.tasks.quality_task.meets_quality_gate", return_value=True)
 def test_quality_passes(
     mock_meets,
     mock_snapshot,
@@ -91,6 +108,17 @@ def test_quality_passes(
     assert result.outputs["quality_passed"] is True
     assert result.outputs["quality_score"] == 0.90
 
+
+@patch("trust5.tasks.quality_task.emit")
+@patch("trust5.tasks.quality_task.emit_block")
+@patch("trust5.tasks.quality_task.TrustGate")
+@patch("trust5.tasks.quality_task.ConfigManager")
+@patch("trust5.tasks.quality_task.validate_phase", return_value=[])
+@patch("trust5.tasks.quality_task.validate_methodology", return_value=[])
+@patch("trust5.tasks.quality_task.build_snapshot_from_report")
+@patch("trust5.tasks.quality_task.meets_quality_gate", return_value=False)
+@patch("trust5.tasks.quality_task.is_stagnant", return_value=False)
+@patch("trust5.tasks.quality_task.propagate_context")
 def test_quality_fails_jumps_to_repair(
     mock_propagate,
     mock_stagnant,
@@ -134,6 +162,15 @@ def test_quality_fails_jumps_to_repair(
     assert result.context["_repair_requested"] is True
     assert result.context["quality_attempt"] == 1
 
+
+@patch("trust5.tasks.quality_task.emit")
+@patch("trust5.tasks.quality_task.emit_block")
+@patch("trust5.tasks.quality_task.TrustGate")
+@patch("trust5.tasks.quality_task.ConfigManager")
+@patch("trust5.tasks.quality_task.validate_phase", return_value=[])
+@patch("trust5.tasks.quality_task.validate_methodology", return_value=[])
+@patch("trust5.tasks.quality_task.build_snapshot_from_report")
+@patch("trust5.tasks.quality_task.meets_quality_gate", return_value=False)
 def test_quality_max_attempts_accepts_partial(
     mock_meets,
     mock_snapshot,
@@ -173,6 +210,16 @@ def test_quality_max_attempts_accepts_partial(
     assert result.outputs["quality_passed"] is False
     assert result.outputs["quality_attempts_used"] == 3
 
+
+@patch("trust5.tasks.quality_task.emit")
+@patch("trust5.tasks.quality_task.emit_block")
+@patch("trust5.tasks.quality_task.TrustGate")
+@patch("trust5.tasks.quality_task.ConfigManager")
+@patch("trust5.tasks.quality_task.validate_phase", return_value=[])
+@patch("trust5.tasks.quality_task.validate_methodology", return_value=[])
+@patch("trust5.tasks.quality_task.build_snapshot_from_report")
+@patch("trust5.tasks.quality_task.meets_quality_gate", return_value=False)
+@patch("trust5.tasks.quality_task.is_stagnant", return_value=True)
 def test_quality_stagnant_accepts_partial(
     mock_stagnant,
     mock_meets,
@@ -218,6 +265,15 @@ def test_quality_stagnant_accepts_partial(
     assert result.status == WorkflowStatus.FAILED_CONTINUE
     assert result.outputs["quality_passed"] is False
 
+
+@patch("trust5.tasks.quality_task.emit")
+@patch("trust5.tasks.quality_task.emit_block")
+@patch("trust5.tasks.quality_task.TrustGate")
+@patch("trust5.tasks.quality_task.ConfigManager")
+@patch("trust5.tasks.quality_task.validate_phase", return_value=[])
+@patch("trust5.tasks.quality_task.validate_methodology", return_value=[])
+@patch("trust5.tasks.quality_task.build_snapshot_from_report")
+@patch("trust5.tasks.quality_task.meets_quality_gate", return_value=True)
 def test_quality_threshold_clamped_low(
     mock_meets,
     mock_snapshot,
@@ -261,6 +317,15 @@ def test_quality_threshold_clamped_low(
     # After execute, the config's pass_score_threshold should be clamped to 0.1
     assert config.pass_score_threshold == 0.1
 
+
+@patch("trust5.tasks.quality_task.emit")
+@patch("trust5.tasks.quality_task.emit_block")
+@patch("trust5.tasks.quality_task.TrustGate")
+@patch("trust5.tasks.quality_task.ConfigManager")
+@patch("trust5.tasks.quality_task.validate_phase", return_value=[])
+@patch("trust5.tasks.quality_task.validate_methodology", return_value=[])
+@patch("trust5.tasks.quality_task.build_snapshot_from_report")
+@patch("trust5.tasks.quality_task.meets_quality_gate", return_value=True)
 def test_quality_threshold_clamped_high(
     mock_meets,
     mock_snapshot,
@@ -303,6 +368,10 @@ def test_quality_threshold_clamped_high(
 
     assert config.pass_score_threshold == 1.0
 
+
+@patch("trust5.tasks.quality_task.emit")
+@patch("trust5.tasks.quality_task.emit_block")
+@patch("trust5.tasks.quality_task.ConfigManager")
 def test_quality_skipped_when_disabled(mock_config_mgr, mock_emit_block, mock_emit):
     """When enforce_quality=False, quality gate is skipped."""
     config = QualityConfig(enforce_quality=False)
@@ -319,6 +388,15 @@ def test_quality_skipped_when_disabled(mock_config_mgr, mock_emit_block, mock_em
     assert result.outputs["quality_passed"] is True
     assert result.outputs["quality_skipped"] is True
 
+
+@patch("trust5.tasks.quality_task.emit")
+@patch("trust5.tasks.quality_task.emit_block")
+@patch("trust5.tasks.quality_task.TrustGate")
+@patch("trust5.tasks.quality_task.ConfigManager")
+@patch("trust5.tasks.quality_task.validate_phase", return_value=[])
+@patch("trust5.tasks.quality_task.validate_methodology", return_value=[])
+@patch("trust5.tasks.quality_task.build_snapshot_from_report")
+@patch("trust5.tasks.quality_task.meets_quality_gate", return_value=False)
 def test_quality_tests_partial_accepts(
     mock_meets,
     mock_snapshot,
@@ -366,24 +444,34 @@ def test_quality_tests_partial_accepts(
     # Crucially, it should NOT jump to repair (no REDIRECT)
     assert result.target_stage_ref_id is None
 
+
+# ── _filter_excluded_findings / _path_in_skip_dirs tests ──────────────
+
+
 def test_path_in_skip_dirs_venv():
     assert _path_in_skip_dirs("./venv/lib/python3.14/site-packages/PIL/foo.py", {"venv", ".venv"})
+
 
 def test_path_in_skip_dirs_dot_venv():
     assert _path_in_skip_dirs(".venv/lib/coverage/bar.py", {"venv", ".venv"})
 
+
 def test_path_in_skip_dirs_nested():
     assert _path_in_skip_dirs("some/deep/venv/lib/foo.py", {"venv"})
+
 
 def test_path_in_skip_dirs_not_matched():
     assert not _path_in_skip_dirs("src/main.py", {"venv", ".venv"})
 
+
 def test_path_in_skip_dirs_empty_path():
     assert not _path_in_skip_dirs("", {"venv"})
+
 
 def test_path_in_skip_dirs_filename_not_dir():
     """A file *named* venv (not a directory component) should not be skipped."""
     assert not _path_in_skip_dirs("venv", {"venv"})
+
 
 def test_filter_removes_venv_findings():
     findings = [
@@ -394,3 +482,22 @@ def test_filter_removes_venv_findings():
     filtered = _filter_excluded_findings(findings, (".venv", "venv", "__pycache__"))
     assert len(filtered) == 1
     assert filtered[0]["file"] == "./src/main.py"
+
+
+def test_filter_empty_skip_dirs():
+    findings = [{"sev": "HIGH", "text": "x", "file": "./venv/foo.py", "line": "1"}]
+    filtered = _filter_excluded_findings(findings, ())
+    assert len(filtered) == 1
+
+
+def test_filter_no_file_field():
+    """Findings without a file path (e.g., CVE from text parsing) are kept."""
+    findings = [{"sev": "HIGH", "text": "CVE-2024-1234", "file": "", "line": "0"}]
+    filtered = _filter_excluded_findings(findings, ("venv",))
+    assert len(filtered) == 1
+
+
+def test_filter_pycache():
+    findings = [{"sev": "LOW", "text": "issue", "file": "./__pycache__/mod.cpython-311.pyc", "line": "0"}]
+    filtered = _filter_excluded_findings(findings, ("__pycache__", "venv"))
+    assert len(filtered) == 0
