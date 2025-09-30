@@ -106,3 +106,40 @@ def test_check_stage_failures_detects_tests_partial():
     has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
 
     assert has_test is True
+
+def test_finalize_status_overrides_to_terminal(mock_emit):
+    """SUCCEEDED workflow with test failures is overridden to TERMINAL."""
+    stages = [
+        make_stage("setup", WorkflowStatus.SUCCEEDED),
+        make_stage("validate", WorkflowStatus.FAILED_CONTINUE, {"tests_passed": False, "repair_attempts_used": 5}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    assert workflow.status == WorkflowStatus.TERMINAL
+    store.update_status.assert_called_once_with(workflow)
+    # Verify WFAL messages were emitted
+    emit_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    assert len(emit_calls) >= 1
+
+def test_finalize_status_keeps_succeeded_with_quality_warning(mock_emit):
+    """Quality fail only keeps SUCCEEDED but emits warnings."""
+    stages = [
+        make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
+        make_stage("quality", WorkflowStatus.FAILED_CONTINUE, {"quality_passed": False, "quality_score": 0.60}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    # Status should remain SUCCEEDED (not overridden)
+    assert workflow.status == WorkflowStatus.SUCCEEDED
+    store.update_status.assert_not_called()
+    # Should emit WSUC (success with warnings) and SWRN
+    wsuc_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WSUC"]
+    swrn_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "SWRN"]
+    assert len(wsuc_calls) >= 1
+    assert len(swrn_calls) >= 1
