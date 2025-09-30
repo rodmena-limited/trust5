@@ -143,3 +143,32 @@ def test_finalize_status_keeps_succeeded_with_quality_warning(mock_emit):
     swrn_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "SWRN"]
     assert len(wsuc_calls) >= 1
     assert len(swrn_calls) >= 1
+
+def test_finalize_status_clean_succeeded(mock_emit):
+    """Clean SUCCEEDED workflow emits simple success."""
+    stages = [
+        make_stage("setup", WorkflowStatus.SUCCEEDED),
+        make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
+        make_stage("quality", WorkflowStatus.SUCCEEDED, {"quality_passed": True}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    assert workflow.status == WorkflowStatus.SUCCEEDED
+    store.update_status.assert_not_called()
+    wsuc_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WSUC"]
+    assert len(wsuc_calls) == 1
+    assert "SUCCEEDED" in wsuc_calls[0][0][1]
+
+def test_finalize_status_failed_continue_workflow(mock_emit):
+    """FAILED_CONTINUE workflow status emits WFAL."""
+    workflow = make_workflow(WorkflowStatus.FAILED_CONTINUE, [])
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    assert len(wfal_calls) >= 1
+    assert "incomplete" in wfal_calls[0][0][1].lower()
