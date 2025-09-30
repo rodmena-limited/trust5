@@ -1,8 +1,14 @@
+"""Tests for trust5/core/runner.py — check_stage_failures(), finalize_status(), wait_for_completion()."""
+
 from __future__ import annotations
+
 import threading
 from unittest.mock import MagicMock, patch
+
 from stabilize.models.status import WorkflowStatus
+
 from trust5.core.runner import check_stage_failures, finalize_status, wait_for_completion
+
 
 def make_stage(ref_id: str, status: WorkflowStatus, outputs: dict | None = None, error: str | None = None):
     stage = MagicMock()
@@ -12,11 +18,16 @@ def make_stage(ref_id: str, status: WorkflowStatus, outputs: dict | None = None,
     stage.error = error or ""
     return stage
 
+
 def make_workflow(status: WorkflowStatus, stages: list) -> MagicMock:
     workflow = MagicMock()
     workflow.status = status
     workflow.stages = stages
     return workflow
+
+
+# ── check_stage_failures tests ──
+
 
 def test_check_stage_failures_detects_test_failure():
     """FAILED_CONTINUE stage with tests_passed=False is detected."""
@@ -33,6 +44,7 @@ def test_check_stage_failures_detects_test_failure():
     assert len(details) >= 1
     assert "tests failing" in details[0].lower()
 
+
 def test_check_stage_failures_detects_quality_failure():
     """FAILED_CONTINUE stage with quality_passed=False is detected."""
     stages = [
@@ -47,6 +59,7 @@ def test_check_stage_failures_detects_quality_failure():
     assert has_quality is True
     assert len(details) >= 1
     assert "quality" in details[0].lower()
+
 
 def test_check_stage_failures_detects_terminal_test_failure():
     """TERMINAL stage with 'tests still failing' in error is detected."""
@@ -65,6 +78,7 @@ def test_check_stage_failures_detects_terminal_test_failure():
     assert has_test is True
     assert len(details) >= 1
 
+
 def test_check_stage_failures_detects_reimplementation_error():
     """TERMINAL stage with 'reimplementation' in error is detected."""
     stages = [
@@ -81,6 +95,7 @@ def test_check_stage_failures_detects_reimplementation_error():
 
     assert has_test is True
 
+
 def test_check_stage_failures_ignores_succeeded():
     """SUCCEEDED stages are skipped entirely."""
     stages = [
@@ -96,6 +111,7 @@ def test_check_stage_failures_ignores_succeeded():
     assert has_quality is False
     assert len(details) == 0
 
+
 def test_check_stage_failures_detects_tests_partial():
     """FAILED_CONTINUE stage with tests_partial=True is a test failure."""
     stages = [
@@ -107,6 +123,11 @@ def test_check_stage_failures_detects_tests_partial():
 
     assert has_test is True
 
+
+# ── finalize_status tests ──
+
+
+@patch("trust5.core.runner.emit")
 def test_finalize_status_overrides_to_terminal(mock_emit):
     """SUCCEEDED workflow with test failures is overridden to TERMINAL."""
     stages = [
@@ -124,6 +145,8 @@ def test_finalize_status_overrides_to_terminal(mock_emit):
     emit_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
     assert len(emit_calls) >= 1
 
+
+@patch("trust5.core.runner.emit")
 def test_finalize_status_keeps_succeeded_with_quality_warning(mock_emit):
     """Quality fail only keeps SUCCEEDED but emits warnings."""
     stages = [
@@ -144,6 +167,8 @@ def test_finalize_status_keeps_succeeded_with_quality_warning(mock_emit):
     assert len(wsuc_calls) >= 1
     assert len(swrn_calls) >= 1
 
+
+@patch("trust5.core.runner.emit")
 def test_finalize_status_clean_succeeded(mock_emit):
     """Clean SUCCEEDED workflow emits simple success."""
     stages = [
@@ -162,6 +187,8 @@ def test_finalize_status_clean_succeeded(mock_emit):
     assert len(wsuc_calls) == 1
     assert "SUCCEEDED" in wsuc_calls[0][0][1]
 
+
+@patch("trust5.core.runner.emit")
 def test_finalize_status_failed_continue_workflow(mock_emit):
     """FAILED_CONTINUE workflow status emits WFAL."""
     workflow = make_workflow(WorkflowStatus.FAILED_CONTINUE, [])
@@ -173,6 +200,8 @@ def test_finalize_status_failed_continue_workflow(mock_emit):
     assert len(wfal_calls) >= 1
     assert "incomplete" in wfal_calls[0][0][1].lower()
 
+
+@patch("trust5.core.runner.emit")
 def test_finalize_status_terminal_workflow(mock_emit):
     """TERMINAL workflow status emits WFAL with status name."""
     workflow = make_workflow(WorkflowStatus.TERMINAL, [])
@@ -184,6 +213,8 @@ def test_finalize_status_terminal_workflow(mock_emit):
     assert len(wfal_calls) >= 1
     assert "TERMINAL" in wfal_calls[0][0][1]
 
+
+@patch("trust5.core.runner.emit")
 def test_finalize_status_both_test_and_quality_failures(mock_emit):
     """Both test and quality failures: TERMINAL override with combined message."""
     stages = [
@@ -202,3 +233,47 @@ def test_finalize_status_both_test_and_quality_failures(mock_emit):
     failure_msg = wfal_calls[0][0][1]
     assert "tests failing" in failure_msg
     assert "quality" in failure_msg
+
+
+# ── wait_for_completion tests ──
+
+
+def test_wait_for_completion_returns_on_terminal():
+    """wait_for_completion returns immediately when workflow is already terminal."""
+    store = MagicMock()
+    wf = MagicMock()
+    wf.status = WorkflowStatus.SUCCEEDED
+    store.retrieve.return_value = wf
+
+    result = wait_for_completion(store, "wf-123", timeout=10.0)
+
+    assert result.status == WorkflowStatus.SUCCEEDED
+
+
+def test_wait_for_completion_returns_early_on_stop_event():
+    """When stop_event is set, wait_for_completion exits immediately."""
+    store = MagicMock()
+    wf = MagicMock()
+    wf.status = WorkflowStatus.RUNNING
+    store.retrieve.return_value = wf
+
+    stop = threading.Event()
+    stop.set()  # Already signaled — should return on first iteration
+
+    result = wait_for_completion(store, "wf-123", timeout=600.0, stop_event=stop)
+
+    assert result.status == WorkflowStatus.RUNNING
+    # Should have called retrieve exactly once (early exit, no polling)
+    assert store.retrieve.call_count == 1
+
+
+def test_wait_for_completion_ignores_none_stop_event():
+    """When stop_event=None (default), the function polls normally."""
+    store = MagicMock()
+    wf = MagicMock()
+    wf.status = WorkflowStatus.SUCCEEDED
+    store.retrieve.return_value = wf
+
+    result = wait_for_completion(store, "wf-123", timeout=10.0, stop_event=None)
+
+    assert result.status == WorkflowStatus.SUCCEEDED
