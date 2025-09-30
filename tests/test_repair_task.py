@@ -47,3 +47,81 @@ def test_repair_skips_when_tests_passed(mock_emit):
     assert result.status == WorkflowStatus.REDIRECT
     assert result.target_stage_ref_id == "validate"
     assert result.outputs["repair_skipped"] is True
+
+def test_repair_skips_when_tests_partial(mock_emit):
+    """When tests_partial=True and failure_type is not quality, skip repair
+    but jump back to validate so its stage.completed event fires."""
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "partial output",
+            "tests_passed": False,
+            "tests_partial": True,
+            "failure_type": "test",
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "validate"
+    assert result.outputs["repair_skipped"] is True
+
+def test_repair_jumps_to_validate_after_fix(
+    mock_propagate, mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit
+):
+    """Normal repair: agent runs, then jump_to('validate')."""
+    mock_agent = MagicMock()
+    mock_agent.run.return_value = "Fixed the bug in main.py"
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "FAILED test_foo - AssertionError",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+            "repair_attempt": 1,
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "validate"
+    assert result.outputs["repair_result"] is not None
+    mock_agent.run.assert_called_once()
+    mock_propagate.assert_called()
+
+def test_repair_jumps_to_quality_for_quality_failure(
+    mock_propagate, mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit
+):
+    """When failure_type='quality', jump to 'quality' instead of 'validate'."""
+    mock_agent = MagicMock()
+    mock_agent.run.return_value = "Fixed lint issues"
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "TRUST 5 QUALITY GATE FAILED",
+            "tests_passed": True,  # quality failures can have passing tests
+            "tests_partial": False,
+            "failure_type": "quality",
+            "repair_attempt": 1,
+            "quality_attempt": 1,
+            "max_quality_attempts": 3,
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "quality"
+    assert result.context.get("quality_attempt") == 1
