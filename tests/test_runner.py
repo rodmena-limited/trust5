@@ -172,3 +172,33 @@ def test_finalize_status_failed_continue_workflow(mock_emit):
     wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
     assert len(wfal_calls) >= 1
     assert "incomplete" in wfal_calls[0][0][1].lower()
+
+def test_finalize_status_terminal_workflow(mock_emit):
+    """TERMINAL workflow status emits WFAL with status name."""
+    workflow = make_workflow(WorkflowStatus.TERMINAL, [])
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    assert len(wfal_calls) >= 1
+    assert "TERMINAL" in wfal_calls[0][0][1]
+
+def test_finalize_status_both_test_and_quality_failures(mock_emit):
+    """Both test and quality failures: TERMINAL override with combined message."""
+    stages = [
+        make_stage("validate", WorkflowStatus.FAILED_CONTINUE, {"tests_passed": False}),
+        make_stage("quality", WorkflowStatus.FAILED_CONTINUE, {"quality_passed": False, "quality_score": 0.4}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    assert workflow.status == WorkflowStatus.TERMINAL
+    store.update_status.assert_called_once()
+    # Both problems should be mentioned
+    wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    failure_msg = wfal_calls[0][0][1]
+    assert "tests failing" in failure_msg
+    assert "quality" in failure_msg
