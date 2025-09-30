@@ -368,3 +368,12 @@ def test_quality_tests_partial_accepts(
 
 def test_path_in_skip_dirs_venv():
     assert _path_in_skip_dirs("./venv/lib/python3.14/site-packages/PIL/foo.py", {"venv", ".venv"})
+
+def test_path_in_skip_dirs_dot_venv():
+    assert _path_in_skip_dirs(".venv/lib/coverage/bar.py", {"venv", ".venv"})
+
+def test_path_in_skip_dirs_nested():
+    assert _path_in_skip_dirs("some/deep/venv/lib/foo.py", {"venv"})
+
+def test_path_in_skip_dirs_not_matched():
+    assert not _path_in_skip_dirs("src/main.py", {"venv", ".venv"})
