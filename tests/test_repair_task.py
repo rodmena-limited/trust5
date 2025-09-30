@@ -195,3 +195,70 @@ def test_repair_llm_permanent_error_terminal(mock_prompt, mock_summarize, mock_l
     assert result.status == WorkflowStatus.TERMINAL
     error_msg = result.context.get("error", "")
     assert "permanently" in error_msg.lower() or "failed" in error_msg.lower()
+
+def test_repair_skips_when_no_test_output(mock_emit):
+    """When test_output is empty and failure_type is not quality, skip repair
+    but jump back to validate so downstream stages are unblocked."""
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "validate"
+    assert result.outputs["repair_skipped"] is True
+
+def test_repair_requested_survives_reread(mock_emit):
+    """_repair_requested uses get() not pop(), so it survives re-reads (crash recovery)."""
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": False,
+            "test_output": "FAILED",
+            "tests_passed": False,
+        }
+    )
+
+    # Execute once — should skip (not requested)
+    task.execute(stage)
+    # Key should still be in context (get, not pop)
+    assert "_repair_requested" in stage.context
+
+def test_repair_agent_gets_denied_test_files(
+    mock_propagate, mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit
+):
+    """Repair agent is constructed with test_files as denied_files."""
+    mock_agent = MagicMock()
+    mock_agent.run.return_value = "done"
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "FAILED",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+            "repair_attempt": 1,
+            "test_files": ["tests/test_core.py", "tests/test_utils.py"],
+            "owned_files": ["src/core.py"],
+        }
+    )
+
+    task.execute(stage)
+
+    # Verify Agent was created with denied_files=test_files
+    call_kwargs = mock_agent_cls.call_args[1]
+    assert call_kwargs["denied_files"] == ["tests/test_core.py", "tests/test_utils.py"]
+    assert call_kwargs["deny_test_patterns"] is True
+    assert call_kwargs["owned_files"] == ["src/core.py"]
