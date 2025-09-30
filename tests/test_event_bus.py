@@ -1,4 +1,7 @@
+"""Tests for trust5.core.event_bus — EventBus, Event, and helper functions."""
+
 from __future__ import annotations
+
 import json
 import os
 import queue
@@ -9,7 +12,9 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
 import pytest
+
 from trust5.core.event_bus import (
     _MAX_QUEUE,
     _REPLAY_BUFFER_SIZE,
@@ -19,12 +24,22 @@ from trust5.core.event_bus import (
     EventBus,
 )
 
+# ── Fixtures ────────────────────────────────────────────────────────────
+
+# macOS AF_UNIX paths are limited to 104 bytes.  pytest's tmp_path often
+# exceeds that, so we create a short temp dir under /tmp for any test that
+# calls start() (which binds a UDS).
+
+
+@pytest.fixture
 def short_tmp() -> Path:
     """Yield a short temp directory suitable for UDS paths, cleaned up after the test."""
     d = tempfile.mkdtemp(prefix="t5_", dir="/tmp")
     yield Path(d)
     shutil.rmtree(d, ignore_errors=True)
 
+
+@pytest.fixture
 def bus(short_tmp: Path) -> EventBus:
     """Create an EventBus backed by a short temp socket path; stop it after the test."""
     sock = str(short_tmp / "t.sock")
@@ -32,8 +47,13 @@ def bus(short_tmp: Path) -> EventBus:
     yield b  # type: ignore[misc]
     b.stop()
 
+
 def _make_event(msg: str = "hello", kind: str = K_MSG, code: str = "TEST") -> Event:
     return Event(kind=kind, code=code, ts="12:00:00", msg=msg)
+
+
+# ── Event dataclass ─────────────────────────────────────────────────────
+
 
 def test_event_to_json() -> None:
     """Event.to_json() produces correct compact JSON with the expected keys."""
@@ -48,6 +68,7 @@ def test_event_to_json() -> None:
     # Empty label should be omitted
     assert "l" not in d
 
+
 def test_event_to_json_with_label() -> None:
     """When label is set, it appears in the JSON output under key 'l'."""
     evt = Event(kind=K_BLOCK_START, code="BSTART", ts="11:00:00", msg="", label="build")
@@ -58,17 +79,23 @@ def test_event_to_json_with_label() -> None:
     # Empty msg should be omitted
     assert "m" not in d
 
+
 def test_event_to_json_minimal() -> None:
     """An event with no msg or label produces only k/c/t keys."""
     evt = Event(kind=K_MSG, code="X", ts="00:00:00")
     d = json.loads(evt.to_json())
     assert set(d.keys()) == {"k", "c", "t"}
 
+
 def test_event_frozen() -> None:
     """Event is a frozen dataclass; attribute assignment should raise."""
     evt = _make_event()
     with pytest.raises(AttributeError):
         evt.msg = "modified"  # type: ignore[misc]
+
+
+# ── publish / subscribe ─────────────────────────────────────────────────
+
 
 def test_publish_to_subscriber(bus: EventBus) -> None:
     """A subscriber receives events published after subscription."""
@@ -81,6 +108,7 @@ def test_publish_to_subscriber(bus: EventBus) -> None:
     assert received.msg == "test message"
     assert received.kind == K_MSG
 
+
 def test_publish_multiple_subscribers(bus: EventBus) -> None:
     """All subscribers receive the same published event."""
     q1 = bus.subscribe()
@@ -91,6 +119,7 @@ def test_publish_multiple_subscribers(bus: EventBus) -> None:
 
     assert q1.get(timeout=1.0) == evt
     assert q2.get(timeout=1.0) == evt
+
 
 def test_publish_drops_when_queue_full(bus: EventBus) -> None:
     """When a listener queue is full, publish drops the event silently (no block)."""
@@ -113,6 +142,10 @@ def test_publish_drops_when_queue_full(bus: EventBus) -> None:
     # Queue size should still be _MAX_QUEUE (overflow was dropped)
     assert q.qsize() == _MAX_QUEUE
 
+
+# ── Replay buffer ────────────────────────────────────────────────────────
+
+
 def test_replay_buffer_on_subscribe(bus: EventBus) -> None:
     """A late subscriber receives replayed events from the buffer."""
     events = [_make_event(f"event-{i}") for i in range(5)]
@@ -127,6 +160,7 @@ def test_replay_buffer_on_subscribe(bus: EventBus) -> None:
 
     assert len(replayed) == 5
     assert [e.msg for e in replayed] == [f"event-{i}" for i in range(5)]
+
 
 def test_replay_buffer_maxlen(bus: EventBus) -> None:
     """Replay buffer is capped at _REPLAY_BUFFER_SIZE; oldest events are evicted."""
@@ -144,6 +178,7 @@ def test_replay_buffer_maxlen(bus: EventBus) -> None:
     assert replayed[0].msg == f"evt-{total - _REPLAY_BUFFER_SIZE}"
     assert replayed[-1].msg == f"evt-{total - 1}"
 
+
 def test_replay_does_not_duplicate_for_existing_subscriber(bus: EventBus) -> None:
     """An existing subscriber does not get replayed events again; only new ones."""
     q = bus.subscribe()
@@ -158,6 +193,10 @@ def test_replay_does_not_duplicate_for_existing_subscriber(bus: EventBus) -> Non
     # Should only have the two events, no replay duplication
     assert len(items) == 2
 
+
+# ── subscribe / unsubscribe ─────────────────────────────────────────────
+
+
 def test_subscribe_unsubscribe(bus: EventBus) -> None:
     """After unsubscribing, the queue no longer receives new events."""
     q = bus.subscribe()
@@ -168,11 +207,16 @@ def test_subscribe_unsubscribe(bus: EventBus) -> None:
     # Queue should remain empty (no new events delivered)
     assert q.empty()
 
+
 def test_unsubscribe_nonexistent_queue(bus: EventBus) -> None:
     """Unsubscribing a queue that was never subscribed does not raise."""
     orphan: queue.Queue[Event | None] = queue.Queue()
     # Should not raise
     bus.unsubscribe(orphan)
+
+
+# ── Thread safety ────────────────────────────────────────────────────────
+
 
 def test_thread_safety_publish_subscribe(bus: EventBus) -> None:
     """Concurrent publish and subscribe/unsubscribe from multiple threads does not crash."""
@@ -215,6 +259,10 @@ def test_thread_safety_publish_subscribe(bus: EventBus) -> None:
 
     assert errors == [], f"Thread safety errors: {errors}"
 
+
+# ── stop() behaviour ────────────────────────────────────────────────────
+
+
 def test_stop_sends_sentinel(bus: EventBus) -> None:
     """stop() sends None sentinel to all listener queues."""
     bus.start()
@@ -225,6 +273,7 @@ def test_stop_sends_sentinel(bus: EventBus) -> None:
     sentinel = q.get(timeout=2.0)
     assert sentinel is None
 
+
 def test_stop_idempotent(bus: EventBus) -> None:
     """Calling stop() twice does not raise or cause errors."""
     bus.start()
@@ -232,9 +281,14 @@ def test_stop_idempotent(bus: EventBus) -> None:
     # Second stop should be a no-op
     bus.stop()
 
+
 def test_stop_without_start(bus: EventBus) -> None:
     """Calling stop() on a bus that was never started does not raise."""
     bus.stop()
+
+
+# ── start / stop lifecycle ───────────────────────────────────────────────
+
 
 def test_start_stop_lifecycle(short_tmp: Path) -> None:
     """start() creates the socket, sets _running; stop() tears it down."""
@@ -254,6 +308,7 @@ def test_start_stop_lifecycle(short_tmp: Path) -> None:
     # Socket file should be cleaned up
     assert not os.path.exists(sock)
 
+
 def test_start_idempotent(short_tmp: Path) -> None:
     """Calling start() twice does not create duplicate accept threads."""
     sock = str(short_tmp / "idem.sock")
@@ -266,6 +321,7 @@ def test_start_idempotent(short_tmp: Path) -> None:
         assert thread1 is thread2
     finally:
         b.stop()
+
 
 def test_start_cleans_stale_socket(short_tmp: Path) -> None:
     """start() removes a stale socket file before binding."""
@@ -285,6 +341,10 @@ def test_start_cleans_stale_socket(short_tmp: Path) -> None:
     finally:
         b.stop()
 
+
+# ── Socket permissions ───────────────────────────────────────────────────
+
+
 def test_socket_permissions(short_tmp: Path) -> None:
     """After start(), the socket file has 0o600 permissions (owner-only)."""
     sock = str(short_tmp / "perm.sock")
@@ -296,6 +356,10 @@ def test_socket_permissions(short_tmp: Path) -> None:
         assert stat.S_IMODE(mode) == 0o600
     finally:
         b.stop()
+
+
+# ── UDS client integration ──────────────────────────────────────────────
+
 
 def test_uds_client_receives_events(short_tmp: Path) -> None:
     """A UDS client connected to the socket receives published events as JSON lines."""
@@ -324,3 +388,69 @@ def test_uds_client_receives_events(short_tmp: Path) -> None:
         assert d["m"] == "uds-test"
     finally:
         b.stop()
+
+
+def test_dead_uds_client_removed(short_tmp: Path) -> None:
+    """When a UDS client disconnects, publish removes it from the client list."""
+    sock_path = str(short_tmp / "dead.sock")
+    b = EventBus(sock_path)
+    b.start()
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(sock_path)
+
+        # Let the accept loop register the client
+        time.sleep(0.1)
+        assert len(b._clients) == 1
+
+        # Disconnect the client
+        client.close()
+
+        # Publish should detect the dead client and remove it
+        b.publish(_make_event("after-disconnect"))
+
+        # Client list should be cleaned up
+        assert len(b._clients) == 0
+    finally:
+        b.stop()
+
+
+# ── Module-level helpers ─────────────────────────────────────────────────
+
+
+def test_init_bus_and_shutdown(short_tmp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """init_bus() creates a singleton, get_bus() returns it, shutdown_bus() clears it."""
+    import trust5.core.event_bus as eb_mod
+
+    # Reset the module-level singleton to avoid interference
+    monkeypatch.setattr(eb_mod, "_bus", None)
+
+    project_root = str(short_tmp)
+    bus_instance = eb_mod.init_bus(project_root)
+
+    assert bus_instance is not None
+    assert eb_mod.get_bus() is bus_instance
+
+    # Calling init_bus again returns the same instance
+    same = eb_mod.init_bus(project_root)
+    assert same is bus_instance
+
+    eb_mod.shutdown_bus()
+    assert eb_mod.get_bus() is None
+
+
+def test_get_bus_returns_none_before_init(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_bus() returns None when init_bus has not been called."""
+    import trust5.core.event_bus as eb_mod
+
+    monkeypatch.setattr(eb_mod, "_bus", None)
+    assert eb_mod.get_bus() is None
+
+
+def test_shutdown_bus_noop_when_not_initialized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """shutdown_bus() is a no-op when no bus has been initialized."""
+    import trust5.core.event_bus as eb_mod
+
+    monkeypatch.setattr(eb_mod, "_bus", None)
+    # Should not raise
+    eb_mod.shutdown_bus()
