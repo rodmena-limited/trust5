@@ -125,3 +125,73 @@ def test_repair_jumps_to_quality_for_quality_failure(
     assert result.status == WorkflowStatus.REDIRECT
     assert result.target_stage_ref_id == "quality"
     assert result.context.get("quality_attempt") == 1
+
+def test_repair_no_chdir(mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit):
+    """Verify os.chdir is NOT called during repair execution."""
+    mock_agent = MagicMock()
+    mock_agent.run.return_value = "done"
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "FAILED",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+            "repair_attempt": 1,
+        }
+    )
+
+    with patch("os.chdir") as mock_chdir:
+        task.execute(stage)
+        mock_chdir.assert_not_called()
+
+def test_repair_llm_transient_error_raises(mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit):
+    """LLMError with retryable=True raises TransientError for Stabilize retry."""
+    mock_agent = MagicMock()
+    mock_agent.run.side_effect = LLMError("rate limited", retryable=True, retry_after=60, error_class="rate_limit")
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "FAILED",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+            "repair_attempt": 1,
+        }
+    )
+
+    with pytest.raises(TransientError):
+        task.execute(stage)
+
+def test_repair_llm_permanent_error_terminal(mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit):
+    """LLMError with retryable=False returns TaskResult.terminal()."""
+    mock_agent = MagicMock()
+    mock_agent.run.side_effect = LLMError("invalid API key", retryable=False, error_class="permanent")
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "FAILED",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+            "repair_attempt": 1,
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.TERMINAL
+    error_msg = result.context.get("error", "")
+    assert "permanently" in error_msg.lower() or "failed" in error_msg.lower()
