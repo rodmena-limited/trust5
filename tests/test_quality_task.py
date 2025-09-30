@@ -377,3 +377,20 @@ def test_path_in_skip_dirs_nested():
 
 def test_path_in_skip_dirs_not_matched():
     assert not _path_in_skip_dirs("src/main.py", {"venv", ".venv"})
+
+def test_path_in_skip_dirs_empty_path():
+    assert not _path_in_skip_dirs("", {"venv"})
+
+def test_path_in_skip_dirs_filename_not_dir():
+    """A file *named* venv (not a directory component) should not be skipped."""
+    assert not _path_in_skip_dirs("venv", {"venv"})
+
+def test_filter_removes_venv_findings():
+    findings = [
+        {"sev": "HIGH", "text": "Use of assert", "file": "./venv/lib/PIL/foo.py", "line": "81"},
+        {"sev": "LOW", "text": "Unused variable", "file": "./src/main.py", "line": "10"},
+        {"sev": "MEDIUM", "text": "Pickle used", "file": "venv/lib/coverage/bar.py", "line": "5"},
+    ]
+    filtered = _filter_excluded_findings(findings, (".venv", "venv", "__pycache__"))
+    assert len(filtered) == 1
+    assert filtered[0]["file"] == "./src/main.py"
