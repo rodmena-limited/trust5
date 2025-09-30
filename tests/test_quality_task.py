@@ -172,3 +172,133 @@ def test_quality_max_attempts_accepts_partial(
     assert result.status == WorkflowStatus.FAILED_CONTINUE
     assert result.outputs["quality_passed"] is False
     assert result.outputs["quality_attempts_used"] == 3
+
+def test_quality_stagnant_accepts_partial(
+    mock_stagnant,
+    mock_meets,
+    mock_snapshot,
+    mock_methodology,
+    mock_phase,
+    mock_config_mgr,
+    mock_gate_cls,
+    mock_emit_block,
+    mock_emit,
+):
+    """When quality is stagnant (no improvement), accept partial."""
+    report = _make_failing_report(score=0.55)
+    mock_gate = MagicMock()
+    mock_gate.validate.return_value = report
+    mock_gate_cls.return_value = mock_gate
+
+    config = QualityConfig(enforce_quality=True, pass_score_threshold=0.70)
+    mock_mgr_inst = MagicMock()
+    mock_mgr_inst.load_config.return_value = MagicMock(quality=config)
+    mock_config_mgr.return_value = mock_mgr_inst
+
+    mock_snapshot.return_value = MagicMock(
+        errors=2,
+        warnings=1,
+        type_errors=0,
+        lint_errors=0,
+        security_warnings=0,
+        timestamp="",
+    )
+
+    task = QualityTask()
+    stage = make_stage(
+        {
+            "quality_attempt": 1,
+            "max_quality_attempts": 3,
+            "prev_quality_report": {"score": 0.55, "total_errors": 3, "total_warnings": 1},
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.FAILED_CONTINUE
+    assert result.outputs["quality_passed"] is False
+
+def test_quality_threshold_clamped_low(
+    mock_meets,
+    mock_snapshot,
+    mock_methodology,
+    mock_phase,
+    mock_config_mgr,
+    mock_gate_cls,
+    mock_emit_block,
+    mock_emit,
+):
+    """plan_config threshold of 0.0 is clamped to 0.1."""
+    report = _make_report(score=0.90)
+    mock_gate = MagicMock()
+    mock_gate.validate.return_value = report
+    mock_gate_cls.return_value = mock_gate
+
+    config = QualityConfig(enforce_quality=True, pass_score_threshold=0.70)
+    mock_mgr_inst = MagicMock()
+    mock_mgr_inst.load_config.return_value = MagicMock(quality=config)
+    mock_config_mgr.return_value = mock_mgr_inst
+
+    mock_snapshot.return_value = MagicMock(
+        errors=0,
+        warnings=0,
+        type_errors=0,
+        lint_errors=0,
+        security_warnings=0,
+        timestamp="",
+    )
+
+    task = QualityTask()
+    stage = make_stage(
+        {
+            "quality_attempt": 0,
+            "plan_config": {"quality_threshold": 0.0},
+        }
+    )
+
+    task.execute(stage)
+
+    # After execute, the config's pass_score_threshold should be clamped to 0.1
+    assert config.pass_score_threshold == 0.1
+
+def test_quality_threshold_clamped_high(
+    mock_meets,
+    mock_snapshot,
+    mock_methodology,
+    mock_phase,
+    mock_config_mgr,
+    mock_gate_cls,
+    mock_emit_block,
+    mock_emit,
+):
+    """plan_config threshold of 2.0 is clamped to 1.0."""
+    report = _make_report(score=0.90)
+    mock_gate = MagicMock()
+    mock_gate.validate.return_value = report
+    mock_gate_cls.return_value = mock_gate
+
+    config = QualityConfig(enforce_quality=True, pass_score_threshold=0.70)
+    mock_mgr_inst = MagicMock()
+    mock_mgr_inst.load_config.return_value = MagicMock(quality=config)
+    mock_config_mgr.return_value = mock_mgr_inst
+
+    mock_snapshot.return_value = MagicMock(
+        errors=0,
+        warnings=0,
+        type_errors=0,
+        lint_errors=0,
+        security_warnings=0,
+        timestamp="",
+    )
+
+    task = QualityTask()
+    stage = make_stage(
+        {
+            "quality_attempt": 0,
+            "plan_config": {"quality_threshold": 2.0},
+        }
+    )
+
+    task.execute(stage)
+
+    assert config.pass_score_threshold == 1.0
