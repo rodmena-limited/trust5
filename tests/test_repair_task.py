@@ -360,3 +360,107 @@ def test_repair_always_jumps_to_validate_even_when_tests_pass(
         "Returning success from repair leaves downstream stages deadlocked."
     )
     assert result.target_stage_ref_id == "validate_core"
+
+def test_repair_redetects_unknown_language(mock_get_profile, mock_detect, mock_emit):
+    """When language_profile says 'unknown' but detect_language returns python,
+    repair should update the profile before proceeding.
+
+    Uses _repair_requested=False to exercise re-detection without needing
+    to mock the full agent/LLM chain — re-detection runs before the skip check.
+    """
+    python_dict = {
+        "language": "python",
+        "extensions": (".py",),
+        "test_command": ("python3", "-m", "pytest", "-v", "--tb=long", "-x"),
+        "test_verify_command": 'Bash("pytest -v --tb=short")',
+        "syntax_check_command": ("python3", "-m", "compileall", "-q", "."),
+        "skip_dirs": ("__pycache__", ".venv", "venv"),
+    }
+    mock_profile_obj = MagicMock()
+    mock_profile_obj.to_dict.return_value = python_dict
+    mock_get_profile.return_value = mock_profile_obj
+
+    task = RepairTask()
+    unknown_profile = {
+        "language": "unknown",
+        "extensions": (),
+        "test_command": ("echo", "no default test command"),
+        "test_verify_command": "echo 'no tests'",
+        "syntax_check_command": None,
+        "skip_dirs": (".moai", ".trust5", ".git"),
+    }
+    stage = make_stage(
+        {
+            # _repair_requested=False triggers early skip, but re-detection runs first
+            "_repair_requested": False,
+            "language_profile": unknown_profile,
+        }
+    )
+
+    task.execute(stage)
+
+    # Language profile should have been updated in context before skip
+    assert stage.context["language_profile"]["language"] == "python"
+    mock_detect.assert_called_once()
+    mock_get_profile.assert_called_with("python")
+
+def test_repair_keeps_unknown_when_detection_fails(mock_detect, mock_emit):
+    """When detect_language also returns 'unknown', profile stays unchanged."""
+    task = RepairTask()
+    unknown_profile = {
+        "language": "unknown",
+        "extensions": (),
+        "test_command": ("echo", "no default test command"),
+        "test_verify_command": "echo 'no tests'",
+        "syntax_check_command": None,
+        "skip_dirs": (".moai", ".trust5", ".git"),
+    }
+    stage = make_stage(
+        {
+            "_repair_requested": False,  # Will skip early
+            "language_profile": unknown_profile,
+        }
+    )
+
+    task.execute(stage)
+
+    # Profile should remain unknown since detect_language also returned unknown
+    assert stage.context["language_profile"]["language"] == "unknown"
+
+def test_repair_preflight_uses_plan_config_test_command(mock_run, mock_emit):
+    """Pre-flight check should use plan_config.test_command when available,
+    matching ValidateTask behavior. This prevents false positives when the
+    profile test_command is 'echo no default'."""
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_run.return_value = mock_result
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "FAILED",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+            "repair_attempt": 1,
+            "plan_config": {"test_command": ". venv/bin/activate && pytest"},
+            "language_profile": {
+                "language": "python",
+                "extensions": (".py",),
+                "test_command": ("python3", "-m", "pytest", "-v", "--tb=long", "-x"),
+                "test_verify_command": 'Bash("pytest -v --tb=short")',
+                "syntax_check_command": None,
+                "skip_dirs": (),
+            },
+        }
+    )
+
+    # Pre-flight will run and find tests pass → jump to validate
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "validate"
+    # Verify subprocess was called with sh -c wrapping (plan_config has &&)
+    call_args = mock_run.call_args
+    assert call_args[0][0] == ["sh", "-c", ". venv/bin/activate && pytest"]
