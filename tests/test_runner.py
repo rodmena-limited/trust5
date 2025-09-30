@@ -80,3 +80,29 @@ def test_check_stage_failures_detects_reimplementation_error():
     has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
 
     assert has_test is True
+
+def test_check_stage_failures_ignores_succeeded():
+    """SUCCEEDED stages are skipped entirely."""
+    stages = [
+        make_stage("setup", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
+        make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
+        make_stage("quality", WorkflowStatus.SUCCEEDED, {"quality_passed": True, "quality_score": 0.92}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+
+    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+
+    assert has_test is False
+    assert has_quality is False
+    assert len(details) == 0
+
+def test_check_stage_failures_detects_tests_partial():
+    """FAILED_CONTINUE stage with tests_partial=True is a test failure."""
+    stages = [
+        make_stage("validate", WorkflowStatus.FAILED_CONTINUE, {"tests_partial": True}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+
+    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+
+    assert has_test is True
