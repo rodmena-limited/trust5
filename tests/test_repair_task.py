@@ -262,3 +262,101 @@ def test_repair_agent_gets_denied_test_files(
     assert call_kwargs["denied_files"] == ["tests/test_core.py", "tests/test_utils.py"]
     assert call_kwargs["deny_test_patterns"] is True
     assert call_kwargs["owned_files"] == ["src/core.py"]
+
+def test_quality_repair_propagates_test_files(
+    mock_propagate, mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit
+):
+    """Quality->repair path propagates test_files via propagate_context."""
+    mock_agent = MagicMock()
+    mock_agent.run.return_value = "Fixed lint"
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "QUALITY GATE FAILED",
+            "tests_passed": True,  # quality failures can have passing tests
+            "tests_partial": False,
+            "failure_type": "quality",
+            "repair_attempt": 1,
+            "test_files": ["test_core.py"],
+            "quality_attempt": 1,
+            "max_quality_attempts": 3,
+        }
+    )
+
+    task.execute(stage)
+
+    # propagate_context should carry test_files to the quality jump context
+    mock_propagate.assert_called()
+    source_ctx = mock_propagate.call_args[0][0]
+    assert source_ctx.get("test_files") == ["test_core.py"]
+
+def test_repair_rstr_includes_module_name(
+    mock_propagate, mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit
+):
+    """RSTR emission includes [module_name] when present."""
+    mock_agent = MagicMock()
+    mock_agent.run.return_value = "done"
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "FAILED",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+            "repair_attempt": 1,
+            "module_name": "api",
+        }
+    )
+
+    task.execute(stage)
+
+    from trust5.core.message import M
+
+    rstr_calls = [call for call in mock_emit.call_args_list if call.args and call.args[0] == M.RSTR]
+    assert rstr_calls, "Expected RSTR emission"
+    assert "[api]" in rstr_calls[0].args[1]
+
+def test_repair_always_jumps_to_validate_even_when_tests_pass(
+    mock_propagate, mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit
+):
+    """Repair must ALWAYS jump_to validate — never return success directly.
+
+    Returning TaskResult.success() from repair leaves the source stage
+    (validate) without a normal CompleteStageHandler completion, which
+    means downstream stages in a parallel pipeline are never unblocked.
+    Regression test for: 60-minute hang in parallel pipeline.
+    """
+    mock_agent = MagicMock()
+    mock_agent.run.return_value = "Fixed the code, all tests pass now"
+    mock_agent_cls.return_value = mock_agent
+    mock_llm_cls.for_tier.return_value = MagicMock()
+
+    task = RepairTask()
+    stage = make_stage(
+        {
+            "_repair_requested": True,
+            "test_output": "FAILED test_merge - AssertionError",
+            "tests_passed": False,
+            "tests_partial": False,
+            "failure_type": "test",
+            "repair_attempt": 1,
+            "jump_validate_ref": "validate_core",
+        }
+    )
+
+    result = task.execute(stage)
+
+    # Must be REDIRECT (jump_to), never SUCCEEDED
+    assert result.status == WorkflowStatus.REDIRECT, (
+        "Repair must jump to validate, not return success. "
+        "Returning success from repair leaves downstream stages deadlocked."
+    )
+    assert result.target_stage_ref_id == "validate_core"
