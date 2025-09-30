@@ -302,3 +302,69 @@ def test_quality_threshold_clamped_high(
     task.execute(stage)
 
     assert config.pass_score_threshold == 1.0
+
+def test_quality_skipped_when_disabled(mock_config_mgr, mock_emit_block, mock_emit):
+    """When enforce_quality=False, quality gate is skipped."""
+    config = QualityConfig(enforce_quality=False)
+    mock_mgr_inst = MagicMock()
+    mock_mgr_inst.load_config.return_value = MagicMock(quality=config)
+    mock_config_mgr.return_value = mock_mgr_inst
+
+    task = QualityTask()
+    stage = make_stage()
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.SUCCEEDED
+    assert result.outputs["quality_passed"] is True
+    assert result.outputs["quality_skipped"] is True
+
+def test_quality_tests_partial_accepts(
+    mock_meets,
+    mock_snapshot,
+    mock_methodology,
+    mock_phase,
+    mock_config_mgr,
+    mock_gate_cls,
+    mock_emit_block,
+    mock_emit,
+):
+    """When tests_partial=True, accept partial result immediately (no repair loop)."""
+    report = _make_failing_report(score=0.50)
+    mock_gate = MagicMock()
+    mock_gate.validate.return_value = report
+    mock_gate_cls.return_value = mock_gate
+
+    config = QualityConfig(enforce_quality=True, pass_score_threshold=0.70)
+    mock_mgr_inst = MagicMock()
+    mock_mgr_inst.load_config.return_value = MagicMock(quality=config)
+    mock_config_mgr.return_value = mock_mgr_inst
+
+    mock_snapshot.return_value = MagicMock(
+        errors=3,
+        warnings=2,
+        type_errors=0,
+        lint_errors=0,
+        security_warnings=0,
+        timestamp="",
+    )
+
+    task = QualityTask()
+    stage = make_stage(
+        {
+            "quality_attempt": 0,
+            "max_quality_attempts": 3,
+            "tests_partial": True,
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.FAILED_CONTINUE
+    assert result.outputs["quality_passed"] is False
+    assert result.outputs.get("tests_partial") is True
+    # Crucially, it should NOT jump to repair (no REDIRECT)
+    assert result.target_stage_ref_id is None
+
+def test_path_in_skip_dirs_venv():
+    assert _path_in_skip_dirs("./venv/lib/python3.14/site-packages/PIL/foo.py", {"venv", ".venv"})
