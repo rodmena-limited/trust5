@@ -1,6 +1,11 @@
+"""Tests for trust5/tasks/validate_task.py — ValidateTask class."""
+
 from __future__ import annotations
+
 from unittest.mock import MagicMock, patch
+
 from stabilize.models.status import WorkflowStatus
+
 from trust5.tasks.validate_task import (
     MAX_REIMPLEMENTATIONS,
     ValidateTask,
@@ -13,6 +18,7 @@ from trust5.tasks.validate_task import (
     _scope_lint_command,
     _strip_nonexistent_files,
 )
+
 _PYTHON_PROFILE = {
     "language": "python",
     "extensions": (".py",),
@@ -23,12 +29,14 @@ _PYTHON_PROFILE = {
     "skip_dirs": ("__pycache__", ".venv", "venv", ".moai", ".trust5"),
 }
 
+
 def make_stage(context: dict | None = None) -> MagicMock:
     stage = MagicMock()
     stage.context = context or {}
     stage.context.setdefault("project_root", "/tmp/fake-project")
     stage.context.setdefault("language_profile", _PYTHON_PROFILE)
     return stage
+
 
 def _subprocess_ok(*args, **kwargs):
     """subprocess.run mock returning success for all commands."""
@@ -42,6 +50,7 @@ def _subprocess_ok(*args, **kwargs):
     else:
         result.stdout = ""
     return result
+
 
 def _subprocess_syntax_fail(*args, **kwargs):
     """subprocess.run mock returning syntax failure on first call, then OK."""
@@ -59,6 +68,7 @@ def _subprocess_syntax_fail(*args, **kwargs):
     result.stdout = "3 passed" if "pytest" in cmd_str else ""
     result.stderr = ""
     return result
+
 
 def _subprocess_test_fail(*args, **kwargs):
     """subprocess.run mock: syntax OK, lint OK, tests fail."""
@@ -83,6 +93,7 @@ def _subprocess_test_fail(*args, **kwargs):
     result.stderr = ""
     return result
 
+
 def _subprocess_lint_fail(*args, **kwargs):
     """subprocess.run mock: syntax OK, lint FAILS."""
     cmd = args[0] if args else kwargs.get("args", [])
@@ -106,6 +117,10 @@ def _subprocess_lint_fail(*args, **kwargs):
     result.stderr = ""
     return result
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
 def test_validate_all_pass(mock_run, mock_emit_block, mock_emit):
     """When syntax and tests both pass, return TaskResult.success with tests_passed=True."""
     task = ValidateTask()
@@ -117,6 +132,10 @@ def test_validate_all_pass(mock_run, mock_emit_block, mock_emit):
     assert result.outputs["tests_passed"] is True
     assert result.outputs["total_tests"] == 3
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_syntax_fail)
 def test_validate_syntax_failure_jumps_to_repair(mock_run, mock_emit_block, mock_emit):
     """When syntax check fails, jump_to('repair') with failure_type='syntax'."""
     task = ValidateTask()
@@ -129,6 +148,10 @@ def test_validate_syntax_failure_jumps_to_repair(mock_run, mock_emit_block, mock
     assert result.context["failure_type"] == "syntax"
     assert result.context["_repair_requested"] is True
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_validate_test_failure_jumps_to_repair(mock_run, mock_emit_block, mock_emit):
     """When tests fail, jump_to('repair') with failure_type='test'."""
     task = ValidateTask()
@@ -141,6 +164,10 @@ def test_validate_test_failure_jumps_to_repair(mock_run, mock_emit_block, mock_e
     assert result.context["failure_type"] == "test"
     assert result.context["tests_passed"] is False
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_validate_max_attempts_reimplements(mock_run, mock_emit_block, mock_emit):
     """At max repair attempts, jump_to('implement') for reimplementation."""
     task = ValidateTask()
@@ -159,6 +186,10 @@ def test_validate_max_attempts_reimplements(mock_run, mock_emit_block, mock_emit
     assert result.target_stage_ref_id == "implement"
     assert result.context["reimplementation_count"] == 1
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_validate_all_reimplementations_exhausted(mock_run, mock_emit_block, mock_emit):
     """When all reimplementation attempts exhausted, return TaskResult.terminal()."""
     task = ValidateTask()
@@ -177,6 +208,13 @@ def test_validate_all_reimplementations_exhausted(mock_run, mock_emit_block, moc
     error_msg = result.context.get("error", "")
     assert "reimplementation" in error_msg.lower() or "failing" in error_msg.lower()
 
+
+# ── Lint checking ──────────────────────────────────────────────────────────
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_lint_fail)
 def test_validate_lint_failure_jumps_to_repair(mock_run, mock_emit_block, mock_emit):
     """When lint check fails, jump_to('repair') with failure_type='lint'."""
     task = ValidateTask()
@@ -190,6 +228,10 @@ def test_validate_lint_failure_jumps_to_repair(mock_run, mock_emit_block, mock_e
     assert result.context["_repair_requested"] is True
     assert "F841" in result.context["test_output"]
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
 def test_validate_lint_pass_proceeds_to_tests(mock_run, mock_emit_block, mock_emit):
     """When lint passes, proceed to test execution."""
     task = ValidateTask()
@@ -201,11 +243,14 @@ def test_validate_lint_pass_proceeds_to_tests(mock_run, mock_emit_block, mock_em
     assert result.status == WorkflowStatus.SUCCEEDED
     assert result.outputs["tests_passed"] is True
 
+
 def test_check_lint_returns_none_when_no_commands():
     """_check_lint returns None when no lint commands are configured."""
     result = ValidateTask._check_lint("/tmp/proj", [])
     assert result is None
 
+
+@patch("trust5.tasks.validate_task.subprocess.run")
 def test_check_lint_returns_errors_on_failure(mock_run):
     """_check_lint returns combined error output when commands fail."""
     mock_run.return_value = MagicMock(
@@ -220,11 +265,15 @@ def test_check_lint_returns_errors_on_failure(mock_run):
     assert "F841" in result
     assert "Lint check failed" in result
 
+
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=FileNotFoundError)
 def test_check_lint_skips_missing_tool(mock_run):
     """_check_lint silently skips commands whose tool is not installed."""
     result = ValidateTask._check_lint("/tmp/proj", [("ruff", "check", ".")])
     assert result is None
 
+
+@patch("trust5.tasks.validate_task.subprocess.run")
 def test_check_lint_returns_none_on_all_pass(mock_run):
     """_check_lint returns None when all lint commands pass."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -237,6 +286,8 @@ def test_check_lint_returns_none_on_all_pass(mock_run):
     assert result is None
     assert mock_run.call_count == 2
 
+
+@patch("trust5.tasks.validate_task.subprocess.run")
 def test_check_lint_combines_multiple_failures(mock_run):
     """_check_lint combines errors from multiple failing commands."""
     mock_run.return_value = MagicMock(
@@ -254,6 +305,8 @@ def test_check_lint_combines_multiple_failures(mock_run):
     assert "ruff" in result
     assert "mypy" in result
 
+
+@patch("trust5.tasks.validate_task.subprocess.run")
 def test_check_lint_skips_module_not_found(mock_run):
     """_check_lint treats 'No module named X' as tool-not-installed, not lint error.
 
@@ -270,6 +323,10 @@ def test_check_lint_skips_module_not_found(mock_run):
     result = ValidateTask._check_lint("/tmp/proj", [("python3", "-m", "ruff", "check", ".")])
     assert result is None  # Should be treated as skipped, not failure
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
 def test_validate_no_lint_commands_skips_lint(mock_run, mock_emit_block, mock_emit):
     """When profile has no lint_check_commands, lint step is skipped."""
     task = ValidateTask()
@@ -288,15 +345,18 @@ def test_validate_no_lint_commands_skips_lint(mock_run, mock_emit_block, mock_em
     # Should still succeed — lint step is just skipped
     assert result.status == WorkflowStatus.SUCCEEDED
 
+
 def test_count_tests_pytest_output():
     """Verify _count_tests parses standard pytest summary output."""
     output = "===== 5 passed, 2 failed in 1.23s ====="
     assert _count_tests(output) == 7
 
+
 def test_count_tests_go_output():
     """Verify _count_tests parses Go test output."""
     output = "ok  \tgithub.com/foo/bar\t0.123s\nok  \tgithub.com/foo/baz\t0.456s"
     assert _count_tests(output) == 2
+
 
 def test_count_tests_jest_output():
     """Verify _count_tests parses Jest output."""
@@ -304,10 +364,16 @@ def test_count_tests_jest_output():
     output = "Tests:  4 passed, 5 total"
     assert _count_tests(output) == 4
 
+
 def test_count_tests_empty_output():
     """Empty output returns 0."""
     assert _count_tests("") == 0
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
+@patch("trust5.tasks.validate_task.propagate_context")
 def test_propagate_context_used(mock_propagate, mock_run, mock_emit_block, mock_emit):
     """Verify propagate_context is called during failure handling (not manual copy).
 
@@ -324,6 +390,10 @@ def test_propagate_context_used(mock_propagate, mock_run, mock_emit_block, mock_
     assert isinstance(call_args[0][0], dict)  # source context
     assert isinstance(call_args[0][1], dict)  # target context
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
 def test_validate_uses_plan_test_command(mock_run, mock_emit_block, mock_emit):
     """When plan_config has a test_command, it is used instead of defaults."""
     task = ValidateTask()
@@ -341,6 +411,10 @@ def test_validate_uses_plan_test_command(mock_run, mock_emit_block, mock_emit):
     found_plan_cmd = any("--cov" in " ".join(str(a) for a in call.args[0]) for call in calls if call.args)
     assert found_plan_cmd, f"Expected plan_config test_command in subprocess calls: {calls}"
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
 def test_validate_uses_plan_lint_command(mock_run, mock_emit_block, mock_emit):
     """When plan_config has a lint_command, it is used instead of profile defaults.
 
@@ -363,6 +437,10 @@ def test_validate_uses_plan_lint_command(mock_run, mock_emit_block, mock_emit):
         "ruff check" in str(call.args[0]) for call in calls if call.args
     )
     assert found_lint_cmd, f"Expected plan_config lint_command in subprocess calls: {calls}"
+
+
+# ── Auto-discovery of test files ──────────────────────────────────────────
+
 
 def test_discover_test_files(tmp_path):
     """_discover_test_files finds test files matching standard patterns."""
@@ -388,11 +466,13 @@ def test_discover_test_files(tmp_path):
     # __pycache__ should be skipped
     assert not any("cached" in f for f in result)
 
+
 def test_discover_test_files_empty(tmp_path):
     """Returns empty list when no test files found."""
     (tmp_path / "main.py").write_text("pass")
     result = _discover_test_files(str(tmp_path))
     assert result == []
+
 
 def test_discover_test_files_respects_extensions(tmp_path):
     """Only finds test files matching given extensions."""
@@ -407,6 +487,11 @@ def test_discover_test_files_respects_extensions(tmp_path):
     assert "test_bar.go" in go_only
     assert "test_foo.py" not in go_only
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
+@patch("trust5.tasks.validate_task._discover_test_files", return_value=["test_foo.py", "test_bar.py"])
 def test_validate_auto_detects_test_files(mock_discover, mock_run, mock_emit_block, mock_emit):
     """In serial pipeline (no test_files in context), auto-detect and inject them."""
     task = ValidateTask()
@@ -420,6 +505,11 @@ def test_validate_auto_detects_test_files(mock_discover, mock_run, mock_emit_blo
     assert stage.context["test_files"] == ["test_foo.py", "test_bar.py"]
     mock_discover.assert_called_once()
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
+@patch("trust5.tasks.validate_task._discover_test_files")
 def test_validate_skips_detection_when_test_files_present(mock_discover, mock_run, mock_emit_block, mock_emit):
     """When test_files already in context (parallel pipeline), skip discovery."""
     task = ValidateTask()
@@ -434,6 +524,13 @@ def test_validate_skips_detection_when_test_files_present(mock_discover, mock_ru
 
     mock_discover.assert_not_called()
 
+
+# ── test_files propagation through jump paths ──────────────────────────────
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_test_files_propagated_to_repair_jump(mock_run, mock_emit_block, mock_emit):
     """test_files from context are carried into the repair jump context."""
     task = ValidateTask()
@@ -452,6 +549,10 @@ def test_test_files_propagated_to_repair_jump(mock_run, mock_emit_block, mock_em
     # test_files must be in the jump context (via propagate_context)
     assert result.context.get("test_files") == ["tests/test_core.py", "tests/test_utils.py"]
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_test_files_propagated_to_reimpl_jump(mock_run, mock_emit_block, mock_emit):
     """test_files are carried to the reimplementation jump context."""
     task = ValidateTask()
@@ -470,6 +571,13 @@ def test_test_files_propagated_to_reimpl_jump(mock_run, mock_emit_block, mock_em
     assert result.target_stage_ref_id == "implement"
     assert result.context.get("test_files") == ["test_core.py"]
 
+
+# ── Module name in VFAL emissions ──────────────────────────────────────────
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_vfal_includes_module_name(mock_run, mock_emit_block, mock_emit):
     """VFAL emission includes [module_name] when present in context."""
     task = ValidateTask()
@@ -490,6 +598,10 @@ def test_vfal_includes_module_name(mock_run, mock_emit_block, mock_emit):
     assert vfal_calls, "Expected at least one VFAL emission"
     assert "[core]" in vfal_calls[0].args[1]
 
+
+# ── Source root detection (_build_test_env) ──────────────────────────────
+
+
 def test_build_test_env_detects_src_dir(tmp_path):
     """_build_test_env adds src/ to PYTHONPATH when it exists."""
     (tmp_path / "src").mkdir()
@@ -500,6 +612,7 @@ def test_build_test_env_detects_src_dir(tmp_path):
     assert env is not None
     assert str(tmp_path / "src") in env["PYTHONPATH"]
 
+
 def test_build_test_env_returns_none_when_no_src(tmp_path):
     """_build_test_env returns None when no source root directory exists."""
     profile = {"source_roots": ("src", "lib"), "path_env_var": "PYTHONPATH"}
@@ -508,11 +621,13 @@ def test_build_test_env_returns_none_when_no_src(tmp_path):
 
     assert env is None
 
+
 def test_build_test_env_returns_none_when_no_profile():
     """_build_test_env returns None when profile has no source_roots."""
     env = _build_test_env("/tmp/proj", {})
 
     assert env is None
+
 
 def test_build_test_env_preserves_existing_path(tmp_path, monkeypatch):
     """_build_test_env prepends source root to existing PYTHONPATH."""
@@ -526,6 +641,7 @@ def test_build_test_env_preserves_existing_path(tmp_path, monkeypatch):
     assert env["PYTHONPATH"].startswith(str(tmp_path / "src"))
     assert "/existing/path" in env["PYTHONPATH"]
 
+
 def test_build_test_env_tries_roots_in_order(tmp_path):
     """_build_test_env checks source_roots in order, uses first match."""
     # Only lib/ exists, not src/
@@ -537,6 +653,11 @@ def test_build_test_env_tries_roots_in_order(tmp_path):
     assert env is not None
     assert str(tmp_path / "lib") in env["PYTHONPATH"]
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
+@patch("trust5.tasks.validate_task._build_test_env", return_value={"PYTHONPATH": "/tmp/proj/src"})
 def test_validate_passes_env_to_subprocess(mock_build_env, mock_run, mock_emit_block, mock_emit):
     """ValidateTask passes the env dict from _build_test_env to subprocess.run."""
     task = ValidateTask()
@@ -548,6 +669,13 @@ def test_validate_passes_env_to_subprocess(mock_build_env, mock_run, mock_emit_b
     for call in mock_run.call_args_list:
         assert call.kwargs.get("env") == {"PYTHONPATH": "/tmp/proj/src"}
 
+
+# ── _max_jumps / _jump_count propagation ──────────────────────────────────
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_max_jumps_propagated_to_repair_jump(mock_run, mock_emit_block, mock_emit):
     """_max_jumps and _jump_count survive propagation into the repair jump context."""
     task = ValidateTask()
@@ -568,6 +696,10 @@ def test_max_jumps_propagated_to_repair_jump(mock_run, mock_emit_block, mock_emi
     # _jump_count incremented from 3 → 4 before the jump
     assert result.context.get("_jump_count") == 4
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_max_jumps_propagated_to_reimpl_jump(mock_run, mock_emit_block, mock_emit):
     """_max_jumps and _jump_count survive propagation into the reimplementation jump context."""
     task = ValidateTask()
@@ -589,6 +721,10 @@ def test_max_jumps_propagated_to_reimpl_jump(mock_run, mock_emit_block, mock_emi
     # _jump_count incremented from 10 → 11 before the jump
     assert result.context.get("_jump_count") == 11
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_repair_attempt_incremented_in_repair_jump(mock_run, mock_emit_block, mock_emit):
     """repair_attempt must be incremented (not overwritten by propagate_context).
 
@@ -612,6 +748,10 @@ def test_repair_attempt_incremented_in_repair_jump(mock_run, mock_emit_block, mo
     # Must be 3 (= 2 + 1), NOT 2 (stale propagation bug)
     assert result.context["repair_attempt"] == 3
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_reimpl_resets_repair_attempt_to_zero(mock_run, mock_emit_block, mock_emit):
     """When reimplementing, repair_attempt must be reset to 0, not stale value.
 
@@ -636,6 +776,9 @@ def test_reimpl_resets_repair_attempt_to_zero(mock_run, mock_emit_block, mock_em
     assert result.context["repair_attempt"] == 0
     assert result.context["reimplementation_count"] == 1
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
 def test_jump_limit_terminates_pipeline(mock_emit_block, mock_emit):
     """When _jump_count >= _max_jumps, validate returns TERMINAL instead of jumping."""
     task = ValidateTask()
@@ -652,6 +795,10 @@ def test_jump_limit_terminates_pipeline(mock_emit_block, mock_emit):
 
     assert result.status == WorkflowStatus.TERMINAL
 
+
+# ── _derive_module_test_files ─────────────────────────────────────────────
+
+
 def test_derive_module_test_files_matches_by_basename():
     """Derives test files from owned source file basenames."""
     all_tests = [
@@ -664,6 +811,7 @@ def test_derive_module_test_files_matches_by_basename():
     result = _derive_module_test_files(all_tests, owned)
 
     assert result == ["tests/test_engine.py"]
+
 
 def test_derive_module_test_files_multiple_owned():
     """Matches test files for multiple owned source files."""
@@ -680,6 +828,7 @@ def test_derive_module_test_files_multiple_owned():
     assert "tests/test_config.py" in result
     assert "tests/test_utils.py" not in result
 
+
 def test_derive_module_test_files_substring_match():
     """Matches test files where owned basename is a substring of test core name."""
     all_tests = [
@@ -692,6 +841,7 @@ def test_derive_module_test_files_substring_match():
 
     assert result == ["tests/test_simulation_engine.py"]
 
+
 def test_derive_module_test_files_no_match():
     """Returns empty list when no test files match owned files."""
     all_tests = ["tests/test_auth.py", "tests/test_db.py"]
@@ -700,6 +850,7 @@ def test_derive_module_test_files_no_match():
     result = _derive_module_test_files(all_tests, owned)
 
     assert result == []
+
 
 def test_derive_module_test_files_ignores_init():
     """__init__.py is excluded from basename matching."""
@@ -710,6 +861,7 @@ def test_derive_module_test_files_ignores_init():
 
     assert result == ["tests/test_engine.py"]
 
+
 def test_derive_module_test_files_suffix_pattern():
     """Handles _test suffix pattern (e.g., Go-style engine_test.go)."""
     all_tests = ["engine_test.go", "parser_test.go"]
@@ -719,6 +871,17 @@ def test_derive_module_test_files_suffix_pattern():
 
     assert result == ["engine_test.go"]
 
+
+# ── Module-scoped auto-detection in parallel pipeline ─────────────────────
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
+@patch(
+    "trust5.tasks.validate_task._discover_test_files",
+    return_value=["tests/test_engine.py", "tests/test_distributions.py"],
+)
 def test_validate_scopes_test_files_in_parallel_pipeline(
     mock_discover,
     mock_run,
@@ -740,9 +903,14 @@ def test_validate_scopes_test_files_in_parallel_pipeline(
     # Should only inject the engine test, not distributions
     assert stage.context["test_files"] == ["tests/test_engine.py"]
 
+
+# ── _parse_command ─────────────────────────────────────────────────────────
+
+
 def test_parse_command_simple():
     """Simple command with no shell metacharacters uses shlex.split."""
     assert _parse_command("pytest -v --tb=short") == ("pytest", "-v", "--tb=short")
+
 
 def test_parse_command_shell_and():
     """Command with && is wrapped in sh -c."""
@@ -750,11 +918,13 @@ def test_parse_command_shell_and():
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
 
+
 def test_parse_command_pipe():
     """Command with | is wrapped in sh -c."""
     cmd = "pytest | tee output.log"
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
+
 
 def test_parse_command_semicolon():
     """Command with ; is wrapped in sh -c."""
@@ -762,11 +932,13 @@ def test_parse_command_semicolon():
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
 
+
 def test_parse_command_dollar_var():
     """Command with $ variable is wrapped in sh -c."""
     cmd = "$HOME/bin/pytest"
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
+
 
 def test_parse_command_redirect():
     """Command with > redirect is wrapped in sh -c."""
@@ -774,11 +946,13 @@ def test_parse_command_redirect():
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
 
+
 def test_parse_command_source_dot():
     """Command starting with '. ' (bash source) is wrapped in sh -c."""
     cmd = ". venv/bin/activate"
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
+
 
 def test_parse_command_source_dot_with_leading_whitespace():
     """'. ' detection works even with leading whitespace."""
@@ -786,9 +960,11 @@ def test_parse_command_source_dot_with_leading_whitespace():
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
 
+
 def test_parse_command_quoted_args():
     """Quoted arguments are properly handled by shlex."""
     assert _parse_command('pytest "tests/test foo.py"') == ("pytest", "tests/test foo.py")
+
 
 def test_parse_command_backtick():
     """Backtick (command substitution) triggers sh -c wrapping."""
@@ -796,11 +972,13 @@ def test_parse_command_backtick():
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
 
+
 def test_parse_command_env_var_prefix():
     """VAR=value prefix triggers sh -c wrapping (not treated as binary name)."""
     cmd = "PYTHONPATH=src venv/bin/python -m pytest tests/ -v"
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
+
 
 def test_parse_command_env_var_prefix_multiple():
     """Multiple VAR=value prefixes also trigger sh -c."""
@@ -808,6 +986,14 @@ def test_parse_command_env_var_prefix_multiple():
     result = _parse_command(cmd)
     assert result == ("sh", "-c", cmd)
 
+
+# ── Runtime "unknown" language re-detection (validate) ─────────────────────
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
+@patch("trust5.tasks.validate_task.detect_language", return_value="python")
 def test_validate_redetects_unknown_language(mock_detect, mock_run, mock_emit_block, mock_emit):
     """When language_profile says 'unknown' but detect_language finds python, update profile."""
 
@@ -833,6 +1019,10 @@ def test_validate_redetects_unknown_language(mock_detect, mock_run, mock_emit_bl
     updated_profile = stage.context["language_profile"]
     assert updated_profile["language"] == "python"
 
+
+# ── _filter_test_file_lint tests ────────────────────────────────────────────
+
+
 def test_filter_test_file_lint_strips_test_lines():
     """Lint errors in test files are removed; source file errors are kept."""
     raw = (
@@ -845,6 +1035,7 @@ def test_filter_test_file_lint_strips_test_lines():
     assert "tests/test_core.py" not in result
     assert "src/core.py:5:1: E302" in result
 
+
 def test_filter_test_file_lint_all_test_errors_returns_empty():
     """When ALL lint errors are in test files, return empty string (clean)."""
     raw = (
@@ -854,6 +1045,7 @@ def test_filter_test_file_lint_all_test_errors_returns_empty():
     )
     result = _filter_test_file_lint(raw)
     assert result == ""
+
 
 def test_filter_test_file_lint_no_test_errors_unchanged():
     """When no lint errors are in test files, output is preserved."""
@@ -866,10 +1058,12 @@ def test_filter_test_file_lint_no_test_errors_unchanged():
     assert "src/engine.py:12:1: F401" in result
     assert "src/utils.py:8:5: E302" in result
 
+
 def test_filter_test_file_lint_tests_dir_pattern():
     """Lines with paths under tests/ directory are filtered."""
     raw = "tests/unit/test_calc.py:1:1: W291 trailing whitespace"
     assert _filter_test_file_lint(raw) == ""
+
 
 def test_filter_test_file_lint_owned_files_scoping():
     """In parallel pipeline, only errors in owned files are kept."""
@@ -883,12 +1077,18 @@ def test_filter_test_file_lint_owned_files_scoping():
     assert "src/config.py" in result
     assert "src/statistics.py" not in result
 
+
 def test_filter_test_file_lint_owned_files_all_unowned():
     """When all errors are in unowned files, return empty."""
     raw = "src/other.py:3:1: E302 expected 2 blank lines"
     result = _filter_test_file_lint(raw, owned_files=["src/mine.py"])
     assert result == ""
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run")
+@patch("trust5.tasks.validate_task.detect_language", return_value="python")
 def test_check_lint_filters_test_file_errors(mock_detect, mock_run, mock_emit_block, mock_emit):
     """_check_lint returns None when all lint errors are in test files."""
     lint_output = (
@@ -904,6 +1104,10 @@ def test_check_lint_filters_test_file_errors(mock_detect, mock_run, mock_emit_bl
     )
     assert result is None
 
+
+# ── _scope_lint_command tests ─────────────────────────────────────────────
+
+
 def test_scope_lint_command_removes_unowned_files():
     """Only files in owned_files are kept; others are dropped."""
     cmd = "source venv/bin/activate && python -m py_compile monte_carlo.py simulations.py stats.py"
@@ -917,6 +1121,7 @@ def test_scope_lint_command_removes_unowned_files():
     # Shell prefix preserved
     assert "source venv/bin/activate" in result
 
+
 def test_scope_lint_command_preserves_directory_commands():
     """Directory-style commands (ruff check .) pass through unchanged."""
     cmd = "ruff check ."
@@ -925,6 +1130,7 @@ def test_scope_lint_command_preserves_directory_commands():
     result = _scope_lint_command(cmd, owned)
 
     assert result == cmd
+
 
 def test_scope_lint_command_handles_shell_chain():
     """Shell chains with && are preserved; only file tokens are filtered."""
@@ -937,6 +1143,7 @@ def test_scope_lint_command_handles_shell_chain():
     assert "a.py" in result
     assert "b.py" not in result
 
+
 def test_scope_lint_command_no_owned_returns_unchanged():
     """Empty owned_files list returns the command unchanged."""
     cmd = "python -m py_compile foo.py bar.py"
@@ -944,6 +1151,7 @@ def test_scope_lint_command_no_owned_returns_unchanged():
     result = _scope_lint_command(cmd, [])
 
     assert result == cmd
+
 
 def test_scope_lint_command_all_files_owned():
     """When all file tokens are owned, command is unchanged."""
@@ -954,6 +1162,7 @@ def test_scope_lint_command_all_files_owned():
 
     assert "monte_carlo.py" in result
     assert "stats.py" in result
+
 
 def test_scope_lint_command_none_owned_falls_back():
     """When no file tokens are owned, substitute owned basenames as fallback."""
@@ -970,6 +1179,7 @@ def test_scope_lint_command_none_owned_falls_back():
     # Command prefix preserved
     assert "python -m py_compile" in result
 
+
 def test_scope_lint_command_path_prefixed_files():
     """Files with path prefixes (src/foo.py) match against owned basenames."""
     cmd = "python -m py_compile src/engine.py src/other.py"
@@ -979,6 +1189,10 @@ def test_scope_lint_command_path_prefixed_files():
 
     assert "src/engine.py" in result
     assert "src/other.py" not in result
+
+
+# ── FileNotFoundError safety net in _filter_test_file_lint ────────────────
+
 
 def test_filter_lint_file_not_found_unowned():
     """FileNotFoundError lines for unowned files are filtered out."""
@@ -991,12 +1205,17 @@ def test_filter_lint_file_not_found_unowned():
     assert "simulations.py" not in result
     assert "src/engine.py:5:1: F401" in result
 
+
 def test_filter_lint_file_not_found_owned():
     """FileNotFoundError lines for owned files are kept (real issues)."""
     raw = "FileNotFoundError: [Errno 2] No such file or directory: 'engine.py'"
     result = _filter_test_file_lint(raw, owned_files=["engine.py"])
 
     assert "engine.py" in result
+
+
+# ── Integration: lint scoping in parallel pipeline ────────────────────────
+
 
 def _subprocess_scoped_lint(*args, **kwargs):
     """subprocess.run mock that checks the lint command was scoped."""
@@ -1011,6 +1230,10 @@ def _subprocess_scoped_lint(*args, **kwargs):
         result.stdout = ""
     return result
 
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_scoped_lint)
 def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_block, mock_emit):
     """In parallel pipeline with owned_files, plan lint command is scoped to owned files only."""
     task = ValidateTask()
@@ -1045,6 +1268,10 @@ def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_b
     assert "simulations.py" not in lint_cmd_str
     assert "stats.py" not in lint_cmd_str
 
+
+# ── _strip_nonexistent_files tests ────────────────────────────────────────
+
+
 def test_strip_nonexistent_files_removes_missing(tmp_path):
     """File tokens that don't exist on disk are removed."""
     (tmp_path / "exists.py").write_text("pass")
@@ -1055,6 +1282,7 @@ def test_strip_nonexistent_files_removes_missing(tmp_path):
 
     assert "exists.py" in result
     assert "missing.py" not in result
+
 
 def test_strip_nonexistent_files_preserves_all_existing(tmp_path):
     """When all files exist, command is unchanged."""
@@ -1067,6 +1295,7 @@ def test_strip_nonexistent_files_preserves_all_existing(tmp_path):
     assert "a.py" in result
     assert "b.py" in result
 
+
 def test_strip_nonexistent_files_preserves_shell_chain(tmp_path):
     """Shell chains with && are preserved; only missing file tokens removed."""
     (tmp_path / "real.py").write_text("pass")
@@ -1078,6 +1307,7 @@ def test_strip_nonexistent_files_preserves_shell_chain(tmp_path):
     assert "real.py" in result
     assert "ghost.py" not in result
 
+
 def test_strip_nonexistent_files_directory_commands_unchanged(tmp_path):
     """Directory-style commands (no file tokens) pass through unchanged."""
     cmd = "ruff check ."
@@ -1085,6 +1315,7 @@ def test_strip_nonexistent_files_directory_commands_unchanged(tmp_path):
     result = _strip_nonexistent_files(cmd, str(tmp_path))
 
     assert result == cmd
+
 
 def test_strip_nonexistent_files_all_missing_discovers_actual(tmp_path):
     """When ALL file tokens are missing, substitute actually-existing source files."""
@@ -1105,6 +1336,7 @@ def test_strip_nonexistent_files_all_missing_discovers_actual(tmp_path):
     assert "simulator.py" in result or "pi_estimation.py" in result
     assert "python -m py_compile" in result
 
+
 def test_strip_nonexistent_files_path_prefixed(tmp_path):
     """Files with path prefixes (src/foo.py) are checked relative to project root."""
     src = tmp_path / "src"
@@ -1118,3 +1350,85 @@ def test_strip_nonexistent_files_path_prefixed(tmp_path):
 
     assert "src/engine.py" in result
     assert "src/other.py" not in result
+
+
+# ── FileNotFoundError safety net — serial pipeline (no owned_files) ───────
+
+
+def test_filter_lint_file_not_found_serial_pipeline():
+    """In serial pipeline (no owned_files), FileNotFoundError lines are always dropped."""
+    raw = (
+        "FileNotFoundError: [Errno 2] No such file or directory: 'simulations.py'\n"
+        "FileNotFoundError: [Errno 2] No such file or directory: 'stats.py'\n"
+        "monte_carlo.py:5:1: F401 unused import"
+    )
+    # No owned_files — serial pipeline
+    result = _filter_test_file_lint(raw, owned_files=None)
+
+    assert "simulations.py" not in result
+    assert "stats.py" not in result
+    assert "monte_carlo.py:5:1: F401" in result
+
+
+def test_filter_lint_file_not_found_serial_all_missing():
+    """In serial pipeline, when ALL lines are FileNotFoundError, return empty."""
+    raw = (
+        "FileNotFoundError: [Errno 2] No such file or directory: 'a.py'\n"
+        "FileNotFoundError: [Errno 2] No such file or directory: 'b.py'\n"
+        "Found 2 errors."
+    )
+    result = _filter_test_file_lint(raw, owned_files=None)
+
+    assert result == ""
+
+
+def test_filter_lint_cant_open_file_serial():
+    """python 'can't open file' message is filtered in serial pipeline."""
+    raw = "python: can't open file '/tmp/proj/missing.py': [Errno 2] No such file or directory"
+    result = _filter_test_file_lint(raw, owned_files=None)
+    assert result == ""
+
+
+# ── Integration: serial pipeline with stale lint command ──────────────────
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
+def test_validate_strips_nonexistent_files_in_serial_pipeline(
+    mock_run, mock_emit_block, mock_emit, tmp_path,
+):
+    """In serial pipeline, plan lint command with non-existent files gets cleaned."""
+    # Create actual project files (different from planner's expectations)
+    pkg = tmp_path / "monte_carlo"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "simulator.py").write_text("pass")
+
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": str(tmp_path),
+            # No owned_files — serial pipeline
+            "plan_config": {
+                "lint_command": (
+                    "source venv/bin/activate && python -m py_compile"
+                    " monte_carlo.py examples/pi_estimation.py"
+                ),
+            },
+        }
+    )
+
+    task.execute(stage)
+
+    # Find the lint subprocess call
+    lint_calls = [
+        call for call in mock_run.call_args_list
+        if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
+    ]
+    assert lint_calls, f"Expected py_compile call in: {mock_run.call_args_list}"
+
+    lint_cmd_str = " ".join(str(a) for a in lint_calls[0].args[0])
+    # The stale files should be gone, replaced with actual files
+    assert "monte_carlo.py" not in lint_cmd_str or "monte_carlo/" in lint_cmd_str
+    assert "examples/pi_estimation.py" not in lint_cmd_str
