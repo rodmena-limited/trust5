@@ -218,3 +218,71 @@ def test_write_file_creates_dirs(tmp_path, tools: Tools):
     result = tools.write_file(str(deep_path), "deep content")
     assert "successfully" in result.lower()
     assert deep_path.read_text(encoding="utf-8") == "deep content"
+
+def test_write_file_overwrites_existing(tmp_path, tools: Tools):
+    f = tmp_path / "existing.txt"
+    f.write_text("old", encoding="utf-8")
+    result = tools.write_file(str(f), "new")
+    assert "successfully" in result.lower()
+    assert f.read_text(encoding="utf-8") == "new"
+
+def test_edit_file_unique_match(tmp_path, tools: Tools):
+    f = tmp_path / "code.py"
+    f.write_text("def foo():\n    return 1\n", encoding="utf-8")
+
+    result = tools.edit_file(str(f), "return 1", "return 42")
+    assert "successfully" in result.lower()
+    assert "return 42" in f.read_text(encoding="utf-8")
+
+def test_edit_file_not_found(tools: Tools):
+    result = tools.edit_file("/nonexistent/file.py", "old", "new")
+    assert "error" in result.lower()
+    assert "not found" in result.lower()
+
+def test_edit_file_old_string_not_found(tmp_path, tools: Tools):
+    f = tmp_path / "code.py"
+    f.write_text("def foo():\n    return 1\n", encoding="utf-8")
+
+    result = tools.edit_file(str(f), "nonexistent string", "replacement")
+    assert "error" in result.lower()
+    assert "not found" in result.lower()
+
+def test_edit_file_multiple_matches(tmp_path, tools: Tools):
+    """When old_string appears more than once, edit_file should refuse."""
+    f = tmp_path / "dup.py"
+    f.write_text("x = 1\nx = 1\n", encoding="utf-8")
+
+    result = tools.edit_file(str(f), "x = 1", "x = 2")
+    assert "error" in result.lower()
+    assert "2 times" in result
+
+def test_edit_file_blocked_by_owned_files(tmp_path):
+    """edit_file must respect owned_files restrictions."""
+    owned = tmp_path / "owned.py"
+    owned.write_text("pass", encoding="utf-8")
+    other = tmp_path / "other.py"
+    other.write_text("pass", encoding="utf-8")
+
+    t = Tools(owned_files=[str(owned)])
+    result = t.edit_file(str(other), "pass", "return True")
+    assert "blocked" in result.lower()
+
+def test_get_definitions_excludes_ask_in_non_interactive():
+    """AskUserQuestion should be excluded when non_interactive=True."""
+    defs = Tools.get_definitions(non_interactive=True)
+    names = [d["function"]["name"] for d in defs]
+    assert "AskUserQuestion" not in names
+
+def test_get_definitions_includes_ask_in_interactive():
+    """AskUserQuestion should be present when non_interactive=False."""
+    Tools._non_interactive = False
+    defs = Tools.get_definitions(non_interactive=False)
+    names = [d["function"]["name"] for d in defs]
+    assert "AskUserQuestion" in names
+
+def test_get_definitions_class_level_non_interactive():
+    """Class-level _non_interactive should also suppress AskUserQuestion."""
+    Tools.set_non_interactive(True)
+    defs = Tools.get_definitions(non_interactive=False)
+    names = [d["function"]["name"] for d in defs]
+    assert "AskUserQuestion" not in names
