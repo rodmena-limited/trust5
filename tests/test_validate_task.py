@@ -253,3 +253,249 @@ def test_check_lint_combines_multiple_failures(mock_run):
     assert result is not None
     assert "ruff" in result
     assert "mypy" in result
+
+def test_check_lint_skips_module_not_found(mock_run):
+    """_check_lint treats 'No module named X' as tool-not-installed, not lint error.
+
+    Regression: when ruff is not installed, 'python3 -m ruff check' exits 1 with
+    'No module named ruff'. This was falsely treated as a lint error, triggering
+    an infinite validate-repair loop (repair pre-flight runs tests which pass).
+    """
+    mock_run.return_value = MagicMock(
+        returncode=1,
+        stdout="",
+        stderr="/opt/homebrew/opt/python@3.14/bin/python3.14: No module named ruff",
+    )
+
+    result = ValidateTask._check_lint("/tmp/proj", [("python3", "-m", "ruff", "check", ".")])
+    assert result is None  # Should be treated as skipped, not failure
+
+def test_validate_no_lint_commands_skips_lint(mock_run, mock_emit_block, mock_emit):
+    """When profile has no lint_check_commands, lint step is skipped."""
+    task = ValidateTask()
+    profile_no_lint = {
+        "language": "python",
+        "extensions": (".py",),
+        "test_command": ("python3", "-m", "pytest", "-v", "--tb=long", "-x"),
+        "syntax_check_command": ("python3", "-m", "compileall", "-q", "."),
+        "lint_check_commands": (),
+        "skip_dirs": ("__pycache__",),
+    }
+    stage = make_stage({"project_root": "/tmp/proj", "language_profile": profile_no_lint})
+
+    result = task.execute(stage)
+
+    # Should still succeed — lint step is just skipped
+    assert result.status == WorkflowStatus.SUCCEEDED
+
+def test_count_tests_pytest_output():
+    """Verify _count_tests parses standard pytest summary output."""
+    output = "===== 5 passed, 2 failed in 1.23s ====="
+    assert _count_tests(output) == 7
+
+def test_count_tests_go_output():
+    """Verify _count_tests parses Go test output."""
+    output = "ok  \tgithub.com/foo/bar\t0.123s\nok  \tgithub.com/foo/baz\t0.456s"
+    assert _count_tests(output) == 2
+
+def test_count_tests_jest_output():
+    """Verify _count_tests parses Jest output."""
+    # Jest format: "Tests:  4 passed, 5 total" — only counts "passed"
+    output = "Tests:  4 passed, 5 total"
+    assert _count_tests(output) == 4
+
+def test_count_tests_empty_output():
+    """Empty output returns 0."""
+    assert _count_tests("") == 0
+
+def test_propagate_context_used(mock_propagate, mock_run, mock_emit_block, mock_emit):
+    """Verify propagate_context is called during failure handling (not manual copy).
+
+    We trigger the failure path to confirm propagate_context is invoked.
+    """
+    task = ValidateTask()
+    stage = make_stage({"project_root": "/tmp/proj", "repair_attempt": 0})
+
+    task.execute(stage)
+
+    mock_propagate.assert_called()
+    # propagate_context is called with (stage.context, repair_context)
+    call_args = mock_propagate.call_args
+    assert isinstance(call_args[0][0], dict)  # source context
+    assert isinstance(call_args[0][1], dict)  # target context
+
+def test_validate_uses_plan_test_command(mock_run, mock_emit_block, mock_emit):
+    """When plan_config has a test_command, it is used instead of defaults."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "plan_config": {"test_command": "python -m pytest -v --cov"},
+        }
+    )
+
+    task.execute(stage)
+
+    # Check that subprocess.run was called with the plan test command
+    calls = mock_run.call_args_list
+    found_plan_cmd = any("--cov" in " ".join(str(a) for a in call.args[0]) for call in calls if call.args)
+    assert found_plan_cmd, f"Expected plan_config test_command in subprocess calls: {calls}"
+
+def test_validate_uses_plan_lint_command(mock_run, mock_emit_block, mock_emit):
+    """When plan_config has a lint_command, it is used instead of profile defaults.
+
+    Regression: plan_config lint_command was ignored, causing venv-dependent lint
+    tools to be invoked via system Python (where they may not be installed).
+    """
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "plan_config": {"lint_command": "source venv/bin/activate && ruff check ."},
+        }
+    )
+
+    task.execute(stage)
+
+    # Check that subprocess.run was called with the plan lint command (wrapped in sh -c)
+    calls = mock_run.call_args_list
+    found_lint_cmd = any(
+        "ruff check" in str(call.args[0]) for call in calls if call.args
+    )
+    assert found_lint_cmd, f"Expected plan_config lint_command in subprocess calls: {calls}"
+
+def test_discover_test_files(tmp_path):
+    """_discover_test_files finds test files matching standard patterns."""
+    # Create test files
+    (tmp_path / "test_foo.py").write_text("pass")
+    (tmp_path / "bar_test.py").write_text("pass")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_baz.py").write_text("pass")
+    # Create non-test files
+    (tmp_path / "main.py").write_text("pass")
+    (tmp_path / "utils.py").write_text("pass")
+    # Create a skip directory
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "test_cached.py").write_text("pass")
+
+    result = _discover_test_files(str(tmp_path))
+
+    assert "test_foo.py" in result
+    assert "bar_test.py" in result
+    assert any("test_baz.py" in f for f in result)
+    assert "main.py" not in result
+    assert "utils.py" not in result
+    # __pycache__ should be skipped
+    assert not any("cached" in f for f in result)
+
+def test_discover_test_files_empty(tmp_path):
+    """Returns empty list when no test files found."""
+    (tmp_path / "main.py").write_text("pass")
+    result = _discover_test_files(str(tmp_path))
+    assert result == []
+
+def test_discover_test_files_respects_extensions(tmp_path):
+    """Only finds test files matching given extensions."""
+    (tmp_path / "test_foo.py").write_text("pass")
+    (tmp_path / "test_bar.go").write_text("pass")
+
+    py_only = _discover_test_files(str(tmp_path), extensions=(".py",))
+    assert "test_foo.py" in py_only
+    assert "test_bar.go" not in py_only
+
+    go_only = _discover_test_files(str(tmp_path), extensions=(".go",))
+    assert "test_bar.go" in go_only
+    assert "test_foo.py" not in go_only
+
+def test_validate_auto_detects_test_files(mock_discover, mock_run, mock_emit_block, mock_emit):
+    """In serial pipeline (no test_files in context), auto-detect and inject them."""
+    task = ValidateTask()
+    stage = make_stage({"project_root": "/tmp/proj"})
+    # No test_files in context initially
+    assert "test_files" not in stage.context
+
+    task.execute(stage)
+
+    # After execution, test_files should be injected into context
+    assert stage.context["test_files"] == ["test_foo.py", "test_bar.py"]
+    mock_discover.assert_called_once()
+
+def test_validate_skips_detection_when_test_files_present(mock_discover, mock_run, mock_emit_block, mock_emit):
+    """When test_files already in context (parallel pipeline), skip discovery."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "test_files": ["tests/test_existing.py"],
+        }
+    )
+
+    task.execute(stage)
+
+    mock_discover.assert_not_called()
+
+def test_test_files_propagated_to_repair_jump(mock_run, mock_emit_block, mock_emit):
+    """test_files from context are carried into the repair jump context."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 0,
+            "test_files": ["tests/test_core.py", "tests/test_utils.py"],
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "repair"
+    # test_files must be in the jump context (via propagate_context)
+    assert result.context.get("test_files") == ["tests/test_core.py", "tests/test_utils.py"]
+
+def test_test_files_propagated_to_reimpl_jump(mock_run, mock_emit_block, mock_emit):
+    """test_files are carried to the reimplementation jump context."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 5,  # >= max_attempts
+            "reimplementation_count": 0,
+            "test_files": ["test_core.py"],
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "implement"
+    assert result.context.get("test_files") == ["test_core.py"]
+
+def test_vfal_includes_module_name(mock_run, mock_emit_block, mock_emit):
+    """VFAL emission includes [module_name] when present in context."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 0,
+            "module_name": "core",
+        }
+    )
+
+    task.execute(stage)
+
+    # Find the VFAL emit call
+    from trust5.core.message import M
+
+    vfal_calls = [call for call in mock_emit.call_args_list if call.args and call.args[0] == M.VFAL]
+    assert vfal_calls, "Expected at least one VFAL emission"
+    assert "[core]" in vfal_calls[0].args[1]
+
+def test_build_test_env_detects_src_dir(tmp_path):
+    """_build_test_env adds src/ to PYTHONPATH when it exists."""
+    (tmp_path / "src").mkdir()
+    profile = {"source_roots": ("src",), "path_env_var": "PYTHONPATH"}
+
+    env = _build_test_env(str(tmp_path), profile)
+
+    assert env is not None
+    assert str(tmp_path / "src") in env["PYTHONPATH"]
