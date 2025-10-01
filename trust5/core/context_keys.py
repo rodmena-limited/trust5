@@ -16,3 +16,14 @@ PROPAGATED_CONTEXT_KEYS: tuple[str, ...] = (
     "_max_jumps",
     "_jump_count",
 )
+
+def propagate_context(
+    source: dict[str, Any],
+    target: dict[str, Any],
+    keys: tuple[str, ...] = PROPAGATED_CONTEXT_KEYS,
+) -> None:
+    """Copy non-None values from source to target for the given keys."""
+    for key in keys:
+        val = source.get(key)
+        if val is not None:
+            target[key] = val
