@@ -27,3 +27,9 @@ def propagate_context(
         val = source.get(key)
         if val is not None:
             target[key] = val
+
+def increment_jump_count(context: dict[str, Any]) -> int:
+    """Increment and return the jump counter.  Must be called before every jump_to."""
+    count = context.get("_jump_count", 0) + 1
+    context["_jump_count"] = count
+    return count
