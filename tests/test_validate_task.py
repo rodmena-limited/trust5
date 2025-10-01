@@ -743,3 +743,148 @@ def test_validate_scopes_test_files_in_parallel_pipeline(
 def test_parse_command_simple():
     """Simple command with no shell metacharacters uses shlex.split."""
     assert _parse_command("pytest -v --tb=short") == ("pytest", "-v", "--tb=short")
+
+def test_parse_command_shell_and():
+    """Command with && is wrapped in sh -c."""
+    cmd = ". venv/bin/activate && pytest"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_pipe():
+    """Command with | is wrapped in sh -c."""
+    cmd = "pytest | tee output.log"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_semicolon():
+    """Command with ; is wrapped in sh -c."""
+    cmd = "cd src; pytest"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_dollar_var():
+    """Command with $ variable is wrapped in sh -c."""
+    cmd = "$HOME/bin/pytest"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_redirect():
+    """Command with > redirect is wrapped in sh -c."""
+    cmd = "pytest > output.txt"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_source_dot():
+    """Command starting with '. ' (bash source) is wrapped in sh -c."""
+    cmd = ". venv/bin/activate"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_source_dot_with_leading_whitespace():
+    """'. ' detection works even with leading whitespace."""
+    cmd = "  . venv/bin/activate && pytest"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_quoted_args():
+    """Quoted arguments are properly handled by shlex."""
+    assert _parse_command('pytest "tests/test foo.py"') == ("pytest", "tests/test foo.py")
+
+def test_parse_command_backtick():
+    """Backtick (command substitution) triggers sh -c wrapping."""
+    cmd = "echo `date`"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_env_var_prefix():
+    """VAR=value prefix triggers sh -c wrapping (not treated as binary name)."""
+    cmd = "PYTHONPATH=src venv/bin/python -m pytest tests/ -v"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_parse_command_env_var_prefix_multiple():
+    """Multiple VAR=value prefixes also trigger sh -c."""
+    cmd = "FOO=bar BAZ=qux python test.py"
+    result = _parse_command(cmd)
+    assert result == ("sh", "-c", cmd)
+
+def test_validate_redetects_unknown_language(mock_detect, mock_run, mock_emit_block, mock_emit):
+    """When language_profile says 'unknown' but detect_language finds python, update profile."""
+
+    task = ValidateTask()
+    unknown_profile = {
+        "language": "unknown",
+        "extensions": (),
+        "test_command": ("echo", "no default test command"),
+        "test_verify_command": "echo 'no tests'",
+        "syntax_check_command": None,
+        "skip_dirs": (".moai", ".trust5", ".git"),
+    }
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "language_profile": unknown_profile,
+        }
+    )
+
+    task.execute(stage)
+
+    # Profile should have been updated to python
+    updated_profile = stage.context["language_profile"]
+    assert updated_profile["language"] == "python"
+
+def test_filter_test_file_lint_strips_test_lines():
+    """Lint errors in test files are removed; source file errors are kept."""
+    raw = (
+        "tests/test_core.py:1:1: F401 [*] `os` imported but unused\n"
+        "tests/test_core.py:2:1: F401 [*] `sys` imported but unused\n"
+        "src/core.py:5:1: E302 expected 2 blank lines, got 1\n"
+        "Found 3 errors."
+    )
+    result = _filter_test_file_lint(raw)
+    assert "tests/test_core.py" not in result
+    assert "src/core.py:5:1: E302" in result
+
+def test_filter_test_file_lint_all_test_errors_returns_empty():
+    """When ALL lint errors are in test files, return empty string (clean)."""
+    raw = (
+        "tests/test_foo.py:10:1: F401 `os` imported but unused\n"
+        "test_bar.py:3:1: E302 expected 2 blank lines\n"
+        "Found 2 errors."
+    )
+    result = _filter_test_file_lint(raw)
+    assert result == ""
+
+def test_filter_test_file_lint_no_test_errors_unchanged():
+    """When no lint errors are in test files, output is preserved."""
+    raw = (
+        "src/engine.py:12:1: F401 `os` imported but unused\n"
+        "src/utils.py:8:5: E302 expected 2 blank lines\n"
+        "Found 2 errors."
+    )
+    result = _filter_test_file_lint(raw)
+    assert "src/engine.py:12:1: F401" in result
+    assert "src/utils.py:8:5: E302" in result
+
+def test_filter_test_file_lint_tests_dir_pattern():
+    """Lines with paths under tests/ directory are filtered."""
+    raw = "tests/unit/test_calc.py:1:1: W291 trailing whitespace"
+    assert _filter_test_file_lint(raw) == ""
+
+def test_filter_test_file_lint_owned_files_scoping():
+    """In parallel pipeline, only errors in owned files are kept."""
+    raw = (
+        "src/config.py:1:1: F401 `os` imported but unused\n"
+        "src/statistics.py:5:1: F401 `math` imported but unused\n"
+        "Found 2 errors."
+    )
+    # Only config.py is owned by this module
+    result = _filter_test_file_lint(raw, owned_files=["src/config.py"])
+    assert "src/config.py" in result
+    assert "src/statistics.py" not in result
+
+def test_filter_test_file_lint_owned_files_all_unowned():
+    """When all errors are in unowned files, return empty."""
+    raw = "src/other.py:3:1: E302 expected 2 blank lines"
+    result = _filter_test_file_lint(raw, owned_files=["src/mine.py"])
+    assert result == ""
