@@ -499,3 +499,247 @@ def test_build_test_env_detects_src_dir(tmp_path):
 
     assert env is not None
     assert str(tmp_path / "src") in env["PYTHONPATH"]
+
+def test_build_test_env_returns_none_when_no_src(tmp_path):
+    """_build_test_env returns None when no source root directory exists."""
+    profile = {"source_roots": ("src", "lib"), "path_env_var": "PYTHONPATH"}
+
+    env = _build_test_env(str(tmp_path), profile)
+
+    assert env is None
+
+def test_build_test_env_returns_none_when_no_profile():
+    """_build_test_env returns None when profile has no source_roots."""
+    env = _build_test_env("/tmp/proj", {})
+
+    assert env is None
+
+def test_build_test_env_preserves_existing_path(tmp_path, monkeypatch):
+    """_build_test_env prepends source root to existing PYTHONPATH."""
+    (tmp_path / "src").mkdir()
+    monkeypatch.setenv("PYTHONPATH", "/existing/path")
+    profile = {"source_roots": ("src",), "path_env_var": "PYTHONPATH"}
+
+    env = _build_test_env(str(tmp_path), profile)
+
+    assert env is not None
+    assert env["PYTHONPATH"].startswith(str(tmp_path / "src"))
+    assert "/existing/path" in env["PYTHONPATH"]
+
+def test_build_test_env_tries_roots_in_order(tmp_path):
+    """_build_test_env checks source_roots in order, uses first match."""
+    # Only lib/ exists, not src/
+    (tmp_path / "lib").mkdir()
+    profile = {"source_roots": ("src", "lib"), "path_env_var": "PYTHONPATH"}
+
+    env = _build_test_env(str(tmp_path), profile)
+
+    assert env is not None
+    assert str(tmp_path / "lib") in env["PYTHONPATH"]
+
+def test_validate_passes_env_to_subprocess(mock_build_env, mock_run, mock_emit_block, mock_emit):
+    """ValidateTask passes the env dict from _build_test_env to subprocess.run."""
+    task = ValidateTask()
+    stage = make_stage({"project_root": "/tmp/proj"})
+
+    task.execute(stage)
+
+    # subprocess.run should have been called with env kwarg
+    for call in mock_run.call_args_list:
+        assert call.kwargs.get("env") == {"PYTHONPATH": "/tmp/proj/src"}
+
+def test_max_jumps_propagated_to_repair_jump(mock_run, mock_emit_block, mock_emit):
+    """_max_jumps and _jump_count survive propagation into the repair jump context."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 0,
+            "_max_jumps": 50,
+            "_jump_count": 3,
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "repair"
+    assert result.context.get("_max_jumps") == 50
+    # _jump_count incremented from 3 → 4 before the jump
+    assert result.context.get("_jump_count") == 4
+
+def test_max_jumps_propagated_to_reimpl_jump(mock_run, mock_emit_block, mock_emit):
+    """_max_jumps and _jump_count survive propagation into the reimplementation jump context."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 5,
+            "reimplementation_count": 0,
+            "_max_jumps": 50,
+            "_jump_count": 10,
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "implement"
+    assert result.context.get("_max_jumps") == 50
+    # _jump_count incremented from 10 → 11 before the jump
+    assert result.context.get("_jump_count") == 11
+
+def test_repair_attempt_incremented_in_repair_jump(mock_run, mock_emit_block, mock_emit):
+    """repair_attempt must be incremented (not overwritten by propagate_context).
+
+    Regression test: propagate_context used to overwrite repair_attempt with the
+    stale value from stage.context AFTER the increment was applied, causing the
+    counter to never advance and the validate/repair loop to run indefinitely.
+    """
+    task = ValidateTask()
+    # Simulate second validate→repair cycle: repair_attempt=2 in context
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 2,
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "repair"
+    # Must be 3 (= 2 + 1), NOT 2 (stale propagation bug)
+    assert result.context["repair_attempt"] == 3
+
+def test_reimpl_resets_repair_attempt_to_zero(mock_run, mock_emit_block, mock_emit):
+    """When reimplementing, repair_attempt must be reset to 0, not stale value.
+
+    Regression test: propagate_context used to overwrite the explicit 0 with
+    the old repair_attempt (e.g. 5), so reimplementation entered repair with
+    attempt=5 and immediately re-triggered reimplementation again.
+    """
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 5,  # >= max_attempts → triggers reimpl
+            "reimplementation_count": 0,
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "implement"
+    # Must be 0, NOT 5 (stale propagation bug)
+    assert result.context["repair_attempt"] == 0
+    assert result.context["reimplementation_count"] == 1
+
+def test_jump_limit_terminates_pipeline(mock_emit_block, mock_emit):
+    """When _jump_count >= _max_jumps, validate returns TERMINAL instead of jumping."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 0,
+            "_max_jumps": 20,
+            "_jump_count": 20,  # at the limit
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.TERMINAL
+
+def test_derive_module_test_files_matches_by_basename():
+    """Derives test files from owned source file basenames."""
+    all_tests = [
+        "tests/test_engine.py",
+        "tests/test_distributions.py",
+        "tests/test_utils.py",
+    ]
+    owned = ["src/engine.py"]
+
+    result = _derive_module_test_files(all_tests, owned)
+
+    assert result == ["tests/test_engine.py"]
+
+def test_derive_module_test_files_multiple_owned():
+    """Matches test files for multiple owned source files."""
+    all_tests = [
+        "tests/test_engine.py",
+        "tests/test_config.py",
+        "tests/test_utils.py",
+    ]
+    owned = ["src/engine.py", "src/config.py"]
+
+    result = _derive_module_test_files(all_tests, owned)
+
+    assert "tests/test_engine.py" in result
+    assert "tests/test_config.py" in result
+    assert "tests/test_utils.py" not in result
+
+def test_derive_module_test_files_substring_match():
+    """Matches test files where owned basename is a substring of test core name."""
+    all_tests = [
+        "tests/test_simulation_engine.py",
+        "tests/test_parser.py",
+    ]
+    owned = ["engine.py"]
+
+    result = _derive_module_test_files(all_tests, owned)
+
+    assert result == ["tests/test_simulation_engine.py"]
+
+def test_derive_module_test_files_no_match():
+    """Returns empty list when no test files match owned files."""
+    all_tests = ["tests/test_auth.py", "tests/test_db.py"]
+    owned = ["engine.py"]
+
+    result = _derive_module_test_files(all_tests, owned)
+
+    assert result == []
+
+def test_derive_module_test_files_ignores_init():
+    """__init__.py is excluded from basename matching."""
+    all_tests = ["tests/test_init.py", "tests/test_engine.py"]
+    owned = ["src/__init__.py", "src/engine.py"]
+
+    result = _derive_module_test_files(all_tests, owned)
+
+    assert result == ["tests/test_engine.py"]
+
+def test_derive_module_test_files_suffix_pattern():
+    """Handles _test suffix pattern (e.g., Go-style engine_test.go)."""
+    all_tests = ["engine_test.go", "parser_test.go"]
+    owned = ["engine.go"]
+
+    result = _derive_module_test_files(all_tests, owned)
+
+    assert result == ["engine_test.go"]
+
+def test_validate_scopes_test_files_in_parallel_pipeline(
+    mock_discover,
+    mock_run,
+    mock_emit_block,
+    mock_emit,
+):
+    """In parallel pipeline (owned_files set, no test_files), scope to module tests only."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "owned_files": ["src/engine.py"],
+            # No test_files — should derive from owned_files
+        }
+    )
+
+    task.execute(stage)
+
+    # Should only inject the engine test, not distributions
+    assert stage.context["test_files"] == ["tests/test_engine.py"]
+
+def test_parse_command_simple():
+    """Simple command with no shell metacharacters uses shlex.split."""
+    assert _parse_command("pytest -v --tb=short") == ("pytest", "-v", "--tb=short")
