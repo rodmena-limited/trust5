@@ -888,3 +888,233 @@ def test_filter_test_file_lint_owned_files_all_unowned():
     raw = "src/other.py:3:1: E302 expected 2 blank lines"
     result = _filter_test_file_lint(raw, owned_files=["src/mine.py"])
     assert result == ""
+
+def test_check_lint_filters_test_file_errors(mock_detect, mock_run, mock_emit_block, mock_emit):
+    """_check_lint returns None when all lint errors are in test files."""
+    lint_output = (
+        "tests/test_core.py:1:1: F401 `os` imported but unused\n"
+        "test_bar.py:3:1: E302 expected 2 blank lines\n"
+        "Found 2 errors."
+    )
+    mock_run.return_value = MagicMock(returncode=1, stdout=lint_output, stderr="")
+
+    result = ValidateTask._check_lint(
+        "/tmp/proj",
+        [("ruff", "check", ".")],
+    )
+    assert result is None
+
+def test_scope_lint_command_removes_unowned_files():
+    """Only files in owned_files are kept; others are dropped."""
+    cmd = "source venv/bin/activate && python -m py_compile monte_carlo.py simulations.py stats.py"
+    owned = ["monte_carlo.py"]
+
+    result = _scope_lint_command(cmd, owned)
+
+    assert "monte_carlo.py" in result
+    assert "simulations.py" not in result
+    assert "stats.py" not in result
+    # Shell prefix preserved
+    assert "source venv/bin/activate" in result
+
+def test_scope_lint_command_preserves_directory_commands():
+    """Directory-style commands (ruff check .) pass through unchanged."""
+    cmd = "ruff check ."
+    owned = ["monte_carlo.py"]
+
+    result = _scope_lint_command(cmd, owned)
+
+    assert result == cmd
+
+def test_scope_lint_command_handles_shell_chain():
+    """Shell chains with && are preserved; only file tokens are filtered."""
+    cmd = "source venv/bin/activate && python -m py_compile a.py b.py"
+    owned = ["a.py"]
+
+    result = _scope_lint_command(cmd, owned)
+
+    assert "source venv/bin/activate" in result
+    assert "a.py" in result
+    assert "b.py" not in result
+
+def test_scope_lint_command_no_owned_returns_unchanged():
+    """Empty owned_files list returns the command unchanged."""
+    cmd = "python -m py_compile foo.py bar.py"
+
+    result = _scope_lint_command(cmd, [])
+
+    assert result == cmd
+
+def test_scope_lint_command_all_files_owned():
+    """When all file tokens are owned, command is unchanged."""
+    cmd = "python -m py_compile monte_carlo.py stats.py"
+    owned = ["monte_carlo.py", "stats.py"]
+
+    result = _scope_lint_command(cmd, owned)
+
+    assert "monte_carlo.py" in result
+    assert "stats.py" in result
+
+def test_scope_lint_command_none_owned_falls_back():
+    """When no file tokens are owned, substitute owned basenames as fallback."""
+    cmd = "python -m py_compile other.py another.py"
+    owned = ["src/mine.py"]
+
+    result = _scope_lint_command(cmd, owned)
+
+    # Original unowned files should be gone
+    assert "other.py" not in result
+    assert "another.py" not in result
+    # Owned basename should be used as fallback
+    assert "mine.py" in result
+    # Command prefix preserved
+    assert "python -m py_compile" in result
+
+def test_scope_lint_command_path_prefixed_files():
+    """Files with path prefixes (src/foo.py) match against owned basenames."""
+    cmd = "python -m py_compile src/engine.py src/other.py"
+    owned = ["src/engine.py"]
+
+    result = _scope_lint_command(cmd, owned)
+
+    assert "src/engine.py" in result
+    assert "src/other.py" not in result
+
+def test_filter_lint_file_not_found_unowned():
+    """FileNotFoundError lines for unowned files are filtered out."""
+    raw = (
+        "FileNotFoundError: [Errno 2] No such file or directory: 'simulations.py'\n"
+        "src/engine.py:5:1: F401 unused import"
+    )
+    result = _filter_test_file_lint(raw, owned_files=["src/engine.py"])
+
+    assert "simulations.py" not in result
+    assert "src/engine.py:5:1: F401" in result
+
+def test_filter_lint_file_not_found_owned():
+    """FileNotFoundError lines for owned files are kept (real issues)."""
+    raw = "FileNotFoundError: [Errno 2] No such file or directory: 'engine.py'"
+    result = _filter_test_file_lint(raw, owned_files=["engine.py"])
+
+    assert "engine.py" in result
+
+def _subprocess_scoped_lint(*args, **kwargs):
+    """subprocess.run mock that checks the lint command was scoped."""
+    cmd = args[0] if args else kwargs.get("args", [])
+    cmd_str = " ".join(cmd)
+    result = MagicMock()
+    result.returncode = 0
+    result.stderr = ""
+    if "pytest" in cmd_str:
+        result.stdout = "3 passed in 0.5s"
+    else:
+        result.stdout = ""
+    return result
+
+def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_block, mock_emit):
+    """In parallel pipeline with owned_files, plan lint command is scoped to owned files only."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "owned_files": ["monte_carlo.py"],
+            "plan_config": {
+                "lint_command": (
+                    "source venv/bin/activate && python -m py_compile"
+                    " monte_carlo.py simulations.py stats.py"
+                ),
+            },
+        }
+    )
+
+    result = task.execute(stage)
+
+    # Pipeline should succeed (all mocks return OK)
+    assert result.status == WorkflowStatus.SUCCEEDED
+
+    # Find the lint subprocess call (sh -c "...")
+    lint_calls = [
+        call for call in mock_run.call_args_list
+        if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
+    ]
+    assert lint_calls, f"Expected a py_compile call in: {mock_run.call_args_list}"
+
+    # The lint command should NOT contain unowned files
+    lint_cmd_str = " ".join(str(a) for a in lint_calls[0].args[0])
+    assert "monte_carlo.py" in lint_cmd_str
+    assert "simulations.py" not in lint_cmd_str
+    assert "stats.py" not in lint_cmd_str
+
+def test_strip_nonexistent_files_removes_missing(tmp_path):
+    """File tokens that don't exist on disk are removed."""
+    (tmp_path / "exists.py").write_text("pass")
+    # missing.py is NOT created
+    cmd = "python -m py_compile exists.py missing.py"
+
+    result = _strip_nonexistent_files(cmd, str(tmp_path))
+
+    assert "exists.py" in result
+    assert "missing.py" not in result
+
+def test_strip_nonexistent_files_preserves_all_existing(tmp_path):
+    """When all files exist, command is unchanged."""
+    (tmp_path / "a.py").write_text("pass")
+    (tmp_path / "b.py").write_text("pass")
+    cmd = "python -m py_compile a.py b.py"
+
+    result = _strip_nonexistent_files(cmd, str(tmp_path))
+
+    assert "a.py" in result
+    assert "b.py" in result
+
+def test_strip_nonexistent_files_preserves_shell_chain(tmp_path):
+    """Shell chains with && are preserved; only missing file tokens removed."""
+    (tmp_path / "real.py").write_text("pass")
+    cmd = "source venv/bin/activate && python -m py_compile real.py ghost.py"
+
+    result = _strip_nonexistent_files(cmd, str(tmp_path))
+
+    assert "source venv/bin/activate" in result
+    assert "real.py" in result
+    assert "ghost.py" not in result
+
+def test_strip_nonexistent_files_directory_commands_unchanged(tmp_path):
+    """Directory-style commands (no file tokens) pass through unchanged."""
+    cmd = "ruff check ."
+
+    result = _strip_nonexistent_files(cmd, str(tmp_path))
+
+    assert result == cmd
+
+def test_strip_nonexistent_files_all_missing_discovers_actual(tmp_path):
+    """When ALL file tokens are missing, substitute actually-existing source files."""
+    # Create actual source files in a subdirectory
+    pkg = tmp_path / "monte_carlo"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "simulator.py").write_text("pass")
+    (pkg / "pi_estimation.py").write_text("pass")
+
+    # Planner's stale lint command references files that don't exist
+    cmd = "python -m py_compile monte_carlo.py examples/pi_estimation.py"
+
+    result = _strip_nonexistent_files(cmd, str(tmp_path))
+
+    # Should have substituted the actual files from disk
+    assert "monte_carlo.py" not in result or "monte_carlo/" in result
+    assert "simulator.py" in result or "pi_estimation.py" in result
+    assert "python -m py_compile" in result
+
+def test_strip_nonexistent_files_path_prefixed(tmp_path):
+    """Files with path prefixes (src/foo.py) are checked relative to project root."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "engine.py").write_text("pass")
+    # src/other.py does NOT exist
+
+    cmd = "python -m py_compile src/engine.py src/other.py"
+
+    result = _strip_nonexistent_files(cmd, str(tmp_path))
+
+    assert "src/engine.py" in result
+    assert "src/other.py" not in result
