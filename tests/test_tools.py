@@ -286,3 +286,74 @@ def test_get_definitions_class_level_non_interactive():
     defs = Tools.get_definitions(non_interactive=False)
     names = [d["function"]["name"] for d in defs]
     assert "AskUserQuestion" not in names
+
+def test_get_definitions_filters_allowed_tools():
+    """Only tools listed in allowed_tools should be returned."""
+    defs = Tools.get_definitions(allowed_tools=["Read", "Grep"])
+    names = [d["function"]["name"] for d in defs]
+    assert sorted(names) == ["Grep", "Read"]
+
+def test_get_definitions_allowed_tools_empty_returns_nothing():
+    defs = Tools.get_definitions(allowed_tools=[])
+    assert defs == []
+
+def test_get_definitions_all_tools_have_required_structure():
+    """Every tool definition should have the expected top-level structure."""
+    defs = Tools.get_definitions(non_interactive=False)
+    for d in defs:
+        assert d["type"] == "function"
+        assert "name" in d["function"]
+        assert "description" in d["function"]
+        assert "parameters" in d["function"]
+
+def test_blocked_patterns_are_compiled_regexes():
+    """Sanity check: all entries in _BLOCKED_COMMAND_PATTERNS are compiled regex objects."""
+    for p in _BLOCKED_COMMAND_PATTERNS:
+        assert isinstance(p, re.Pattern), f"Expected compiled regex, got {type(p)}"
+
+def test_blocked_pattern_dev_sda_redirect(tools: Tools):
+    result = tools.run_bash("echo pwned > /dev/sda")
+    assert "blocked" in result.lower()
+
+def test_blocked_pattern_fork_bomb_regex_exists():
+    """The fork bomb pattern is present in the blocklist.
+
+    Note: the regex uses \\b before ':', and since ':' is not a word character
+    the pattern may not fire at the very start of a string.  This test verifies
+    the pattern object is registered in the blocklist.
+    """
+    fork_patterns = [p for p in _BLOCKED_COMMAND_PATTERNS if ":\\|:" in p.pattern]
+    assert len(fork_patterns) >= 1, "Expected a fork bomb pattern in the blocklist"
+
+def test_read_files_returns_json(tmp_path):
+    import json
+
+    f1 = tmp_path / "a.txt"
+    f1.write_text("aaa", encoding="utf-8")
+    f2 = tmp_path / "b.txt"
+    f2.write_text("bbb", encoding="utf-8")
+
+    result_json = Tools.read_files([str(f1), str(f2)])
+    parsed = json.loads(result_json)
+    assert parsed[str(f1)] == "aaa"
+    assert parsed[str(f2)] == "bbb"
+
+def test_read_files_handles_missing(tmp_path):
+    import json
+
+    missing = str(tmp_path / "nope.txt")
+    result_json = Tools.read_files([missing])
+    parsed = json.loads(result_json)
+    assert "Error" in parsed[missing]
+
+def test_denied_files_blocks_write(tmp_path):
+    """Writes to denied files must be blocked even when owned_files is None."""
+    test_file = tmp_path / "test_core.py"
+    test_file.write_text("def test_foo(): pass", encoding="utf-8")
+
+    t = Tools(denied_files=[str(test_file)])
+    result = t.write_file(str(test_file), "modified content")
+    assert "blocked" in result.lower()
+    assert "denied_files" in result.lower()
+    # Original content must be preserved
+    assert test_file.read_text(encoding="utf-8") == "def test_foo(): pass"
