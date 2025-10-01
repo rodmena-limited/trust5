@@ -357,3 +357,89 @@ def test_denied_files_blocks_write(tmp_path):
     assert "denied_files" in result.lower()
     # Original content must be preserved
     assert test_file.read_text(encoding="utf-8") == "def test_foo(): pass"
+
+def test_denied_files_blocks_edit(tmp_path):
+    """edit_file must also respect denied_files."""
+    test_file = tmp_path / "test_core.py"
+    test_file.write_text("def test_foo(): pass", encoding="utf-8")
+
+    t = Tools(denied_files=[str(test_file)])
+    result = t.edit_file(str(test_file), "pass", "assert True")
+    assert "blocked" in result.lower()
+
+def test_denied_files_allows_non_denied(tmp_path):
+    """Non-denied files should still be writable."""
+    src_file = tmp_path / "core.py"
+    test_file = tmp_path / "test_core.py"
+    src_file.write_text("x = 1", encoding="utf-8")
+    test_file.write_text("def test_x(): pass", encoding="utf-8")
+
+    t = Tools(denied_files=[str(test_file)])
+    result = t.write_file(str(src_file), "x = 2")
+    assert "successfully" in result.lower()
+
+def test_denied_files_takes_precedence_over_owned(tmp_path):
+    """denied_files should block even if the file is also in owned_files."""
+    f = tmp_path / "test_overlap.py"
+    f.write_text("original", encoding="utf-8")
+
+    t = Tools(owned_files=[str(f)], denied_files=[str(f)])
+    result = t.write_file(str(f), "overwrite")
+    assert "blocked" in result.lower()
+
+def test_denied_files_resolves_symlinks(tmp_path):
+    """denied_files must resolve symlinks to catch aliased paths."""
+    real = tmp_path / "test_real.py"
+    real.write_text("test", encoding="utf-8")
+    link = tmp_path / "link_test.py"
+    link.symlink_to(real)
+
+    t = Tools(denied_files=[str(real)])
+    result = t.write_file(str(link), "hack")
+    assert "blocked" in result.lower()
+
+def test_deny_test_patterns_blocks_test_prefix(tmp_path):
+    """Files matching test_* pattern must be blocked when deny_test_patterns=True."""
+    f = tmp_path / "test_something.py"
+    f.write_text("pass", encoding="utf-8")
+
+    t = Tools(deny_test_patterns=True)
+    result = t.write_file(str(f), "modified")
+    assert "blocked" in result.lower()
+    assert "test file pattern" in result.lower()
+
+def test_deny_test_patterns_blocks_test_suffix(tmp_path):
+    """Files matching *_test.* pattern must be blocked."""
+    f = tmp_path / "core_test.py"
+    f.write_text("pass", encoding="utf-8")
+
+    t = Tools(deny_test_patterns=True)
+    result = t.write_file(str(f), "modified")
+    assert "blocked" in result.lower()
+
+def test_deny_test_patterns_blocks_tests_dir(tmp_path):
+    """Files under tests/ directory must be blocked."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    f = tests_dir / "conftest.py"
+    f.write_text("pass", encoding="utf-8")
+
+    t = Tools(deny_test_patterns=True)
+    result = t.write_file(str(f), "modified")
+    assert "blocked" in result.lower()
+
+def test_deny_test_patterns_allows_source_files(tmp_path):
+    """Normal source files must NOT be blocked by deny_test_patterns."""
+    f = tmp_path / "core.py"
+    f.write_text("pass", encoding="utf-8")
+
+    t = Tools(deny_test_patterns=True)
+    result = t.write_file(str(f), "x = 1")
+    assert "successfully" in result.lower()
+
+def test_deny_test_patterns_false_allows_test_files(tmp_path):
+    """When deny_test_patterns=False, test files can be written (for test-writer)."""
+    f = tmp_path / "test_new.py"
+    t = Tools(deny_test_patterns=False)
+    result = t.write_file(str(f), "def test_foo(): pass")
+    assert "successfully" in result.lower()
