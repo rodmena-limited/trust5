@@ -122,3 +122,27 @@ def test_python_all_vacuous(tmp_path):
     density, issues = _check_python_assertions([os.path.join(tmp_path, "test_bad.py")])
     assert density == 0.0
     assert len(issues) == 2
+
+def test_python_syntax_error_skipped(tmp_path):
+    """Files with syntax errors are skipped, not crashed."""
+    _write_file(tmp_path, "test_broken.py", "def test_x(:\n    assert True\n")
+    density, issues = _check_python_assertions([os.path.join(tmp_path, "test_broken.py")])
+    assert density == 1.0  # no tests parsed → 1.0
+
+def test_generic_go_good(tmp_path):
+    """Go test file with assertions scores well."""
+    _write_file(
+        tmp_path,
+        "calc_test.go",
+        """\
+        func TestAdd(t *testing.T) {
+            assert.Equal(t, 2, Add(1, 1))
+        }
+        func TestSub(t *testing.T) {
+            assert.Equal(t, 1, Sub(2, 1))
+        }
+        """,
+    )
+    density, issues = _check_generic_assertions([os.path.join(tmp_path, "calc_test.go")], "go")
+    assert density == 1.0
+    assert len(issues) == 0
