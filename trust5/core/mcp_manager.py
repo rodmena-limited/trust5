@@ -163,3 +163,16 @@ class MCPManager:
         except Exception as e:
             logger.warning("Failed to load MCP config %s: %s", self.config_path, e)
             return _DEFAULT_CONFIG
+
+    def _build_command(server_def: dict[str, Any]) -> list[str]:
+        cmd = server_def.get("command", "")
+        args = server_def.get("args", [])
+        return [cmd] + list(args)
+
+    def _build_env(server_def: dict[str, Any]) -> dict[str, str] | None:
+        env_overrides = server_def.get("env", {})
+        if not env_overrides:
+            return None
+        env = os.environ.copy()
+        env.update(env_overrides)
+        return env
