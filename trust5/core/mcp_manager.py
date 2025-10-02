@@ -110,3 +110,34 @@ class MCPManager:
                 emit(M.SWRN, f"MCP server '{name}' failed to start: {e}")
 
         return clients
+
+    def _create_client(self, name: str, server_def: dict[str, Any]) -> MCPClient | MCPSSEClient:
+        """Create, start, and return a single MCP client."""
+        transport = server_def.get("transport", "stdio")
+
+        if transport == "sse":
+            client: MCPClient | MCPSSEClient = MCPSSEClient(
+                url=server_def["url"],
+                name=name,
+            )
+            client.start()
+            tools = client.list_tools()
+            emit(M.SINF, f"MCP server '{name}' connected via SSE ({len(tools)} tools)")
+            return client
+        else:
+            command = self._build_command(server_def)
+            env = self._build_env(server_def)
+            client = MCPClient(command=command, env=env, name=name)
+            client.start()
+            tools = client.list_tools()
+            emit(M.SINF, f"MCP server '{name}' started via stdio ({len(tools)} tools)")
+            return client
+
+    def _check_docker(self) -> bool:
+        """Cached Docker availability check."""
+        if not self._docker_checked:
+            self._docker_ok = _docker_available()
+            self._docker_checked = True
+            if not self._docker_ok:
+                emit(M.SINF, "Docker MCP Toolkit not available, skipping Docker MCP servers")
+        return self._docker_ok
