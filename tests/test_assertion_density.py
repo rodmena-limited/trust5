@@ -1,6 +1,10 @@
+"""Tests for assertion density checking (Oracle Problem mitigation)."""
+
 from __future__ import annotations
+
 import os
 import textwrap
+
 from trust5.core.quality import (
     _check_generic_assertions,
     _check_python_assertions,
@@ -8,11 +12,16 @@ from trust5.core.quality import (
     check_assertion_density,
 )
 
+
 def _write_file(tmp_path: str, name: str, content: str) -> str:
     path = os.path.join(tmp_path, name)
     with open(path, "w") as f:
         f.write(textwrap.dedent(content))
     return path
+
+
+# ── _has_python_assertions (AST-level) ──────────────────────────────
+
 
 def test_has_assertions_assert_stmt(tmp_path):
     """assert statement is detected."""
@@ -22,6 +31,7 @@ def test_has_assertions_assert_stmt(tmp_path):
     func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
     assert _has_python_assertions(func) is True
 
+
 def test_has_assertions_self_assert(tmp_path):
     """self.assertEqual() is detected."""
     import ast
@@ -29,6 +39,7 @@ def test_has_assertions_self_assert(tmp_path):
     tree = ast.parse("def test_foo(self):\n    self.assertEqual(1, 1)\n")
     func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
     assert _has_python_assertions(func) is True
+
 
 def test_has_assertions_pytest_raises(tmp_path):
     """pytest.raises() context manager is detected."""
@@ -39,6 +50,7 @@ def test_has_assertions_pytest_raises(tmp_path):
     func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
     assert _has_python_assertions(func) is True
 
+
 def test_no_assertions_vacuous(tmp_path):
     """Function with no assertions is flagged."""
     import ast
@@ -47,6 +59,7 @@ def test_no_assertions_vacuous(tmp_path):
     func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
     assert _has_python_assertions(func) is False
 
+
 def test_no_assertions_empty(tmp_path):
     """Function with only pass is flagged."""
     import ast
@@ -54,6 +67,10 @@ def test_no_assertions_empty(tmp_path):
     tree = ast.parse("def test_foo():\n    pass\n")
     func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
     assert _has_python_assertions(func) is False
+
+
+# ── _check_python_assertions ────────────────────────────────────────
+
 
 def test_python_all_good(tmp_path):
     """All test functions have assertions — density 1.0."""
@@ -71,6 +88,7 @@ def test_python_all_good(tmp_path):
     density, issues = _check_python_assertions([os.path.join(tmp_path, "test_good.py")])
     assert density == 1.0
     assert len(issues) == 0
+
 
 def test_python_vacuous_tests(tmp_path):
     """One vacuous test function — density 0.5."""
@@ -92,6 +110,7 @@ def test_python_vacuous_tests(tmp_path):
     assert "test_bad" in issues[0].message
     assert issues[0].rule == "vacuous-test"
 
+
 def test_python_no_test_functions(tmp_path):
     """File with no test functions returns 1.0 (nothing to check)."""
     _write_file(
@@ -105,6 +124,7 @@ def test_python_no_test_functions(tmp_path):
     density, issues = _check_python_assertions([os.path.join(tmp_path, "test_empty.py")])
     assert density == 1.0
     assert len(issues) == 0
+
 
 def test_python_all_vacuous(tmp_path):
     """All tests vacuous — density 0.0."""
@@ -123,11 +143,16 @@ def test_python_all_vacuous(tmp_path):
     assert density == 0.0
     assert len(issues) == 2
 
+
 def test_python_syntax_error_skipped(tmp_path):
     """Files with syntax errors are skipped, not crashed."""
     _write_file(tmp_path, "test_broken.py", "def test_x(:\n    assert True\n")
     density, issues = _check_python_assertions([os.path.join(tmp_path, "test_broken.py")])
     assert density == 1.0  # no tests parsed → 1.0
+
+
+# ── _check_generic_assertions ───────────────────────────────────────
+
 
 def test_generic_go_good(tmp_path):
     """Go test file with assertions scores well."""
@@ -146,6 +171,7 @@ def test_generic_go_good(tmp_path):
     density, issues = _check_generic_assertions([os.path.join(tmp_path, "calc_test.go")], "go")
     assert density == 1.0
     assert len(issues) == 0
+
 
 def test_generic_go_low_density(tmp_path):
     """Go test file with no assertions."""
@@ -166,7 +192,58 @@ def test_generic_go_low_density(tmp_path):
     assert len(issues) == 1
     assert issues[0].severity == "error"
 
+
 def test_generic_unknown_language(tmp_path):
     """Unknown language returns 1.0 (can't check)."""
     density, issues = _check_generic_assertions([], "brainfuck")
     assert density == 1.0
+
+
+def test_generic_rust_assertions(tmp_path):
+    """Rust test with assert_eq! is detected."""
+    _write_file(
+        tmp_path,
+        "test_calc.rs",
+        """\
+        fn test_add() {
+            assert_eq!(add(1, 1), 2);
+        }
+        """,
+    )
+    density, issues = _check_generic_assertions([os.path.join(tmp_path, "test_calc.rs")], "rust")
+    assert density == 1.0
+
+
+# ── check_assertion_density (integration) ───────────────────────────
+
+
+def test_check_assertion_density_python(tmp_path):
+    """Integration: Python project with mixed assertion density."""
+    os.makedirs(os.path.join(tmp_path, "tests"), exist_ok=True)
+    _write_file(
+        os.path.join(tmp_path, "tests"),
+        "test_main.py",
+        """\
+        def test_good():
+            assert True
+
+        def test_vacuous():
+            pass
+        """,
+    )
+    _write_file(os.path.join(tmp_path), "main.py", "x = 1\n")
+    density, issues = check_assertion_density(
+        str(tmp_path), (".py",), ("__pycache__", ".venv"), "python"
+    )
+    assert density == 0.5
+    assert len(issues) == 1
+
+
+def test_check_assertion_density_no_test_files(tmp_path):
+    """Project with no test files returns 1.0."""
+    _write_file(str(tmp_path), "main.py", "x = 1\n")
+    density, issues = check_assertion_density(
+        str(tmp_path), (".py",), ("__pycache__",), "python"
+    )
+    assert density == 1.0
+    assert len(issues) == 0
