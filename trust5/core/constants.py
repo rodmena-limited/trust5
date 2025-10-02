@@ -18,3 +18,7 @@ TIMEOUT_LOOP = 3600.0  # 1 hr for diagnostics loop
 BASH_TIMEOUT = 120  # LLM-invoked bash commands
 GREP_TIMEOUT = 60  # grep search
 SYNTAX_CHECK_TIMEOUT = 120  # compileall / go vet
+TEST_RUN_TIMEOUT = 120  # pytest / go test
+STREAM_READ_TIMEOUT_THINKING = 600  # 10 min per chunk (thinking models)
+STREAM_READ_TIMEOUT_STANDARD = 120  # 2 min per chunk (non-thinking)
+STREAM_TOTAL_TIMEOUT = 900  # 15 min total ceiling for any stream
