@@ -6,3 +6,7 @@ AGENT_PER_TURN_TIMEOUT = 600  # 10 min ceiling per single LLM call
 AGENT_IDLE_WARN_TURNS = 5  # warn after N consecutive read-only turns
 AGENT_IDLE_MAX_TURNS = 10  # abort agent after N consecutive read-only turns
 MAX_REPAIR_ATTEMPTS = 5
+MAX_REIMPLEMENTATIONS = 3
+TEST_OUTPUT_LIMIT = 4000
+REPAIR_AGENT_TIMEOUT = 600  # 10 min per repair attempt
+QUICK_TEST_TIMEOUT = 60  # pre/post-flight check
