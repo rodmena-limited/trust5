@@ -96,3 +96,21 @@ def test_detect_by_extensions_empty_dir(tmp_path):
 def test_detect_by_extensions_nonexistent_dir():
     """Nonexistent directory returns 'unknown' without raising."""
     assert _detect_by_extensions("/nonexistent/path/12345") == "unknown"
+
+def test_detect_by_extensions_unrecognized_files(tmp_path):
+    """Files with unrecognized extensions return 'unknown'."""
+    (tmp_path / "data.csv").write_text("a,b,c")
+    (tmp_path / "readme.txt").write_text("hello")
+    assert _detect_by_extensions(str(tmp_path)) == "unknown"
+
+def test_get_profile_known_language():
+    """get_profile returns the correct profile for known languages."""
+    p = get_profile("python")
+    assert p.language == "python"
+    assert ".py" in p.extensions
+
+def test_get_profile_unknown_language():
+    """get_profile returns a generic profile for unknown language strings."""
+    p = get_profile("unknown")
+    assert p.language == "unknown"
+    assert "no built-in profile" in p.prompt_hints.lower() or "no default" in p.test_verify_command.lower()
