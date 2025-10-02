@@ -1,3 +1,23 @@
+"""MCP server lifecycle manager for Trust5 pipeline agents.
+
+Provides a module-level singleton that loads MCP server config from
+.trust5/mcp.json at startup, then acts as a **factory** for creating
+per-agent MCP client instances on demand.
+
+Architecture: Each Agent gets its own exclusive set of MCP clients.
+This prevents shared-state concurrency bugs when Stabilize runs
+parallel pipeline stages (e.g., multi-module builds). The MCPManager
+itself holds only *configuration* — never live connections or
+subprocess handles.
+
+Supports two transports:
+- stdio (default): spawns a subprocess, communicates via JSON-RPC on stdin/stdout
+- sse: connects to a remote SSE endpoint (e.g., Stabilize MCP server)
+
+Docker MCP servers (requireDocker: true) are skipped when Docker is not
+available, with no fallback to npx.
+"""
+
 import json
 import logging
 import os
@@ -6,11 +26,19 @@ import subprocess
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
+
 from .mcp import MCPClient, MCPSSEClient
 from .message import M, emit
+
 logger = logging.getLogger(__name__)
+
 _manager: "MCPManager | None" = None
+
+# Default MCP config used when no .trust5/mcp.json exists.
+# Empty by default — MCP servers are opt-in. Users can configure
+# servers in .trust5/mcp.json or mcp.json in the project root.
 _DEFAULT_CONFIG: dict[str, Any] = {"mcpServers": {}}
+
 
 def _docker_available() -> bool:
     """Check if Docker with MCP Toolkit is available."""
@@ -27,6 +55,7 @@ def _docker_available() -> bool:
     except Exception:
         return False
 
+
 def _stop_clients(clients: list[MCPClient | MCPSSEClient]) -> None:
     """Stop a list of MCP clients, suppressing errors."""
     for client in clients:
@@ -35,22 +64,6 @@ def _stop_clients(clients: list[MCPClient | MCPSSEClient]) -> None:
         except Exception:
             pass
 
-def init_mcp(config_path: str | None = None) -> None:
-    """Initialize the global MCP manager (loads config, checks Docker).
-
-    Does NOT start any MCP servers. Servers are created on demand
-    via create_mcp_clients() or the mcp_clients() context manager.
-    """
-    global _manager
-    if _manager is not None:
-        return
-    _manager = MCPManager(config_path)
-    _manager.initialize()
-
-def shutdown_mcp() -> None:
-    """Clear the global MCP manager."""
-    global _manager
-    _manager = None
 
 class MCPManager:
     """Loads MCP config and provides a factory for per-agent MCP clients.
@@ -60,6 +73,7 @@ class MCPManager:
     on demand via create_clients(). Each Agent gets exclusive clients,
     ensuring thread safety when Stabilize runs parallel pipeline stages.
     """
+
     def __init__(self, config_path: str | None = None):
         self.config_path = config_path or self._find_config()
         self._server_configs: dict[str, dict[str, Any]] = {}
@@ -159,6 +173,7 @@ class MCPManager:
                 emit(M.SINF, "Docker MCP Toolkit not available, skipping Docker MCP servers")
         return self._docker_ok
 
+    @staticmethod
     def _find_config() -> str:
         """Locate MCP config file. Checks .trust5/ then project root."""
         candidates = [
@@ -181,11 +196,13 @@ class MCPManager:
             logger.warning("Failed to load MCP config %s: %s", self.config_path, e)
             return _DEFAULT_CONFIG
 
+    @staticmethod
     def _build_command(server_def: dict[str, Any]) -> list[str]:
         cmd = server_def.get("command", "")
         args = server_def.get("args", [])
         return [cmd] + list(args)
 
+    @staticmethod
     def _build_env(server_def: dict[str, Any]) -> dict[str, str] | None:
         env_overrides = server_def.get("env", {})
         if not env_overrides:
@@ -193,3 +210,55 @@ class MCPManager:
         env = os.environ.copy()
         env.update(env_overrides)
         return env
+
+
+# ── Module-level API ─────────────────────────────────────────────────
+
+
+def init_mcp(config_path: str | None = None) -> None:
+    """Initialize the global MCP manager (loads config, checks Docker).
+
+    Does NOT start any MCP servers. Servers are created on demand
+    via create_mcp_clients() or the mcp_clients() context manager.
+    """
+    global _manager
+    if _manager is not None:
+        return
+    _manager = MCPManager(config_path)
+    _manager.initialize()
+
+
+def shutdown_mcp() -> None:
+    """Clear the global MCP manager."""
+    global _manager
+    _manager = None
+
+
+def create_mcp_clients() -> list[MCPClient | MCPSSEClient]:
+    """Create a fresh set of MCP clients from the global config.
+
+    Returns new, exclusive instances each call. The caller MUST call
+    stop() on each client when done, or use mcp_clients() instead.
+    Returns empty list if no manager is initialized.
+    """
+    if _manager is None:
+        return []
+    return _manager.create_clients()
+
+
+@contextmanager
+def mcp_clients() -> Generator[list[MCPClient | MCPSSEClient], None, None]:
+    """Context manager that creates exclusive MCP clients and ensures cleanup.
+
+    Usage::
+
+        with mcp_clients() as clients:
+            agent = Agent(name="impl", ..., mcp_clients=clients)
+            result = agent.run(user_input)
+        # clients are automatically stopped here
+    """
+    clients = create_mcp_clients()
+    try:
+        yield clients
+    finally:
+        _stop_clients(clients)
