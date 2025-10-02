@@ -10,3 +10,7 @@ MAX_REIMPLEMENTATIONS = 3
 TEST_OUTPUT_LIMIT = 4000
 REPAIR_AGENT_TIMEOUT = 600  # 10 min per repair attempt
 QUICK_TEST_TIMEOUT = 60  # pre/post-flight check
+MAX_QUALITY_ATTEMPTS = 3
+TIMEOUT_PLAN = 600.0  # 10 min for plan phase
+TIMEOUT_DEVELOP = 7200.0  # 2 hr for full develop pipeline
+TIMEOUT_RUN = 1200.0  # 20 min for run-from-spec
