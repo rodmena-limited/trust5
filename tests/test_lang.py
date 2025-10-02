@@ -79,3 +79,20 @@ def test_detect_by_extensions_skips_node_modules(tmp_path):
     # Only a single Go file outside node_modules
     (tmp_path / "main.go").write_text("package main")
     assert _detect_by_extensions(str(tmp_path)) == "go"
+
+def test_detect_by_extensions_skips_hidden_dirs(tmp_path):
+    """Skips directories starting with '.' (e.g. .git, .venv)."""
+    venv = tmp_path / ".venv"
+    venv.mkdir()
+    (venv / "pip.py").write_text("pass")
+    # Only Rust file visible
+    (tmp_path / "main.rs").write_text("fn main() {}")
+    assert _detect_by_extensions(str(tmp_path)) == "rust"
+
+def test_detect_by_extensions_empty_dir(tmp_path):
+    """Empty directory returns 'unknown'."""
+    assert _detect_by_extensions(str(tmp_path)) == "unknown"
+
+def test_detect_by_extensions_nonexistent_dir():
+    """Nonexistent directory returns 'unknown' without raising."""
+    assert _detect_by_extensions("/nonexistent/path/12345") == "unknown"
