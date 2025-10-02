@@ -35,6 +35,23 @@ def _stop_clients(clients: list[MCPClient | MCPSSEClient]) -> None:
         except Exception:
             pass
 
+def init_mcp(config_path: str | None = None) -> None:
+    """Initialize the global MCP manager (loads config, checks Docker).
+
+    Does NOT start any MCP servers. Servers are created on demand
+    via create_mcp_clients() or the mcp_clients() context manager.
+    """
+    global _manager
+    if _manager is not None:
+        return
+    _manager = MCPManager(config_path)
+    _manager.initialize()
+
+def shutdown_mcp() -> None:
+    """Clear the global MCP manager."""
+    global _manager
+    _manager = None
+
 class MCPManager:
     """Loads MCP config and provides a factory for per-agent MCP clients.
 
