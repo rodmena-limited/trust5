@@ -53,3 +53,29 @@ def test_detect_by_extensions_go(tmp_path):
     (tmp_path / "main.go").write_text("package main")
     (tmp_path / "util.go").write_text("package main")
     assert _detect_by_extensions(str(tmp_path)) == "go"
+
+def test_detect_by_extensions_dominant_language(tmp_path):
+    """When mixed extensions exist, the dominant language wins."""
+    # 3 Python files, 1 Go file
+    (tmp_path / "a.py").write_text("pass")
+    (tmp_path / "b.py").write_text("pass")
+    (tmp_path / "c.py").write_text("pass")
+    (tmp_path / "main.go").write_text("package main")
+    assert _detect_by_extensions(str(tmp_path)) == "python"
+
+def test_detect_by_extensions_subdirectory(tmp_path):
+    """Scans one level into subdirectories."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "engine.py").write_text("pass")
+    (src / "utils.py").write_text("pass")
+    assert _detect_by_extensions(str(tmp_path)) == "python"
+
+def test_detect_by_extensions_skips_node_modules(tmp_path):
+    """Skips node_modules directory."""
+    nm = tmp_path / "node_modules"
+    nm.mkdir()
+    (nm / "package.js").write_text("module.exports = {}")
+    # Only a single Go file outside node_modules
+    (tmp_path / "main.go").write_text("package main")
+    assert _detect_by_extensions(str(tmp_path)) == "go"
