@@ -91,3 +91,34 @@ def test_python_vacuous_tests(tmp_path):
     assert len(issues) == 1
     assert "test_bad" in issues[0].message
     assert issues[0].rule == "vacuous-test"
+
+def test_python_no_test_functions(tmp_path):
+    """File with no test functions returns 1.0 (nothing to check)."""
+    _write_file(
+        tmp_path,
+        "test_empty.py",
+        """\
+        def helper():
+            return 42
+        """,
+    )
+    density, issues = _check_python_assertions([os.path.join(tmp_path, "test_empty.py")])
+    assert density == 1.0
+    assert len(issues) == 0
+
+def test_python_all_vacuous(tmp_path):
+    """All tests vacuous — density 0.0."""
+    _write_file(
+        tmp_path,
+        "test_bad.py",
+        """\
+        def test_a():
+            pass
+
+        def test_b():
+            x = 1
+        """,
+    )
+    density, issues = _check_python_assertions([os.path.join(tmp_path, "test_bad.py")])
+    assert density == 0.0
+    assert len(issues) == 2
