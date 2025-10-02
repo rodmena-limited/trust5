@@ -21,3 +21,20 @@ def test_has_assertions_assert_stmt(tmp_path):
     tree = ast.parse("def test_foo():\n    assert 1 == 1\n")
     func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
     assert _has_python_assertions(func) is True
+
+def test_has_assertions_self_assert(tmp_path):
+    """self.assertEqual() is detected."""
+    import ast
+
+    tree = ast.parse("def test_foo(self):\n    self.assertEqual(1, 1)\n")
+    func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
+    assert _has_python_assertions(func) is True
+
+def test_has_assertions_pytest_raises(tmp_path):
+    """pytest.raises() context manager is detected."""
+    import ast
+
+    source = "def test_foo():\n    with pytest.raises(ValueError):\n        pass\n"
+    tree = ast.parse(source)
+    func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
+    assert _has_python_assertions(func) is True
