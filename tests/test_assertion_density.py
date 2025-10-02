@@ -146,3 +146,27 @@ def test_generic_go_good(tmp_path):
     density, issues = _check_generic_assertions([os.path.join(tmp_path, "calc_test.go")], "go")
     assert density == 1.0
     assert len(issues) == 0
+
+def test_generic_go_low_density(tmp_path):
+    """Go test file with no assertions."""
+    _write_file(
+        tmp_path,
+        "calc_test.go",
+        """\
+        func TestAdd(t *testing.T) {
+            Add(1, 1)
+        }
+        func TestSub(t *testing.T) {
+            Sub(2, 1)
+        }
+        """,
+    )
+    density, issues = _check_generic_assertions([os.path.join(tmp_path, "calc_test.go")], "go")
+    assert density == 0.0
+    assert len(issues) == 1
+    assert issues[0].severity == "error"
+
+def test_generic_unknown_language(tmp_path):
+    """Unknown language returns 1.0 (can't check)."""
+    density, issues = _check_generic_assertions([], "brainfuck")
+    assert density == 1.0
