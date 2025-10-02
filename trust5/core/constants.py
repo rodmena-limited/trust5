@@ -14,3 +14,7 @@ MAX_QUALITY_ATTEMPTS = 3
 TIMEOUT_PLAN = 600.0  # 10 min for plan phase
 TIMEOUT_DEVELOP = 7200.0  # 2 hr for full develop pipeline
 TIMEOUT_RUN = 1200.0  # 20 min for run-from-spec
+TIMEOUT_LOOP = 3600.0  # 1 hr for diagnostics loop
+BASH_TIMEOUT = 120  # LLM-invoked bash commands
+GREP_TIMEOUT = 60  # grep search
+SYNTAX_CHECK_TIMEOUT = 120  # compileall / go vet
