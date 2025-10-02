@@ -38,3 +38,19 @@ def test_has_assertions_pytest_raises(tmp_path):
     tree = ast.parse(source)
     func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
     assert _has_python_assertions(func) is True
+
+def test_no_assertions_vacuous(tmp_path):
+    """Function with no assertions is flagged."""
+    import ast
+
+    tree = ast.parse("def test_foo():\n    x = 1 + 2\n    print(x)\n")
+    func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
+    assert _has_python_assertions(func) is False
+
+def test_no_assertions_empty(tmp_path):
+    """Function with only pass is flagged."""
+    import ast
+
+    tree = ast.parse("def test_foo():\n    pass\n")
+    func = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)][0]
+    assert _has_python_assertions(func) is False
