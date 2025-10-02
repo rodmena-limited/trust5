@@ -141,3 +141,25 @@ class MCPManager:
             if not self._docker_ok:
                 emit(M.SINF, "Docker MCP Toolkit not available, skipping Docker MCP servers")
         return self._docker_ok
+
+    def _find_config() -> str:
+        """Locate MCP config file. Checks .trust5/ then project root."""
+        candidates = [
+            os.path.join(os.getcwd(), ".trust5", "mcp.json"),
+            os.path.join(os.getcwd(), "mcp.json"),
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return ""  # empty = use defaults
+
+    def _load_config(self) -> dict[str, Any]:
+        if not self.config_path or not os.path.exists(self.config_path):
+            return _DEFAULT_CONFIG
+        try:
+            with open(self.config_path, encoding="utf-8") as f:
+                data: dict[str, Any] = json.load(f)
+                return data
+        except Exception as e:
+            logger.warning("Failed to load MCP config %s: %s", self.config_path, e)
+            return _DEFAULT_CONFIG
