@@ -37,3 +37,19 @@ def test_detect_language_falls_back_to_extensions(tmp_path):
 def test_detect_language_empty_dir(tmp_path):
     """Empty directory returns 'unknown'."""
     assert detect_language(str(tmp_path)) == "unknown"
+
+def test_detect_language_nonexistent_dir():
+    """Nonexistent directory returns 'unknown' (doesn't crash)."""
+    assert detect_language("/nonexistent/fake/dir/12345") == "unknown"
+
+def test_detect_by_extensions_python(tmp_path):
+    """Counts .py files and returns python."""
+    (tmp_path / "main.py").write_text("pass")
+    (tmp_path / "lib.py").write_text("pass")
+    assert _detect_by_extensions(str(tmp_path)) == "python"
+
+def test_detect_by_extensions_go(tmp_path):
+    """Counts .go files and returns go."""
+    (tmp_path / "main.go").write_text("package main")
+    (tmp_path / "util.go").write_text("package main")
+    assert _detect_by_extensions(str(tmp_path)) == "go"
