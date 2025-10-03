@@ -105,3 +105,84 @@ def _make_stage(context: dict | None = None) -> MagicMock:
     stage.context = context or {}
     stage.context.setdefault("project_root", "/tmp/fake")
     return stage
+
+def test_mutation_no_source_files(mock_find, mock_emit):
+    """No source files → skip with score -1.0."""
+    task = MutationTask()
+    stage = _make_stage({"language_profile": {"language": "python", "extensions": [".py"]}})
+
+    with patch.object(task, "_build_profile") as mock_profile:
+        mock_profile.return_value = MagicMock(
+            extensions=(".py",),
+            skip_dirs=("__pycache__",),
+            test_command=("pytest",),
+        )
+        result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.SUCCEEDED
+    assert result.outputs["mutation_score"] == -1.0
+
+def test_mutation_no_mutants(mock_gen, mock_find, mock_emit):
+    """No mutable operators → skip with score -1.0."""
+    task = MutationTask()
+    stage = _make_stage()
+
+    with patch.object(task, "_build_profile") as mock_profile:
+        mock_profile.return_value = MagicMock(
+            extensions=(".py",),
+            skip_dirs=("__pycache__",),
+            test_command=("pytest",),
+        )
+        result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.SUCCEEDED
+    assert result.outputs["mutation_score"] == -1.0
+
+def test_mutation_all_killed(mock_gen, mock_run, mock_apply, mock_restore, mock_find, mock_emit):
+    """All mutants killed → score 1.0, success."""
+    mock_gen.return_value = [
+        Mutant("/tmp/calc.py", 1, "x > 0\n", "x >= 0\n", "calc.py:1 (gt→gte)"),
+        Mutant("/tmp/calc.py", 2, "a == b\n", "a != b\n", "calc.py:2 (eq→neq)"),
+    ]
+    mock_run.return_value = MagicMock(returncode=1)  # tests fail → mutant killed
+
+    task = MutationTask()
+    stage = _make_stage()
+
+    with patch.object(task, "_build_profile") as mock_profile:
+        mock_profile.return_value = MagicMock(
+            extensions=(".py",),
+            skip_dirs=("__pycache__",),
+            test_command=("pytest",),
+        )
+        result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.SUCCEEDED
+    assert result.outputs["mutation_score"] == 1.0
+    assert result.outputs["mutants_killed"] == 2
+    assert result.outputs["mutants_survived"] == 0
+
+def test_mutation_some_survived(mock_gen, mock_run, mock_apply, mock_restore, mock_find, mock_emit):
+    """Some mutants survive → failed_continue with score < 1.0."""
+    mock_gen.return_value = [
+        Mutant("/tmp/calc.py", 1, "x > 0\n", "x >= 0\n", "calc.py:1 (gt→gte)"),
+        Mutant("/tmp/calc.py", 2, "a == b\n", "a != b\n", "calc.py:2 (eq→neq)"),
+    ]
+    # First mutant: tests pass (survived), second: tests fail (killed)
+    mock_run.side_effect = [MagicMock(returncode=0), MagicMock(returncode=1)]
+
+    task = MutationTask()
+    stage = _make_stage()
+
+    with patch.object(task, "_build_profile") as mock_profile:
+        mock_profile.return_value = MagicMock(
+            extensions=(".py",),
+            skip_dirs=("__pycache__",),
+            test_command=("pytest",),
+        )
+        result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.FAILED_CONTINUE
+    assert result.outputs["mutation_score"] == 0.5
+    assert result.outputs["mutants_survived"] == 1
+    assert result.outputs["mutants_killed"] == 1
