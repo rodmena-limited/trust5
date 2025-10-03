@@ -111,3 +111,77 @@ class MutationTask(Task):
     the kill rate is below threshold — the pipeline continues, but the
     quality gate will factor in the low mutation score.
     """
+
+    def execute(self, stage: StageExecution) -> TaskResult:
+        project_root = stage.context.get("project_root", os.getcwd())
+        profile_data: dict[str, Any] = stage.context.get("language_profile", {})
+        max_mutants = int(stage.context.get("max_mutation_samples", DEFAULT_MAX_MUTANTS))
+
+        profile = self._build_profile(profile_data, project_root)
+        test_cmd = profile.test_command
+
+        source_files = _find_source_files(project_root, profile.extensions, profile.skip_dirs)
+        if not source_files:
+            emit(M.SWRN, "No source files found for mutation testing. Skipping.")
+            return TaskResult.success(outputs={"mutation_score": -1.0, "mutants_tested": 0})
+
+        mutants = generate_mutants(source_files, max_mutants)
+        if not mutants:
+            emit(M.SINF, "No mutable operators found in source files.")
+            return TaskResult.success(outputs={"mutation_score": -1.0, "mutants_tested": 0})
+
+        emit(M.QRUN, f"Mutation testing: {len(mutants)} mutants to test against {len(source_files)} source files")
+
+        killed = 0
+        survived = 0
+        survived_details: list[str] = []
+
+        for mutant in mutants:
+            original_content = None
+            try:
+                original_content = _apply_mutant(mutant)
+                result = subprocess.run(
+                    list(test_cmd),
+                    cwd=project_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=SUBPROCESS_TIMEOUT,
+                )
+                if result.returncode != 0:
+                    killed += 1
+                else:
+                    survived += 1
+                    survived_details.append(mutant.description)
+            except subprocess.TimeoutExpired:
+                killed += 1  # Timeout counts as "caught" (behaviour changed)
+            except Exception as e:
+                logger.warning("Mutation test error for %s: %s", mutant.description, e)
+                continue  # Don't count errors either way
+            finally:
+                if original_content is not None:
+                    _restore_file(mutant.file, original_content)
+
+        total = killed + survived
+        score = killed / total if total > 0 else -1.0
+
+        outputs: dict[str, Any] = {
+            "mutation_score": score,
+            "mutants_tested": total,
+            "mutants_killed": killed,
+            "mutants_survived": survived,
+        }
+
+        if survived > 0:
+            details = "; ".join(survived_details[:5])
+            emit(
+                M.QFAL,
+                f"Mutation testing: {survived}/{total} mutants survived "
+                f"(score {score:.0%}). Surviving: {details}",
+            )
+            return TaskResult.failed_continue(
+                error=f"Mutation score {score:.0%} — {survived} mutant(s) survived the test suite",
+                outputs=outputs,
+            )
+
+        emit(M.QPAS, f"Mutation testing PASSED: {killed}/{total} mutants killed (score 100%)")
+        return TaskResult.success(outputs=outputs)
