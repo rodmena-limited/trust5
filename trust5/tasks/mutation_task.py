@@ -102,3 +102,12 @@ class Mutant:
     original_line: str
     mutated_line: str
     description: str
+
+class MutationTask(Task):
+    """Spot-check mutation testing to verify test suite sensitivity.
+
+    Injects a small random sample of mutations into source code and checks
+    whether the test suite catches them.  Returns ``failed_continue`` if
+    the kill rate is below threshold — the pipeline continues, but the
+    quality gate will factor in the low mutation score.
+    """
