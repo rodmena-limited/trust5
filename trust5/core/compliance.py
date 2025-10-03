@@ -53,6 +53,9 @@ def extract_identifiers(criterion: str) -> list[str]:
 
     return ids
 
+def _is_test_file(path: str) -> bool:
+    return bool(_TEST_PATTERNS.search(path))
+
 @dataclass(frozen=True)
 class CriterionResult:
     """Result of checking a single acceptance criterion against source code."""
