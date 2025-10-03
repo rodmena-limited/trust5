@@ -16,3 +16,11 @@ _DEFAULT_SKIP_DIRS = frozenset({
 _TEST_PATTERNS = re.compile(
     r"(^|/)tests?/|test_[^/]*\.py$|_test\.(py|ts|js|go|rs)$|\.spec\.(ts|js)$",
 )
+
+@dataclass(frozen=True)
+class CriterionResult:
+    """Result of checking a single acceptance criterion against source code."""
+    criterion: str
+    status: str
+    matched_identifiers: tuple[str, ...]
+    searched_identifiers: tuple[str, ...]
