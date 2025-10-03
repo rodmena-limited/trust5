@@ -10,3 +10,4 @@ from ..core.lang import LanguageProfile
 from ..core.message import M, emit
 logger = logging.getLogger(__name__)
 SUBPROCESS_TIMEOUT = 120
+DEFAULT_MAX_MUTANTS = 10
