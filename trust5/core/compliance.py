@@ -24,3 +24,13 @@ class CriterionResult:
     status: str
     matched_identifiers: tuple[str, ...]
     searched_identifiers: tuple[str, ...]
+
+@dataclass(frozen=True)
+class ComplianceReport:
+    """Aggregated compliance check results."""
+    criteria_total: int
+    criteria_met: int
+    criteria_not_met: int
+    compliance_ratio: float
+    results: tuple[CriterionResult, ...] = ()
+    unmet_criteria: tuple[str, ...] = ()
