@@ -186,3 +186,59 @@ def test_mutation_some_survived(mock_gen, mock_run, mock_apply, mock_restore, mo
     assert result.outputs["mutation_score"] == 0.5
     assert result.outputs["mutants_survived"] == 1
     assert result.outputs["mutants_killed"] == 1
+
+def test_mutation_timeout_counts_as_killed(mock_gen, mock_run, mock_apply, mock_restore, mock_find, mock_emit):
+    """Timeout during test run counts as 'killed' (behaviour changed)."""
+    import subprocess
+
+    mock_gen.return_value = [
+        Mutant("/tmp/calc.py", 1, "x > 0\n", "x >= 0\n", "calc.py:1"),
+    ]
+    mock_run.side_effect = subprocess.TimeoutExpired(cmd="pytest", timeout=120)
+
+    task = MutationTask()
+    stage = _make_stage()
+
+    with patch.object(task, "_build_profile") as mock_profile:
+        mock_profile.return_value = MagicMock(
+            extensions=(".py",),
+            skip_dirs=("__pycache__",),
+            test_command=("pytest",),
+        )
+        result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.SUCCEEDED
+    assert result.outputs["mutants_killed"] == 1
+
+def test_oracle_assertion_density_error():
+    """Low assertion density triggers error in methodology validation."""
+    from trust5.core.config import QualityConfig
+    from trust5.core.quality_gates import MethodologyContext, _validate_oracle_mitigations
+
+    ctx = MethodologyContext(assertion_density=0.3)
+    config = QualityConfig()
+    issues = _validate_oracle_mitigations(ctx, config)
+    assert len(issues) == 1
+    assert issues[0].severity == "error"
+    assert "assertion density" in issues[0].message
+
+def test_oracle_assertion_density_warning():
+    """Medium assertion density triggers warning."""
+    from trust5.core.config import QualityConfig
+    from trust5.core.quality_gates import MethodologyContext, _validate_oracle_mitigations
+
+    ctx = MethodologyContext(assertion_density=0.7)
+    config = QualityConfig()
+    issues = _validate_oracle_mitigations(ctx, config)
+    assert len(issues) == 1
+    assert issues[0].severity == "warning"
+
+def test_oracle_assertion_density_pass():
+    """Good assertion density generates no issues."""
+    from trust5.core.config import QualityConfig
+    from trust5.core.quality_gates import MethodologyContext, _validate_oracle_mitigations
+
+    ctx = MethodologyContext(assertion_density=0.95)
+    config = QualityConfig()
+    issues = _validate_oracle_mitigations(ctx, config)
+    assert len(issues) == 0
