@@ -56,6 +56,34 @@ def extract_identifiers(criterion: str) -> list[str]:
 def _is_test_file(path: str) -> bool:
     return bool(_TEST_PATTERNS.search(path))
 
+def _read_source_files(
+    project_root: str,
+    extensions: tuple[str, ...] = (".py",),
+    skip_dirs: tuple[str, ...] = (),
+) -> str:
+    """Read and concatenate all non-test source files."""
+    effective_skip = _DEFAULT_SKIP_DIRS | set(skip_dirs)
+    ext_set = set(extensions)
+    chunks: list[str] = []
+
+    for dirpath, dirnames, filenames in os.walk(project_root):
+        dirnames[:] = [d for d in dirnames if d not in effective_skip]
+        for fname in filenames:
+            _, ext = os.path.splitext(fname)
+            if ext not in ext_set:
+                continue
+            rel_path = os.path.relpath(os.path.join(dirpath, fname), project_root)
+            if _is_test_file(rel_path):
+                continue
+            full_path = os.path.join(dirpath, fname)
+            try:
+                with open(full_path, encoding="utf-8", errors="replace") as f:
+                    chunks.append(f.read())
+            except OSError:
+                continue
+
+    return "\n".join(chunks)
+
 @dataclass(frozen=True)
 class CriterionResult:
     """Result of checking a single acceptance criterion against source code."""
