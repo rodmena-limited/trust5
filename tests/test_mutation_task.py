@@ -68,3 +68,40 @@ def test_generate_mutants_respects_max(tmp_path):
     )
     mutants = generate_mutants([os.path.join(tmp_path, "calc.py")], max_mutants=3)
     assert len(mutants) <= 3
+
+def test_generate_mutants_empty_files(tmp_path):
+    """Empty source file list returns no mutants."""
+    mutants = generate_mutants([], max_mutants=10)
+    assert len(mutants) == 0
+
+def test_generate_mutants_no_operators(tmp_path):
+    """File with no mutable operators returns no mutants."""
+    _write_file(tmp_path, "empty.py", "x = 42\ny = 'hello'\n")
+    mutants = generate_mutants([os.path.join(tmp_path, "empty.py")], max_mutants=10)
+    assert len(mutants) == 0
+
+def test_apply_and_restore(tmp_path):
+    """Applying a mutant modifies the file; restoring brings it back."""
+    path = _write_file(tmp_path, "calc.py", "x = True\ny = False\n")
+    mutant = Mutant(
+        file=path,
+        line_no=1,
+        original_line="x = True\n",
+        mutated_line="x = False\n",
+        description="calc.py:1 (true→false)",
+    )
+    original_content = _apply_mutant(mutant)
+
+    with open(path) as f:
+        assert f.readline() == "x = False\n"
+
+    _restore_file(path, original_content)
+
+    with open(path) as f:
+        assert f.readline() == "x = True\n"
+
+def _make_stage(context: dict | None = None) -> MagicMock:
+    stage = MagicMock()
+    stage.context = context or {}
+    stage.context.setdefault("project_root", "/tmp/fake")
+    return stage
