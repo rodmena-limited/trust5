@@ -1,11 +1,12 @@
 import os
+
 from trust5.core.compliance import (
     check_compliance,
     extract_identifiers,
 )
 
-class TestExtractIdentifiers:
 
+class TestExtractIdentifiers:
     def test_extracts_pascal_case(self) -> None:
         ids = extract_identifiers("[UBIQ] The MonteCarloSimulator shall run simulations.")
         assert "MonteCarloSimulator" in ids
@@ -45,8 +46,8 @@ class TestExtractIdentifiers:
         assert "random_seed" in id_lower
         assert "confidence_interval" in id_lower
 
-class TestCheckCompliance:
 
+class TestCheckCompliance:
     def test_all_criteria_met(self, tmp_path: os.PathLike[str]) -> None:
         src = tmp_path / "simulator.py"
         src.write_text(
@@ -97,3 +98,36 @@ class TestCheckCompliance:
         report = check_compliance([], str(tmp_path))
         assert report.criteria_total == 0
         assert report.compliance_ratio == 1.0
+
+    def test_skips_test_files(self, tmp_path: os.PathLike[str]) -> None:
+        # Source file has nothing, but test file has the identifier
+        src = tmp_path / "app.py"
+        src.write_text("def hello(): pass\n")
+        test_dir = tmp_path / "tests"
+        test_dir.mkdir()
+        test_file = test_dir / "test_sim.py"
+        test_file.write_text("class MonteCarloSimulator: pass\n")
+        criteria = ["[UBIQ] The MonteCarloSimulator shall work."]
+        report = check_compliance(criteria, str(tmp_path), extensions=(".py",))
+        assert report.criteria_met == 0
+        assert report.criteria_not_met == 1
+
+    def test_criterion_with_no_identifiers_counts_as_met(self, tmp_path: os.PathLike[str]) -> None:
+        src = tmp_path / "app.py"
+        src.write_text("pass\n")
+        criteria = ["[UBIQ] The system shall work correctly."]
+        report = check_compliance(criteria, str(tmp_path), extensions=(".py",))
+        assert report.criteria_met == 1
+        assert report.compliance_ratio == 1.0
+
+    def test_per_criterion_results(self, tmp_path: os.PathLike[str]) -> None:
+        src = tmp_path / "engine.py"
+        src.write_text("class MonteCarloSimulator:\n    pass\n")
+        criteria = [
+            "[UBIQ] The MonteCarloSimulator shall be available.",
+            "[UBIQ] The BatchProcessor shall handle batches.",
+        ]
+        report = check_compliance(criteria, str(tmp_path), extensions=(".py",))
+        assert len(report.results) == 2
+        assert report.results[0].status == "met"
+        assert report.results[1].status == "not_met"
