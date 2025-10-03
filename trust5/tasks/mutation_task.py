@@ -79,6 +79,16 @@ def generate_mutants(
         return candidates
     return random.sample(candidates, max_mutants)
 
+def _apply_mutant(mutant: Mutant) -> str:
+    """Apply a mutation and return the original file content for restoration."""
+    with open(mutant.file, encoding="utf-8") as f:
+        original_content = f.read()
+    lines = original_content.splitlines(keepends=True)
+    lines[mutant.line_no - 1] = mutant.mutated_line
+    with open(mutant.file, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    return original_content
+
 @dataclass
 class Mutant:
     """A single mutation to apply to a source file."""
