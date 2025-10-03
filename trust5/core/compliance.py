@@ -13,3 +13,6 @@ _DEFAULT_SKIP_DIRS = frozenset({
     ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
     ".tox", ".eggs", "*.egg-info",
 })
+_TEST_PATTERNS = re.compile(
+    r"(^|/)tests?/|test_[^/]*\.py$|_test\.(py|ts|js|go|rs)$|\.spec\.(ts|js)$",
+)
