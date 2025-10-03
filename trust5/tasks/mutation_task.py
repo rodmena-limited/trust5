@@ -25,6 +25,22 @@ _MUTATION_OPERATORS: list[tuple[re.Pattern[str], str, str]] = [
 ]
 _TEST_PATTERN = re.compile(r"(test_|_test\.|\.test\.|spec_|_spec\.)", re.IGNORECASE)
 
+def _find_source_files(
+    project_root: str,
+    extensions: tuple[str, ...],
+    skip_dirs: tuple[str, ...],
+) -> list[str]:
+    """Find non-test source files."""
+    files: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(project_root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs and not d.startswith(".")]
+        for fname in filenames:
+            if _TEST_PATTERN.search(fname):
+                continue
+            if any(fname.endswith(ext) for ext in extensions):
+                files.append(os.path.join(dirpath, fname))
+    return files
+
 @dataclass
 class Mutant:
     """A single mutation to apply to a source file."""
