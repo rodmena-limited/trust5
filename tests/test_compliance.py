@@ -46,4 +46,34 @@ class TestExtractIdentifiers:
         assert "confidence_interval" in id_lower
 
 class TestCheckCompliance:
-    pass
+
+    def test_all_criteria_met(self, tmp_path: os.PathLike[str]) -> None:
+        src = tmp_path / "simulator.py"
+        src.write_text(
+            "class MonteCarloSimulator:\n"
+            "    def run(self, random_seed=None):\n"
+            "        pass\n"
+        )
+        criteria = [
+            "[UBIQ] The MonteCarloSimulator shall run simulations.",
+            "[EVENT] When `random_seed` is set, results shall be reproducible.",
+        ]
+        report = check_compliance(criteria, str(tmp_path), extensions=(".py",))
+        assert report.criteria_total == 2
+        assert report.criteria_met == 2
+        assert report.criteria_not_met == 0
+        assert report.compliance_ratio == 1.0
+        assert report.unmet_criteria == ()
+
+    def test_no_criteria_met(self, tmp_path: os.PathLike[str]) -> None:
+        src = tmp_path / "pi.py"
+        src.write_text("def estimate_pi(n):\n    return 3.14\n")
+        criteria = [
+            "[UBIQ] The MonteCarloSimulator shall run simulations.",
+            "[EVENT] When `random_seed` is set, results shall be reproducible.",
+        ]
+        report = check_compliance(criteria, str(tmp_path), extensions=(".py",))
+        assert report.criteria_met == 0
+        assert report.criteria_not_met == 2
+        assert report.compliance_ratio == 0.0
+        assert len(report.unmet_criteria) == 2
