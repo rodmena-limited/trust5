@@ -77,3 +77,23 @@ class TestCheckCompliance:
         assert report.criteria_not_met == 2
         assert report.compliance_ratio == 0.0
         assert len(report.unmet_criteria) == 2
+
+    def test_partial_match(self, tmp_path: os.PathLike[str]) -> None:
+        src = tmp_path / "sim.py"
+        src.write_text(
+            "class MonteCarloSimulator:\n"
+            "    pass\n"
+        )
+        criteria = [
+            "[UBIQ] The MonteCarloSimulator shall run simulations.",
+            "[UBIQ] The GeometricBrownianMotion model shall compute paths.",
+        ]
+        report = check_compliance(criteria, str(tmp_path), extensions=(".py",))
+        assert report.criteria_met == 1
+        assert report.criteria_not_met == 1
+        assert report.compliance_ratio == 0.5
+
+    def test_empty_criteria_returns_neutral(self, tmp_path: os.PathLike[str]) -> None:
+        report = check_compliance([], str(tmp_path))
+        assert report.criteria_total == 0
+        assert report.compliance_ratio == 1.0
