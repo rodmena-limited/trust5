@@ -1,3 +1,15 @@
+"""Lightweight built-in mutation testing — Oracle Problem mitigation.
+
+Injects small syntactic mutations (operator flips) into source files and runs
+the test suite after each mutation.  If the tests still pass, the mutant
+"survived" — indicating the test suite has a blind spot.
+
+No external dependencies (no mutmut, no stryker).  Works for any language
+by operating on raw text with simple regex substitutions.  The trade-off
+is lower mutation coverage than a dedicated AST-aware tool, but zero
+setup cost and cross-language support.
+"""
+
 import logging
 import os
 import random
@@ -5,12 +17,20 @@ import re
 import subprocess
 from dataclasses import dataclass
 from typing import Any
+
 from stabilize import StageExecution, Task, TaskResult
+
 from ..core.lang import LanguageProfile
 from ..core.message import M, emit
+
 logger = logging.getLogger(__name__)
+
 SUBPROCESS_TIMEOUT = 120
 DEFAULT_MAX_MUTANTS = 10
+
+# Mutation operators — each is (pattern, replacement).
+# These are intentionally conservative: only operators that almost always
+# produce syntactically valid code when swapped.
 _MUTATION_OPERATORS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"(?<!=)(?<![!<>])==(?!=)"), "!=", "eq→neq"),
     (re.compile(r"(?<!=)!=(?!=)"), "==", "neq→eq"),
@@ -23,7 +43,21 @@ _MUTATION_OPERATORS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\btrue\b"), "false", "true→false"),
     (re.compile(r"\bfalse\b"), "true", "false→true"),
 ]
+
+# Test file pattern — never mutate test files themselves.
 _TEST_PATTERN = re.compile(r"(test_|_test\.|\.test\.|spec_|_spec\.)", re.IGNORECASE)
+
+
+@dataclass
+class Mutant:
+    """A single mutation to apply to a source file."""
+
+    file: str
+    line_no: int
+    original_line: str
+    mutated_line: str
+    description: str
+
 
 def _find_source_files(
     project_root: str,
@@ -40,6 +74,7 @@ def _find_source_files(
             if any(fname.endswith(ext) for ext in extensions):
                 files.append(os.path.join(dirpath, fname))
     return files
+
 
 def generate_mutants(
     source_files: list[str],
@@ -79,6 +114,7 @@ def generate_mutants(
         return candidates
     return random.sample(candidates, max_mutants)
 
+
 def _apply_mutant(mutant: Mutant) -> str:
     """Apply a mutation and return the original file content for restoration."""
     with open(mutant.file, encoding="utf-8") as f:
@@ -89,19 +125,12 @@ def _apply_mutant(mutant: Mutant) -> str:
         f.writelines(lines)
     return original_content
 
+
 def _restore_file(filepath: str, content: str) -> None:
     """Restore a file to its original content."""
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 
-@dataclass
-class Mutant:
-    """A single mutation to apply to a source file."""
-    file: str
-    line_no: int
-    original_line: str
-    mutated_line: str
-    description: str
 
 class MutationTask(Task):
     """Spot-check mutation testing to verify test suite sensitivity.
@@ -185,3 +214,30 @@ class MutationTask(Task):
 
         emit(M.QPAS, f"Mutation testing PASSED: {killed}/{total} mutants killed (score 100%)")
         return TaskResult.success(outputs=outputs)
+
+    @staticmethod
+    def _build_profile(data: dict[str, Any], project_root: str) -> LanguageProfile:
+        if not data:
+            from ..core.lang import detect_language, get_profile
+
+            return get_profile(detect_language(project_root))
+
+        from ..core.lang import detect_language, get_profile
+
+        base = get_profile(detect_language(project_root))
+        return LanguageProfile(
+            language=data.get("language", base.language),
+            extensions=tuple(data.get("extensions", base.extensions)),
+            test_command=tuple(data.get("test_command", base.test_command)),
+            test_verify_command=data.get("test_verify_command", base.test_verify_command),
+            lint_commands=tuple(data.get("lint_commands", base.lint_commands)),
+            lint_check_commands=tuple(data.get("lint_check_commands", base.lint_check_commands)),
+            syntax_check_command=base.syntax_check_command,
+            package_install_prefix=data.get("package_install_prefix", base.package_install_prefix),
+            lsp_language_id=data.get("lsp_language_id", base.lsp_language_id),
+            skip_dirs=tuple(data.get("skip_dirs", base.skip_dirs)),
+            manifest_files=tuple(data.get("manifest_files", base.manifest_files)),
+            prompt_hints=data.get("prompt_hints", base.prompt_hints),
+            coverage_command=base.coverage_command,
+            security_command=base.security_command,
+        )
