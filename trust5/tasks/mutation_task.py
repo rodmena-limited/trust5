@@ -89,6 +89,11 @@ def _apply_mutant(mutant: Mutant) -> str:
         f.writelines(lines)
     return original_content
 
+def _restore_file(filepath: str, content: str) -> None:
+    """Restore a file to its original content."""
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+
 @dataclass
 class Mutant:
     """A single mutation to apply to a source file."""
