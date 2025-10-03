@@ -35,3 +35,15 @@ class TestExtractIdentifiers:
     def test_empty_criterion(self) -> None:
         ids = extract_identifiers("[UBIQ] The system shall work.")
         assert ids == []
+
+    def test_multiple_types(self) -> None:
+        ids = extract_identifiers(
+            "[UBIQ] The GeometricBrownianMotion with `random_seed` and confidence_interval."
+        )
+        id_lower = [i.lower() for i in ids]
+        assert "geometricbrownianmotion" in id_lower
+        assert "random_seed" in id_lower
+        assert "confidence_interval" in id_lower
+
+class TestCheckCompliance:
+    pass
