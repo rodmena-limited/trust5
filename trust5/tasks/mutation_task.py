@@ -23,3 +23,4 @@ _MUTATION_OPERATORS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\btrue\b"), "false", "true→false"),
     (re.compile(r"\bfalse\b"), "true", "false→true"),
 ]
+_TEST_PATTERN = re.compile(r"(test_|_test\.|\.test\.|spec_|_spec\.)", re.IGNORECASE)
