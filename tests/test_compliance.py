@@ -9,3 +9,11 @@ class TestExtractIdentifiers:
     def test_extracts_pascal_case(self) -> None:
         ids = extract_identifiers("[UBIQ] The MonteCarloSimulator shall run simulations.")
         assert "MonteCarloSimulator" in ids
+
+    def test_extracts_backtick_identifiers(self) -> None:
+        ids = extract_identifiers("[EVENT] When `random_seed` is set, results shall be reproducible.")
+        assert "random_seed" in ids
+
+    def test_extracts_quoted_identifiers(self) -> None:
+        ids = extract_identifiers('[UBIQ] The system shall support "batch_size" configuration.')
+        assert "batch_size" in ids
