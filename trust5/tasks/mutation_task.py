@@ -24,3 +24,12 @@ _MUTATION_OPERATORS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\bfalse\b"), "true", "false→true"),
 ]
 _TEST_PATTERN = re.compile(r"(test_|_test\.|\.test\.|spec_|_spec\.)", re.IGNORECASE)
+
+@dataclass
+class Mutant:
+    """A single mutation to apply to a source file."""
+    file: str
+    line_no: int
+    original_line: str
+    mutated_line: str
+    description: str
