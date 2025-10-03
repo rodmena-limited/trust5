@@ -17,6 +17,42 @@ _TEST_PATTERNS = re.compile(
     r"(^|/)tests?/|test_[^/]*\.py$|_test\.(py|ts|js|go|rs)$|\.spec\.(ts|js)$",
 )
 
+def extract_identifiers(criterion: str) -> list[str]:
+    """Extract searchable identifiers from an EARS criterion string.
+
+    Looks for:
+    - PascalCase class names (e.g. MonteCarloSimulator)
+    - Backtick-quoted identifiers (e.g. `random_seed`)
+    - Double-quoted identifiers (e.g. "batch_size")
+    - Long snake_case identifiers (>5 chars, to skip generic words)
+    """
+    ids: list[str] = []
+    seen: set[str] = set()
+
+    def _add(ident: str) -> None:
+        lower = ident.lower()
+        if lower not in seen:
+            seen.add(lower)
+            ids.append(ident)
+
+    for m in _PASCAL_CASE_RE.finditer(criterion):
+        _add(m.group())
+
+    for m in _BACKTICK_RE.finditer(criterion):
+        _add(m.group(1))
+
+    for m in _QUOTED_RE.finditer(criterion):
+        val = m.group(1)
+        if len(val) > 3 and not val.startswith("http"):
+            _add(val)
+
+    for m in _SNAKE_CASE_RE.finditer(criterion):
+        val = m.group()
+        if len(val) > 5:
+            _add(val)
+
+    return ids
+
 @dataclass(frozen=True)
 class CriterionResult:
     """Result of checking a single acceptance criterion against source code."""
