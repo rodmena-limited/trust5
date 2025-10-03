@@ -41,6 +41,44 @@ def _find_source_files(
                 files.append(os.path.join(dirpath, fname))
     return files
 
+def generate_mutants(
+    source_files: list[str],
+    max_mutants: int = DEFAULT_MAX_MUTANTS,
+) -> list[Mutant]:
+    """Generate candidate mutations from source files.
+
+    Scans source lines for mutation operator matches and returns a random
+    sample of up to *max_mutants* candidates.
+    """
+    candidates: list[Mutant] = []
+    for fpath in source_files:
+        try:
+            with open(fpath, encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        for line_no, line in enumerate(lines, 1):
+            stripped = line.lstrip()
+            # Skip comments and strings-only lines (rough heuristic)
+            if stripped.startswith(("#", "//", "/*", "*", "///", "---")):
+                continue
+            for pat, replacement, desc in _MUTATION_OPERATORS:
+                if pat.search(line):
+                    mutated = pat.sub(replacement, line, count=1)
+                    if mutated != line:
+                        candidates.append(
+                            Mutant(
+                                file=fpath,
+                                line_no=line_no,
+                                original_line=line,
+                                mutated_line=mutated,
+                                description=f"{os.path.basename(fpath)}:{line_no} ({desc})",
+                            )
+                        )
+    if len(candidates) <= max_mutants:
+        return candidates
+    return random.sample(candidates, max_mutants)
+
 @dataclass
 class Mutant:
     """A single mutation to apply to a source file."""
