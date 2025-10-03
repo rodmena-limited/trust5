@@ -26,3 +26,12 @@ class TestExtractIdentifiers:
         ids = extract_identifiers("[UBIQ] The is_ok flag shall be set.")
         # "is_ok" is 5 chars, threshold is >5, so it should NOT be extracted
         assert "is_ok" not in ids
+
+    def test_deduplicates(self) -> None:
+        ids = extract_identifiers("[UBIQ] The `MonteCarloSimulator` uses MonteCarloSimulator.")
+        pascal_count = sum(1 for i in ids if i.lower() == "montecarlosimulator")
+        assert pascal_count == 1
+
+    def test_empty_criterion(self) -> None:
+        ids = extract_identifiers("[UBIQ] The system shall work.")
+        assert ids == []
