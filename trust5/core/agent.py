@@ -275,3 +275,70 @@ class Agent:
 
         emit(M.AERR, f"[{self.name}] Unknown tool: {name}")
         return f"Unknown tool: {name}"
+
+    def _summarize_args(name: str, args: dict[str, Any]) -> str:
+        if name == "Bash":
+            cmd = str(args.get("command", ""))
+            return cmd[:200] if len(cmd) > 200 else cmd
+        if name == "Read":
+            path = str(args.get("file_path", ""))
+            offset = _safe_int(args.get("offset"))
+            limit = _safe_int(args.get("limit"))
+            if offset or limit:
+                o = offset or 1
+                l = limit or 0
+                return f"{path} (lines {o}-{o + l})"
+            return path
+        if name == "Write":
+            return str(args.get("file_path", ""))
+        if name == "ReadFiles":
+            paths = args.get("file_paths", [])
+            if len(paths) <= 3:
+                return ", ".join(str(p) for p in paths)
+            return f"{len(paths)} files"
+        if name == "Edit":
+            return str(args.get("file_path", ""))
+        if name == "Glob":
+            return str(args.get("pattern", ""))
+        if name == "Grep":
+            p = str(args.get("pattern", ""))
+            path = str(args.get("path", "."))
+            return f"{p!r} in {path}" if path and path != "." else repr(p)
+        if name == "InstallPackage":
+            return str(args.get("package_name", ""))
+        keys = list(args.keys())[:3]
+        return ", ".join(f"{k}=..." for k in keys) if keys else ""
+
+    def _execute_tool(self, name: str, args: dict[str, Any]) -> str:
+        dispatch = {
+            "InitProject": lambda: self.tools.init_project(str(args.get("path", "."))),
+            "Read": lambda: self.tools.read_file(
+                str(args.get("file_path", "")),
+                offset=_safe_int(args.get("offset")),
+                limit=_safe_int(args.get("limit")),
+            ),
+            "ReadFiles": lambda: self.tools.read_files(list(args.get("file_paths", []))),
+            "Write": lambda: self.tools.write_file(str(args.get("file_path", "")), str(args.get("content", ""))),
+            "Edit": lambda: self.tools.edit_file(
+                str(args.get("file_path", "")),
+                str(args.get("old_string", "")),
+                str(args.get("new_string", "")),
+            ),
+            "Bash": lambda: self.tools.run_bash(str(args.get("command", "")), str(args.get("workdir", "."))),
+            "Glob": lambda: str(self.tools.list_files(str(args.get("pattern", "")), str(args.get("workdir", ".")))),
+            "InstallPackage": lambda: self.tools.install_package(str(args.get("package_name", ""))),
+            "Grep": lambda: self.tools.grep_files(
+                str(args.get("pattern", "")),
+                str(args.get("path", ".")),
+                str(args.get("include", "*")),
+            ),
+            "AskUserQuestion": lambda: self._handle_ask_user(args),
+        }
+        handler = dispatch.get(name)
+        if handler is None:
+            raise ValueError(f"Unknown tool: {name}")
+        try:
+            return handler()
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, json.JSONDecodeError) as e:
+            emit(M.SERR, f"[{self.name}] Tool {name} error: {e}")
+            return f"Tool {name} error: {e}"
