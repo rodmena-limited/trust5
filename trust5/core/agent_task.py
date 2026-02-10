@@ -54,3 +54,30 @@ def _output_key_for_agent(agent_name: str | None) -> str:
     if "implementer" in name_lower:
         return "implementer_output"
     return "agent_output"
+
+def _collect_ancestor_outputs(context: dict[str, Any]) -> list[str]:
+    key_labels = {
+        "plan_output": "Plan (from Planner)",
+        "test_writer_output": "Test Specification (from Test Writer)",
+        "implementer_output": "Implementation (from Implementer)",
+        "agent_output": "Previous Stage Output",
+    }
+    sections: list[str] = []
+    for key in (*_STAGE_OUTPUT_KEYS, "agent_output"):
+        value = context.get(key, "")
+        if value:
+            label = key_labels.get(key, key)
+            sections.append(f"## {label}\n\n{value}")
+    return sections
+
+def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+    if content.startswith("---\n"):
+        parts = content.split("---\n", 2)
+        if len(parts) >= 3:
+            try:
+                fm = yaml.safe_load(parts[1])
+                if isinstance(fm, dict):
+                    return fm, parts[2]
+            except yaml.YAMLError:
+                pass
+    return {}, content
