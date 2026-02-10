@@ -21,3 +21,6 @@ class TokenData:
         if self.expires_at <= 0:
             return float("inf")
         return max(0.0, self.expires_at - time.time())
+
+    def should_refresh(self) -> bool:
+        return self.refresh_token is not None and self.expires_in_seconds < 300
