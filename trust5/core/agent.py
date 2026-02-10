@@ -4,6 +4,7 @@ import subprocess
 import threading
 import time
 from typing import Any
+
 from .constants import (
     AGENT_IDLE_MAX_TURNS,
     AGENT_IDLE_WARN_TURNS,
@@ -15,11 +16,20 @@ from .llm import LLM, LLMError
 from .mcp import MCPClient, MCPSSEClient
 from .message import M, emit, emit_block
 from .tools import Tools
+
 logger = logging.getLogger(__name__)
+
 MAX_TOOL_RESULT_LENGTH = AGENT_TOOL_RESULT_LIMIT
 MAX_HISTORY_MESSAGES = AGENT_MAX_HISTORY_MESSAGES
+
+# Tools that modify the workspace — used by idle detection.
 _WRITE_TOOLS = frozenset({"Write", "Edit", "Bash"})
+
+# How many consecutive empty (0-char, no tool call) responses to tolerate
+# before accepting the empty result.  Transient LLM failures sometimes
+# produce a single empty response; retrying the same turn usually fixes it.
 _MAX_EMPTY_RESPONSE_RETRIES = 2
+
 
 def _safe_int(value: object, default: int | None = None) -> int | None:
     """Coerce an LLM tool argument to int, tolerating str/float/None.
@@ -44,6 +54,7 @@ def _safe_int(value: object, default: int | None = None) -> int | None:
                 return default
     return default
 
+
 def _truncate(text: str, max_len: int = MAX_TOOL_RESULT_LENGTH) -> str:
     if len(text) <= max_len:
         return text
@@ -53,6 +64,7 @@ def _truncate(text: str, max_len: int = MAX_TOOL_RESULT_LENGTH) -> str:
         f"use Read with offset/limit to read specific line ranges, "
         f"or use Grep to find the relevant lines first] ...\n" + text[-half:]
     )
+
 
 class Agent:
     def __init__(
@@ -276,6 +288,7 @@ class Agent:
         emit(M.AERR, f"[{self.name}] Unknown tool: {name}")
         return f"Unknown tool: {name}"
 
+    @staticmethod
     def _summarize_args(name: str, args: dict[str, Any]) -> str:
         if name == "Bash":
             cmd = str(args.get("command", ""))
@@ -342,3 +355,66 @@ class Agent:
         except (OSError, subprocess.SubprocessError, ValueError, TypeError, json.JSONDecodeError) as e:
             emit(M.SERR, f"[{self.name}] Tool {name} error: {e}")
             return f"Tool {name} error: {e}"
+
+    def _handle_ask_user(self, args: dict[str, Any]) -> str:
+        options = args.get("options", [])
+        if isinstance(options, str):
+            try:
+                options = json.loads(options)
+            except (json.JSONDecodeError, TypeError):
+                options = []
+
+        if self.non_interactive:
+            default = options[0] if options else "yes"
+            emit(
+                M.UAUT,
+                f"[{self.name}] Auto-answer: {args.get('question', '')!r} -> {default!r}",
+            )
+            return default
+
+        emit(M.UASK, f"[{self.name}] {args.get('question', '')}")
+        return self.tools.ask_user(str(args.get("question", "")), options)
+
+    def _emit_context(self, messages: list[dict[str, Any]], since: int) -> None:
+        new_msgs = messages[since:]
+        if not new_msgs:
+            return
+        for idx, msg in enumerate(new_msgs, start=since):
+            role = msg.get("role", "?")
+            content = msg.get("content", "")
+            name = msg.get("name", "")
+
+            if role == "system":
+                emit(M.CSYS, f"[ctx #{idx}] system ({len(content)} chars)")
+            elif role == "user":
+                emit_block(
+                    M.CUSR,
+                    f"ctx #{idx} user ({len(content)} chars)",
+                    content,
+                    max_lines=20,
+                )
+            elif role == "assistant":
+                # Assistant content is shown via thinking stream (ATHK), don't duplicate
+                pass
+            elif role == "tool":
+                if content.strip() and content.strip() != "[]":
+                    emit_block(
+                        M.CTLR,
+                        f"ctx #{idx} tool_result name={name} ({len(content)} chars)",
+                        content,
+                        max_lines=10,
+                    )
+
+    def _trim_history_if_needed(self, messages: list[dict[str, Any]]) -> None:
+        if len(self.history) <= MAX_HISTORY_MESSAGES:
+            return
+        trim_count = len(self.history) - MAX_HISTORY_MESSAGES
+        emit(
+            M.CTRM,
+            f"[{self.name}] Trimming {trim_count} messages (was {len(self.history)}, keeping {MAX_HISTORY_MESSAGES})",
+        )
+        self.history = self.history[trim_count:]
+        system_msg = messages[0]
+        messages.clear()
+        messages.append(system_msg)
+        messages.extend(self.history)
