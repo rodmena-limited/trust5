@@ -16,3 +16,5 @@ logger = logging.getLogger(__name__)
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _REDIRECT_URI = "http://localhost:8585"
+_SCOPES = "https://www.googleapis.com/auth/generative-language.tuning"
+_TOKEN_EXPIRY = 3600
