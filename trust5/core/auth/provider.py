@@ -24,3 +24,14 @@ class TokenData:
 
     def should_refresh(self) -> bool:
         return self.refresh_token is not None and self.expires_in_seconds < 300
+
+@dataclass
+class ProviderConfig:
+    name: str
+    display_name: str
+    api_base_url: str
+    auth_header: str = 'x-api-key'
+    backend: str = 'openai'
+    models: dict[str, str] = field(default_factory=dict)
+    thinking_tiers: set[str] = field(default_factory=set)
+    fallback_chain: list[str] = field(default_factory=list)
