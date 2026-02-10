@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import base64
 import hashlib
 import json
@@ -9,15 +10,20 @@ import time
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlencode
+
 import requests
+
 from .callback import run_callback_server
 from .provider import AuthProvider, ProviderConfig, TokenData
+
 logger = logging.getLogger(__name__)
+
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _REDIRECT_URI = "http://localhost:8585"
 _SCOPES = "https://www.googleapis.com/auth/generative-language.tuning"
 _TOKEN_EXPIRY = 3600
+
 GOOGLE_CONFIG = ProviderConfig(
     name="google",
     display_name="Google Gemini",
@@ -39,10 +45,12 @@ GOOGLE_CONFIG = ProviderConfig(
     ],
 )
 
+
 def _generate_pkce() -> tuple[str, str]:
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     return verifier, challenge
+
 
 def _load_client_json(path: str) -> tuple[str, str]:
     with open(path, encoding="utf-8") as f:
@@ -52,10 +60,12 @@ def _load_client_json(path: str) -> tuple[str, str]:
             return data[key]["client_id"], data[key]["client_secret"]
     raise ValueError(f"No 'installed' or 'web' key in {path}")
 
+
 class GoogleProvider(AuthProvider):
     def __init__(self) -> None:
         super().__init__(GOOGLE_CONFIG)
 
+    @staticmethod
     def _resolve_credentials() -> tuple[str, str]:
         cid = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
         csec = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
@@ -120,3 +130,80 @@ class GoogleProvider(AuthProvider):
             raise ValueError("No authorization code received (timeout?)")
 
         return self._exchange_code(code, verifier, client_id, client_secret)
+
+    def _exchange_code(self, code: str, verifier: str, client_id: str, client_secret: str) -> TokenData:
+        resp = requests.post(
+            _TOKEN_URL,
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "code_verifier": verifier,
+                "grant_type": "authorization_code",
+                "redirect_uri": _REDIRECT_URI,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        return TokenData(
+            access_token=data["access_token"],
+            refresh_token=data.get("refresh_token"),
+            expires_at=time.time() + data.get("expires_in", _TOKEN_EXPIRY),
+            token_type=data.get("token_type", "Bearer"),
+            scopes=[_SCOPES],
+            extra={
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+        )
+
+    def refresh(self, token_data: TokenData) -> TokenData:
+        if not token_data.refresh_token:
+            raise ValueError("No refresh token available")
+
+        client_id = token_data.extra.get("client_id", "")
+        client_secret = token_data.extra.get("client_secret", "")
+        if not client_id or not client_secret:
+            raise ValueError("Missing client credentials for token refresh")
+
+        resp = requests.post(
+            _TOKEN_URL,
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": token_data.refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        return TokenData(
+            access_token=data["access_token"],
+            refresh_token=token_data.refresh_token,
+            expires_at=time.time() + data.get("expires_in", _TOKEN_EXPIRY),
+            token_type=data.get("token_type", "Bearer"),
+            scopes=token_data.scopes,
+            extra=token_data.extra,
+        )
+
+    def validate(self, token_data: TokenData) -> bool:
+        try:
+            resp = requests.post(
+                f"{self.config.api_base_url}/v1beta/models/gemini-2.5-flash:generateContent",
+                headers={
+                    "Authorization": f"Bearer {token_data.access_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "contents": [{"parts": [{"text": "ping"}]}],
+                    "generationConfig": {"maxOutputTokens": 1},
+                },
+                timeout=15,
+            )
+            return resp.status_code == 200
+        except requests.RequestException:
+            return False
