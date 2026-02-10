@@ -36,3 +36,21 @@ _TDD_GREEN_PHASE_INSTRUCTIONS = (
     "5. Run tests after implementation to verify all existing tests pass\n"
     "6. If a test fails, fix the implementation — NEVER fix the test\n"
 )
+
+def _resolve_allowed_tools(agent_name: str | None) -> list[str] | None:
+    name_lower = (agent_name or "").lower()
+    if "planner" in name_lower:
+        return PLANNER_TOOLS
+    if "test-writer" in name_lower or "test_writer" in name_lower:
+        return TEST_WRITER_TOOLS
+    return None
+
+def _output_key_for_agent(agent_name: str | None) -> str:
+    name_lower = (agent_name or "").lower()
+    if "planner" in name_lower:
+        return "plan_output"
+    if "test-writer" in name_lower or "test_writer" in name_lower:
+        return "test_writer_output"
+    if "implementer" in name_lower:
+        return "implementer_output"
+    return "agent_output"
