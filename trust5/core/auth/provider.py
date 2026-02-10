@@ -39,3 +39,6 @@ class ProviderConfig:
 class AuthProvider(ABC):
     def __init__(self, config: ProviderConfig):
         self.config = config
+
+    def name(self) -> str:
+        return self.config.name
