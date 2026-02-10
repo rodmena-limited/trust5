@@ -23,3 +23,5 @@ NON_INTERACTIVE_PREFIX = (
     "IMPORTANT: /testbed does NOT exist. NEVER read, write, or cd to /testbed. "
     "All file paths must be relative to the current working directory.\n\n"
 )
+PLANNER_TOOLS = ["Read", "ReadFiles", "Glob", "Grep"]
+TEST_WRITER_TOOLS = ["Read", "ReadFiles", "Write", "Edit", "Glob", "Grep"]
