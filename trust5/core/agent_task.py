@@ -25,3 +25,14 @@ NON_INTERACTIVE_PREFIX = (
 )
 PLANNER_TOOLS = ["Read", "ReadFiles", "Glob", "Grep"]
 TEST_WRITER_TOOLS = ["Read", "ReadFiles", "Write", "Edit", "Glob", "Grep"]
+_STAGE_OUTPUT_KEYS = ("plan_output", "test_writer_output", "implementer_output")
+_TDD_GREEN_PHASE_INSTRUCTIONS = (
+    "## TDD GREEN PHASE (auto-injected)\n\n"
+    "Test files already exist from the RED phase. Your job is to:\n"
+    "1. Read ALL existing test files first (use Glob to find *test* and *spec* files)\n"
+    "2. Write ONLY source/implementation code to make the tests pass\n"
+    "3. Do NOT create new test files — they already exist from the RED phase\n"
+    "4. Do NOT modify existing test files — the tests define the specification\n"
+    "5. Run tests after implementation to verify all existing tests pass\n"
+    "6. If a test fails, fix the implementation — NEVER fix the test\n"
+)
