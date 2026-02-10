@@ -42,3 +42,5 @@ class AuthProvider(ABC):
 
     def name(self) -> str:
         return self.config.name
+
+    def login(self) -> TokenData: ...
