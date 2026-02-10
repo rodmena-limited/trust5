@@ -11,3 +11,8 @@ class TokenData:
     token_type: str = 'Bearer'
     scopes: list[str] = field(default_factory=list)
     extra: dict[str, str] = field(default_factory=dict)
+
+    def is_expired(self) -> bool:
+        if self.expires_at <= 0:
+            return False
+        return time.time() >= self.expires_at
