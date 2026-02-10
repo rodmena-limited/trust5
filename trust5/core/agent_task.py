@@ -105,3 +105,16 @@ def _load_skills(skills: list[str], assets_path: str) -> str:
             except Exception:
                 pass
     return "\n".join(loaded)
+
+def _build_ears_context() -> str:
+    """Build EARS template reference from core/ears.py for the planner."""
+    lines = ["## EARS Requirement Templates (auto-injected)\n"]
+    for tmpl in all_templates():
+        lines.append(f"- **{tmpl.name}**: `{tmpl.template}` — {tmpl.description}")
+    lines.append(
+        "\nUse these patterns for ALL acceptance criteria. Tag each with [UBIQ], [EVENT], [STATE], [UNWNT], or [OPTNL]."
+    )
+    return "\n".join(lines)
+
+class AgentTask(Task):
+    pass
