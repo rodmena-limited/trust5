@@ -81,3 +81,27 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
             except yaml.YAMLError:
                 pass
     return {}, content
+
+def _parse_skills_list(skills_field: str | list[str] | Any) -> list[str]:
+    if isinstance(skills_field, list):
+        return skills_field
+    if isinstance(skills_field, str):
+        return [s.strip() for s in skills_field.split(",") if s.strip()]
+    return []
+
+def _load_skills(skills: list[str], assets_path: str) -> str:
+    loaded = []
+    for skill_name in skills:
+        skill_path = os.path.join(assets_path, "claude", "skills", skill_name, "SKILL.md")
+        if not os.path.exists(skill_path):
+            skill_path = os.path.join(assets_path, "prompts", f"{skill_name}.md")
+
+        if os.path.exists(skill_path):
+            try:
+                with open(skill_path, encoding="utf-8") as f:
+                    content = f.read()
+                _, body = _parse_frontmatter(content)
+                loaded.append(f"--- SKILL: {skill_name} ---\n{body}\n")
+            except Exception:
+                pass
+    return "\n".join(loaded)
