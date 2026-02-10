@@ -43,3 +43,58 @@ def _generate_pkce() -> tuple[str, str]:
 class ClaudeProvider(AuthProvider):
     def __init__(self) -> None:
         super().__init__(CLAUDE_CONFIG)
+
+    def login(self) -> TokenData:
+        verifier, challenge = _generate_pkce()
+        state = secrets.token_urlsafe(32)
+
+        params = {
+            "code": "true",
+            "client_id": _CLIENT_ID,
+            "response_type": "code",
+            "redirect_uri": _REDIRECT_URI,
+            "scope": _SCOPES,
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+        auth_url = f"{_AUTH_URL}?{urlencode(params)}"
+
+        print("\nOpening browser for Claude Max authorization...\n")
+        print(f"If the browser does not open, visit:\n{auth_url}\n")
+        webbrowser.open(auth_url, new=2)
+
+        print("After authorizing, you will see a code in the browser.\nPaste the full response (code#state) below:\n")
+        raw_response = input("Authorization response: ").strip()
+
+        if "#" in raw_response:
+            auth_code, returned_state = raw_response.split("#", 1)
+        else:
+            auth_code = raw_response
+            returned_state = state
+
+        return self._exchange_code(auth_code, returned_state, verifier)
+
+    def _exchange_code(self, code: str, state: str, verifier: str) -> TokenData:
+        resp = requests.post(
+            _TOKEN_URL,
+            json={
+                "code": code,
+                "state": state,
+                "grant_type": "authorization_code",
+                "client_id": _CLIENT_ID,
+                "redirect_uri": _REDIRECT_URI,
+                "code_verifier": verifier,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        return TokenData(
+            access_token=data["access_token"],
+            refresh_token=data.get("refresh_token"),
+            expires_at=time.time() + data.get("expires_in", _TOKEN_EXPIRY),
+            token_type=data.get("token_type", "Bearer"),
+            scopes=[str(s) for s in _SCOPES.split()],
+        )
