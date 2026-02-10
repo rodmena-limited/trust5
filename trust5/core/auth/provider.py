@@ -16,3 +16,8 @@ class TokenData:
         if self.expires_at <= 0:
             return False
         return time.time() >= self.expires_at
+
+    def expires_in_seconds(self) -> float:
+        if self.expires_at <= 0:
+            return float("inf")
+        return max(0.0, self.expires_at - time.time())
