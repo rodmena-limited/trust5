@@ -43,3 +43,15 @@ def _generate_pkce() -> tuple[str, str]:
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     return verifier, challenge
+
+def _load_client_json(path: str) -> tuple[str, str]:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    for key in ("installed", "web"):
+        if key in data:
+            return data[key]["client_id"], data[key]["client_secret"]
+    raise ValueError(f"No 'installed' or 'web' key in {path}")
+
+class GoogleProvider(AuthProvider):
+    def __init__(self) -> None:
+        super().__init__(GOOGLE_CONFIG)
