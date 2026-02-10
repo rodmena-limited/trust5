@@ -35,3 +35,7 @@ class ProviderConfig:
     models: dict[str, str] = field(default_factory=dict)
     thinking_tiers: set[str] = field(default_factory=set)
     fallback_chain: list[str] = field(default_factory=list)
+
+class AuthProvider(ABC):
+    def __init__(self, config: ProviderConfig):
+        self.config = config
