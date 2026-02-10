@@ -3,9 +3,11 @@ import os
 import threading
 import time
 from typing import Any
+
 import yaml
 from stabilize import StageExecution, Task, TaskResult
 from stabilize.errors import TransientError
+
 from ..core.agent import Agent
 from ..core.context_builder import build_project_context
 from ..core.ears import all_templates
@@ -13,7 +15,9 @@ from ..core.lang import LanguageProfile, build_language_context
 from ..core.llm import LLM, LLMError
 from ..core.mcp_manager import mcp_clients
 from ..core.message import M, emit
+
 logger = logging.getLogger(__name__)
+
 NON_INTERACTIVE_PREFIX = (
     "CRITICAL: You are running inside a fully autonomous, non-interactive pipeline. "
     "There is NO human at the terminal. You MUST make all decisions autonomously "
@@ -23,19 +27,13 @@ NON_INTERACTIVE_PREFIX = (
     "IMPORTANT: /testbed does NOT exist. NEVER read, write, or cd to /testbed. "
     "All file paths must be relative to the current working directory.\n\n"
 )
+
 PLANNER_TOOLS = ["Read", "ReadFiles", "Glob", "Grep"]
 TEST_WRITER_TOOLS = ["Read", "ReadFiles", "Write", "Edit", "Glob", "Grep"]
+
+
 _STAGE_OUTPUT_KEYS = ("plan_output", "test_writer_output", "implementer_output")
-_TDD_GREEN_PHASE_INSTRUCTIONS = (
-    "## TDD GREEN PHASE (auto-injected)\n\n"
-    "Test files already exist from the RED phase. Your job is to:\n"
-    "1. Read ALL existing test files first (use Glob to find *test* and *spec* files)\n"
-    "2. Write ONLY source/implementation code to make the tests pass\n"
-    "3. Do NOT create new test files — they already exist from the RED phase\n"
-    "4. Do NOT modify existing test files — the tests define the specification\n"
-    "5. Run tests after implementation to verify all existing tests pass\n"
-    "6. If a test fails, fix the implementation — NEVER fix the test\n"
-)
+
 
 def _resolve_allowed_tools(agent_name: str | None) -> list[str] | None:
     name_lower = (agent_name or "").lower()
@@ -44,6 +42,7 @@ def _resolve_allowed_tools(agent_name: str | None) -> list[str] | None:
     if "test-writer" in name_lower or "test_writer" in name_lower:
         return TEST_WRITER_TOOLS
     return None
+
 
 def _output_key_for_agent(agent_name: str | None) -> str:
     name_lower = (agent_name or "").lower()
@@ -54,6 +53,7 @@ def _output_key_for_agent(agent_name: str | None) -> str:
     if "implementer" in name_lower:
         return "implementer_output"
     return "agent_output"
+
 
 def _collect_ancestor_outputs(context: dict[str, Any]) -> list[str]:
     key_labels = {
@@ -70,6 +70,300 @@ def _collect_ancestor_outputs(context: dict[str, Any]) -> list[str]:
             sections.append(f"## {label}\n\n{value}")
     return sections
 
+
+_TDD_GREEN_PHASE_INSTRUCTIONS = (
+    "## TDD GREEN PHASE (auto-injected)\n\n"
+    "Test files already exist from the RED phase. Your job is to:\n"
+    "1. Read ALL existing test files first (use Glob to find *test* and *spec* files)\n"
+    "2. Write ONLY source/implementation code to make the tests pass\n"
+    "3. Do NOT create new test files — they already exist from the RED phase\n"
+    "4. Do NOT modify existing test files — the tests define the specification\n"
+    "5. Run tests after implementation to verify all existing tests pass\n"
+    "6. If a test fails, fix the implementation — NEVER fix the test\n"
+)
+
+
+class AgentTask(Task):
+    def execute(self, stage: StageExecution) -> TaskResult:
+        start_time = time.monotonic()
+        agent_name: str | None = stage.context.get("agent_name")
+        prompt_file: str | None = stage.context.get("prompt_file")
+        user_input: str = stage.context.get("user_input", "")
+        model_tier: str = stage.context.get("model_tier", "default")
+        max_turns: int = int(stage.context.get("max_turns", 20))
+        non_interactive: bool = bool(stage.context.get("non_interactive", False))
+
+        def _emit_elapsed() -> None:
+            elapsed = time.monotonic() - start_time
+            emit(M.SELP, f"{elapsed:.1f}s")
+
+        ancestor_sections = _collect_ancestor_outputs(stage.context)
+        if ancestor_sections:
+            combined = "\n\n".join(ancestor_sections)
+            user_input = f"{combined}\n\n## Original User Request\n\n{user_input}"
+            logger.debug(
+                "Merged %d ancestor section(s) (%d chars) for %s",
+                len(ancestor_sections),
+                len(combined),
+                agent_name,
+            )
+
+        # Inject acceptance criteria prominently for implementer and test-writer agents
+        plan_config = stage.context.get("plan_config", {})
+        acceptance_criteria = plan_config.get("acceptance_criteria", [])
+        if acceptance_criteria and agent_name:
+            name_lower = agent_name.lower()
+            if any(k in name_lower for k in ("implementer", "test-writer", "test_writer")):
+                numbered = "\n".join(f"  AC-{i+1}. {c}" for i, c in enumerate(acceptance_criteria))
+                criteria_header = (
+                    "## MANDATORY ACCEPTANCE CRITERIA (from SPEC)\n\n"
+                    "You MUST address ALL of the following criteria. "
+                    "Missing criteria = pipeline failure.\n\n"
+                    f"{numbered}\n\n"
+                )
+                if "implementer" in name_lower:
+                    criteria_header += (
+                        "Use the EXACT class/function names from the criteria above. "
+                        "Do NOT rename or substitute them.\n\n"
+                    )
+                elif "test" in name_lower:
+                    criteria_header += (
+                        "Write at least one test per criterion. "
+                        "Name tests test_ac{N}_description for traceability.\n\n"
+                    )
+                user_input = criteria_header + user_input
+
+        owned_files = stage.context.get("owned_files")
+        test_files = stage.context.get("test_files")
+        module_name = stage.context.get("module_name")
+
+        # TDD enforcement: test_writer can write test files,
+        # but implementer/repairer MUST NOT modify them.
+        is_test_writer = agent_name and ("test-writer" in agent_name.lower() or "test_writer" in agent_name.lower())
+        is_implementer_or_repairer = agent_name and (
+            "implementer" in agent_name.lower() or "repairer" in agent_name.lower()
+        )
+
+        effective_owned: list[str] = []
+        denied_for_agent: list[str] = []
+        deny_test_patterns = False
+
+        if is_test_writer:
+            # Test writer: can ONLY write test files, never source files.
+            # Source files are denied to prevent the LLM from creating
+            # implementation stubs (a common TDD anti-pattern).
+            if test_files:
+                effective_owned.extend(test_files)
+            if owned_files:
+                denied_for_agent.extend(owned_files)
+        elif is_implementer_or_repairer:
+            # Implementer/repairer: source files only, test files are DENIED
+            if owned_files:
+                effective_owned.extend(owned_files)
+            if test_files:
+                denied_for_agent.extend(test_files)
+            deny_test_patterns = True
+        else:
+            # Other agents (planner, etc.): combine as before
+            if owned_files:
+                effective_owned.extend(owned_files)
+            if test_files:
+                effective_owned.extend(test_files)
+
+        if effective_owned or denied_for_agent:
+            header = f" ({module_name})" if module_name else ""
+            ownership_lines: list[str] = []
+            if effective_owned:
+                files_list = "\n".join(f"- {f}" for f in effective_owned)
+                ownership_lines.append(
+                    f"## Your Module Files{header}\n\n"
+                    f"You MUST ONLY create/modify these files:\n{files_list}\n\n"
+                    f"Do NOT create, modify, or delete files owned by other modules.\n"
+                    f"If you need functionality from another module, import it — "
+                    f"do not duplicate it.\n\n"
+                )
+            if denied_for_agent:
+                denied_list = "\n".join(f"- {f}" for f in denied_for_agent)
+                ownership_lines.append(
+                    f"## READ-ONLY Test Files{header}\n\n"
+                    f"These test files are READ-ONLY. Do NOT modify or delete them:\n"
+                    f"{denied_list}\n\n"
+                    f"Tests define the specification. Fix the implementation, NEVER the tests.\n\n"
+                )
+            user_input = "".join(ownership_lines) + user_input
+            logger.debug(
+                "Module '%s': %d owned, %d denied file(s)",
+                module_name,
+                len(effective_owned),
+                len(denied_for_agent),
+            )
+
+        if not agent_name or not prompt_file:
+            return TaskResult.terminal(error="AgentTask requires 'agent_name' and 'prompt_file' in context")
+
+        mod_tag = f" ({module_name})" if module_name else ""
+        emit(M.WSTG, f"AgentTask executing: {agent_name}{mod_tag}", label=module_name or "")
+
+        system_prompt = self._load_system_prompt(prompt_file)
+        if system_prompt is None:
+            return TaskResult.terminal(error=f"Prompt file not found: {prompt_file}")
+
+        if non_interactive:
+            system_prompt = NON_INTERACTIVE_PREFIX + system_prompt
+
+        project_root = os.getcwd()
+        project_context = build_project_context(project_root)
+        if project_context:
+            system_prompt += "\n\n" + project_context
+
+        profile_data = stage.context.get("language_profile")
+        if profile_data:
+            try:
+                profile = LanguageProfile(**profile_data)
+                system_prompt += "\n\n" + build_language_context(profile)
+            except (TypeError, KeyError):
+                pass
+
+        if agent_name and "planner" in agent_name.lower():
+            system_prompt += "\n\n" + _build_ears_context()
+
+        if agent_name and "implementer" in agent_name.lower() and stage.context.get("test_first_completed"):
+            system_prompt += "\n\n" + _TDD_GREEN_PHASE_INSTRUCTIONS
+
+        reimpl_count = stage.context.get("reimplementation_count", 0)
+        if agent_name and "implementer" in agent_name.lower() and reimpl_count > 0:
+            failure_summary = stage.context.get("failure_summary", "")
+            reimpl_instructions = (
+                f"## RE-IMPLEMENTATION ATTEMPT {reimpl_count} (auto-injected)\n\n"
+                f"Previous implementation FAILED after multiple repair attempts. "
+                f"You MUST take a COMPLETELY DIFFERENT approach this time.\n\n"
+                f"DO NOT repeat the same implementation strategy. Rewrite from "
+                f"scratch with a different design.\n\n"
+                f"### What failed previously:\n\n{failure_summary}\n"
+            )
+            user_input = reimpl_instructions + "\n\n" + user_input
+
+        cwd_prefix = (
+            f"WORKING DIRECTORY: {project_root}\n"
+            f"All files MUST be created relative to this directory. "
+            f"Use '{project_root}/' as prefix or use relative paths. "
+            f"/testbed does NOT exist.\n\n"
+        )
+        user_input = cwd_prefix + str(user_input)
+
+        allowed_tools = _resolve_allowed_tools(agent_name)
+
+        llm = LLM.for_tier(model_tier, stage_name=agent_name)
+
+        with mcp_clients() as mcp:
+            agent = Agent(
+                name=agent_name,
+                prompt=system_prompt,
+                llm=llm,
+                non_interactive=non_interactive,
+                allowed_tools=allowed_tools,
+                owned_files=effective_owned or None,
+                denied_files=denied_for_agent or None,
+                deny_test_patterns=deny_test_patterns,
+                mcp_clients=mcp,
+            )
+
+            _emit_elapsed()
+            # Start periodic elapsed time updates (every 5 seconds)
+            _elapsed_stop_event = threading.Event()
+
+            def _periodic_elapsed() -> None:
+                while not _elapsed_stop_event.is_set():
+                    _emit_elapsed()
+                    _elapsed_stop_event.wait(5.0)
+
+            _elapsed_thread = threading.Thread(target=_periodic_elapsed, daemon=True)
+            _elapsed_thread.start()
+
+            agent_timeout: float = float(stage.context.get("agent_timeout_seconds", 1800))
+            try:
+                result = agent.run(user_input, max_turns=max_turns, timeout_seconds=agent_timeout)
+                output_key = _output_key_for_agent(agent_name)
+
+                # For critical stages (planner), an empty response is not a
+                # success — raise TransientError so Stabilize retries the task.
+                if not result or not result.strip():
+                    is_planner = agent_name and "planner" in agent_name.lower()
+                    if is_planner:
+                        emit(
+                            M.SWRN,
+                            f"[{agent_name}] Planner returned empty output — "
+                            f"raising TransientError for Stabilize retry",
+                        )
+                        raise TransientError(
+                            f"Planner {agent_name} returned empty output",
+                            retry_after=30.0,
+                        )
+
+                return TaskResult.success(outputs={"result": result, output_key: result})
+            except LLMError as e:
+                emit(M.AERR, f"[{agent_name}] LLM error (retryable={e.retryable}, class={e.error_class}): {e}")
+                if e.retryable or e.is_network_error:
+                    # Inner retry already spent its budget (5 min for connection,
+                    # 3 min for server). Pick a Stabilize-level wait that lets
+                    # external conditions change before we burn another budget.
+                    retry_after: float
+                    if e.error_class == "connection":
+                        retry_after = 120.0  # 2 min — network may need time
+                    elif e.error_class == "rate_limit":
+                        retry_after = max(e.retry_after, 60.0)
+                    else:
+                        retry_after = 60.0  # server errors
+                    raise TransientError(
+                        f"LLM failed for {agent_name}: {e}",
+                        retry_after=retry_after,
+                    )
+                return TaskResult.terminal(error=f"LLM failed: {e}")
+            except Exception as e:
+                emit(M.SERR, f"[{agent_name}] Agent execution failed: {e}")
+                logger.exception("Agent %s failed", agent_name)
+                return TaskResult.terminal(error=f"Agent execution failed: {e}")
+            finally:
+                _elapsed_stop_event.set()
+                _emit_elapsed()
+
+    def _load_system_prompt(self, prompt_file: str) -> str | None:
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        assets_path = os.path.join(base_path, "assets")
+
+        potential_paths = [
+            os.path.join(assets_path, "prompts", prompt_file),
+            os.path.join(assets_path, "claude", "agents", "moai", prompt_file),
+        ]
+
+        agent_def_path = None
+        for p in potential_paths:
+            if os.path.exists(p):
+                agent_def_path = p
+                break
+
+        if not agent_def_path:
+            return None
+
+        try:
+            with open(agent_def_path, encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            logger.error("Error reading prompt file %s: %s", prompt_file, e)
+            return None
+
+        frontmatter, body = _parse_frontmatter(content)
+        system_prompt = body
+
+        skills_list = _parse_skills_list(frontmatter.get("skills", ""))
+        if skills_list:
+            skill_content = _load_skills(skills_list, assets_path)
+            if skill_content:
+                system_prompt += "\n\n" + skill_content
+
+        return system_prompt
+
+
 def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     if content.startswith("---\n"):
         parts = content.split("---\n", 2)
@@ -82,12 +376,14 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
                 pass
     return {}, content
 
+
 def _parse_skills_list(skills_field: str | list[str] | Any) -> list[str]:
     if isinstance(skills_field, list):
         return skills_field
     if isinstance(skills_field, str):
         return [s.strip() for s in skills_field.split(",") if s.strip()]
     return []
+
 
 def _load_skills(skills: list[str], assets_path: str) -> str:
     loaded = []
@@ -106,6 +402,7 @@ def _load_skills(skills: list[str], assets_path: str) -> str:
                 pass
     return "\n".join(loaded)
 
+
 def _build_ears_context() -> str:
     """Build EARS template reference from core/ears.py for the planner."""
     lines = ["## EARS Requirement Templates (auto-injected)\n"]
@@ -115,6 +412,3 @@ def _build_ears_context() -> str:
         "\nUse these patterns for ALL acceptance criteria. Tag each with [UBIQ], [EVENT], [STATE], [UNWNT], or [OPTNL]."
     )
     return "\n".join(lines)
-
-class AgentTask(Task):
-    pass
