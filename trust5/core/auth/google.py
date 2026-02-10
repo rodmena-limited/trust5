@@ -18,3 +18,28 @@ _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _REDIRECT_URI = "http://localhost:8585"
 _SCOPES = "https://www.googleapis.com/auth/generative-language.tuning"
 _TOKEN_EXPIRY = 3600
+GOOGLE_CONFIG = ProviderConfig(
+    name="google",
+    display_name="Google Gemini",
+    api_base_url="https://generativelanguage.googleapis.com",
+    auth_header="Authorization",
+    backend="google",
+    models={
+        "best": "gemini-3-pro-preview",
+        "good": "gemini-3-pro-preview",
+        "fast": "gemini-3-flash-preview",
+        "default": "gemini-3-pro-preview",
+    },
+    thinking_tiers={"best", "good"},
+    fallback_chain=[
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+    ],
+)
+
+def _generate_pkce() -> tuple[str, str]:
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    return verifier, challenge
