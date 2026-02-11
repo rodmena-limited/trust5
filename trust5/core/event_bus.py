@@ -122,3 +122,68 @@ class EventBus:
                 pass
 
         logger.debug("EventBus stopped")
+
+    def publish(self, event: Event) -> None:
+        """Enqueue event to all listeners and broadcast to UDS clients.
+
+        Never blocks. Drops silently if a listener queue is full.
+        Also stores event in replay buffer for new subscribers.
+        """
+        # Store in replay buffer (deque with maxlen auto-evicts oldest)
+        with self._replay_lock:
+            self._replay_buffer.append(event)
+
+        # In-process listeners (lock to prevent race with subscribe/unsubscribe)
+        with self._listeners_lock:
+            for listener in self._listeners:
+                try:
+                    listener.put_nowait(event)
+                except queue.Full:
+                    pass  # drop to protect pipeline throughput
+
+        # UDS clients (best-effort)
+        line = event.to_json() + "\n"
+        data = line.encode("utf-8")
+        dead: list[socket.socket] = []
+
+        with self._clients_lock:
+            for client in self._clients:
+                try:
+                    client.sendall(data)
+                except (OSError, BrokenPipeError):
+                    dead.append(client)
+
+            for client in dead:
+                try:
+                    client.close()
+                except OSError:
+                    pass
+                self._clients.remove(client)
+
+    def subscribe(self) -> queue.Queue[Event | None]:
+        """Create an in-process event queue for a local consumer (e.g. StdoutViewer).
+
+        Returns a queue that receives Events. A None sentinel signals shutdown.
+        Replays recent events from buffer so late subscribers don't miss history.
+        """
+        q: queue.Queue[Event | None] = queue.Queue(maxsize=_MAX_QUEUE)
+
+        # Replay recent events to new subscriber
+        with self._replay_lock:
+            for event in self._replay_buffer:
+                try:
+                    q.put_nowait(event)
+                except queue.Full:
+                    break  # Stop replaying if queue is full
+
+        with self._listeners_lock:
+            self._listeners.append(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue[Event | None]) -> None:
+        """Remove a listener queue to prevent memory leaks."""
+        with self._listeners_lock:
+            try:
+                self._listeners.remove(q)
+            except ValueError:
+                pass
