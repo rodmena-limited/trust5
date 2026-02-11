@@ -99,3 +99,18 @@ class TokenStore:
 
     def _token_path(self) -> Path:
         return self._dir / _TOKEN_FILE
+
+    def _meta_path(self) -> Path:
+        return self._dir / "auth_meta.json"
+
+    def _load_all(self) -> dict[str, dict[str, Any]]:
+        path = self._token_path()
+        if not path.exists():
+            return {}
+        try:
+            decrypted = self._fernet.decrypt(path.read_bytes())
+            result: dict[str, dict[str, Any]] = json.loads(decrypted)
+            return result
+        except (InvalidToken, json.JSONDecodeError):
+            logger.warning("Corrupted token store, starting fresh")
+            return {}
