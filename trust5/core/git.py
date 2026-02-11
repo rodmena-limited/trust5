@@ -22,3 +22,7 @@ htmlcov/
 .env
 .env.local
 """
+
+class GitManager:
+    def __init__(self, project_root: str = "."):
+        self.project_root = project_root
