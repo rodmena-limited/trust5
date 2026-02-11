@@ -1,15 +1,21 @@
 from __future__ import annotations
+
 import json
 import logging
 import stat
 from pathlib import Path
 from typing import Any
+
 from cryptography.fernet import Fernet, InvalidToken  # pyright: ignore[reportMissingImports]
+
 from .provider import AuthProvider, TokenData
+
 logger = logging.getLogger(__name__)
+
 _TRUST5_DIR = ".trust5"
 _KEY_FILE = "auth.key"
 _TOKEN_FILE = "tokens.enc"
+
 
 class TokenStore:
     def __init__(self, base_dir: str | None = None):
@@ -114,3 +120,23 @@ class TokenStore:
         except (InvalidToken, json.JSONDecodeError):
             logger.warning("Corrupted token store, starting fresh")
             return {}
+
+    def _save_all(self, data: dict[str, dict[str, Any]]) -> None:
+        path = self._token_path()
+        encrypted = self._fernet.encrypt(json.dumps(data).encode())
+        path.write_bytes(encrypted)
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    def _load_meta(self) -> dict[str, Any]:
+        path = self._meta_path()
+        if not path.exists():
+            return {}
+        try:
+            result: dict[str, Any] = json.loads(path.read_text())
+            return result
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_meta(self, data: dict[str, Any]) -> None:
+        path = self._meta_path()
+        path.write_text(json.dumps(data))
