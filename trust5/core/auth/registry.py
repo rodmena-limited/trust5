@@ -10,3 +10,5 @@ _PROVIDERS: dict[str, Callable[[], AuthProvider]] = {
     "claude": ClaudeProvider,
     "google": GoogleProvider,
 }
+_store_instance: TokenStore | None = None
+_provider_override: str | None = None
