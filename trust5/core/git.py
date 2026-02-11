@@ -26,3 +26,16 @@ htmlcov/
 class GitManager:
     def __init__(self, project_root: str = "."):
         self.project_root = project_root
+
+    def _run_git(self, args: list[str]) -> str:
+        try:
+            result = subprocess.run(
+                ["git"] + args,
+                cwd=self.project_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Git command failed: git {' '.join(args)}\nError: {e.stderr}")
