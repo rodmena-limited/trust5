@@ -54,3 +54,13 @@ class Requirement:
     id: str
     description: str
     acceptance_criteria: list[str] = field(default_factory=list)
+
+    def format(self) -> str:
+        return f"[{self.id}] {self.description} (Type: {self.type.value})"
+
+    def validate(self) -> str | None:
+        if not self.id:
+            return "requirement ID cannot be empty"
+        if not self.description:
+            return "requirement description cannot be empty"
+        return None
