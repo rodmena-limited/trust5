@@ -1,8 +1,22 @@
 import glob
 import os
 from typing import Any
+
 MAX_FILE_CONTENT = 6000
 MAX_TOTAL_CONTEXT = 30000
+
+
+def _read_file_safe(path: str, max_len: int = MAX_FILE_CONTENT) -> str:
+    try:
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        if len(content) > max_len:
+            return content[:max_len] + f"\n... [{len(content) - max_len} chars truncated]"
+        return content
+    except Exception as e:
+        return f"[Error reading {path}: {e}]"
+
+
 _FALLBACK_EXTENSIONS = (".py", ".go", ".ts", ".js", ".rs", ".java", ".rb")
 _FALLBACK_SKIP_DIRS = (
     ".moai",
@@ -18,15 +32,6 @@ _FALLBACK_SKIP_DIRS = (
     "build",
 )
 
-def _read_file_safe(path: str, max_len: int = MAX_FILE_CONTENT) -> str:
-    try:
-        with open(path, encoding="utf-8") as f:
-            content = f.read()
-        if len(content) > max_len:
-            return content[:max_len] + f"\n... [{len(content) - max_len} chars truncated]"
-        return content
-    except Exception as e:
-        return f"[Error reading {path}: {e}]"
 
 def _find_source_files(
     project_root: str,
@@ -37,6 +42,7 @@ def _find_source_files(
         pattern = f"**/*{ext}"
         found.extend(glob.glob(os.path.join(project_root, pattern), recursive=True))
     return sorted(set(found))
+
 
 def build_spec_context(spec_id: str, project_root: str) -> str:
     spec_dir = os.path.join(project_root, ".moai", "specs", spec_id)
@@ -49,6 +55,7 @@ def build_spec_context(spec_id: str, project_root: str) -> str:
     if not parts:
         return f"(No SPEC files found for {spec_id})"
     return "\n\n".join(parts)
+
 
 def build_implementation_prompt(
     spec_id: str,
@@ -79,6 +86,7 @@ IMPLEMENTATION RULES:
 9. Every public function must have at least one test.
 10. Handle edge cases that the acceptance criteria describe.
 """
+
 
 def _detect_project_layout(project_root: str, language_profile: dict[str, Any]) -> str:
     """Detect project source layout and return a hint for the repair prompt."""
@@ -111,6 +119,7 @@ def _detect_project_layout(project_root: str, language_profile: dict[str, Any]) 
                 )
             return "\n".join(lines)
     return ""
+
 
 def build_repair_prompt(
     test_output: str,
@@ -210,6 +219,7 @@ REPAIR RULES:
 9. STOP IMMEDIATELY after all tests pass — return your summary.
 """
 
+
 def build_project_context(project_root: str) -> str:
     parts = []
     docs_pattern = os.path.join(project_root, ".moai", "project", "*.md")
@@ -222,3 +232,20 @@ def build_project_context(project_root: str) -> str:
         except Exception:
             pass
     return "\n\n".join(parts)
+
+
+def discover_latest_spec(project_root: str) -> str | None:
+    specs_dir = os.path.join(project_root, ".moai", "specs")
+    if not os.path.isdir(specs_dir):
+        return None
+
+    subdirs = [d for d in os.listdir(specs_dir) if os.path.isdir(os.path.join(specs_dir, d))]
+    if not subdirs:
+        return None
+
+    sorted_dirs = sorted(
+        subdirs,
+        key=lambda d: os.path.getmtime(os.path.join(specs_dir, d)),
+        reverse=True,
+    )
+    return sorted_dirs[0]
