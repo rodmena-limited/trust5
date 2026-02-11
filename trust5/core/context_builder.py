@@ -37,3 +37,15 @@ def _find_source_files(
         pattern = f"**/*{ext}"
         found.extend(glob.glob(os.path.join(project_root, pattern), recursive=True))
     return sorted(set(found))
+
+def build_spec_context(spec_id: str, project_root: str) -> str:
+    spec_dir = os.path.join(project_root, ".moai", "specs", spec_id)
+    parts = []
+    for fname in ["spec.md", "plan.md", "acceptance.md"]:
+        fpath = os.path.join(spec_dir, fname)
+        if os.path.exists(fpath):
+            content = _read_file_safe(fpath)
+            parts.append(f"--- {fname} ---\n{content}")
+    if not parts:
+        return f"(No SPEC files found for {spec_id})"
+    return "\n\n".join(parts)
