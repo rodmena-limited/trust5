@@ -27,3 +27,13 @@ def _read_file_safe(path: str, max_len: int = MAX_FILE_CONTENT) -> str:
         return content
     except Exception as e:
         return f"[Error reading {path}: {e}]"
+
+def _find_source_files(
+    project_root: str,
+    extensions: tuple[str, ...] = _FALLBACK_EXTENSIONS,
+) -> list[str]:
+    found = []
+    for ext in extensions:
+        pattern = f"**/*{ext}"
+        found.extend(glob.glob(os.path.join(project_root, pattern), recursive=True))
+    return sorted(set(found))
