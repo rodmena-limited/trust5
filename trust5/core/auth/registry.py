@@ -26,3 +26,13 @@ def set_provider_override(name: str | None) -> None:
 
 def register_provider(name: str, factory: Callable[[], AuthProvider]) -> None:
     _PROVIDERS[name] = factory
+
+def list_providers() -> list[str]:
+    return list(_PROVIDERS.keys())
+
+def get_provider(name: str) -> AuthProvider:
+    cls = _PROVIDERS.get(name)
+    if cls is None:
+        available = ", ".join(_PROVIDERS.keys())
+        raise ValueError(f"Unknown provider '{name}'. Available: {available}")
+    return cls()
