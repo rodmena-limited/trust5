@@ -40,3 +40,17 @@ class RequirementType(StrEnum):
     UNWANTED = 'unwanted_behavior'
     STATE_DRIVEN = 'state_driven'
     OPTIONAL = 'optional'
+
+@dataclass(frozen=True)
+class EARSTemplate:
+    type: RequirementType
+    name: str
+    template: str
+    description: str
+
+@dataclass
+class Requirement:
+    type: RequirementType
+    id: str
+    description: str
+    acceptance_criteria: list[str] = field(default_factory=list)
