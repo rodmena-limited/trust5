@@ -56,3 +56,21 @@ class GitManager:
 
     def create_worktree(self, branch_name: str, path: str) -> None:
         self._run_git(["worktree", "add", "-b", branch_name, path])
+
+    def list_worktrees(self) -> list[dict[str, str]]:
+        output = self._run_git(["worktree", "list", "--porcelain"])
+        trees = []
+        current: dict[str, str] = {}
+        for line in output.splitlines():
+            if not line:
+                if current:
+                    trees.append(current)
+                    current = {}
+                continue
+
+            key, _, value = line.partition(" ")
+            current[key] = value
+
+        if current:
+            trees.append(current)
+        return trees
