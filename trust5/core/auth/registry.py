@@ -36,3 +36,16 @@ def get_provider(name: str) -> AuthProvider:
         available = ", ".join(_PROVIDERS.keys())
         raise ValueError(f"Unknown provider '{name}'. Available: {available}")
     return cls()
+
+def get_provider_config(name: str) -> ProviderConfig:
+    return get_provider(name).config
+
+def get_active_provider() -> AuthProvider | None:
+    store = _get_store()
+    active = store.get_active()
+    if active is None:
+        return None
+    try:
+        return get_provider(active)
+    except ValueError:
+        return None
