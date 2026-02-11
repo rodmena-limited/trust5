@@ -64,3 +64,18 @@ class Requirement:
         if not self.description:
             return "requirement description cannot be empty"
         return None
+
+class RequirementSet:
+    def __init__(self) -> None:
+        self._requirements: list[Requirement] = []
+        self._index: dict[str, int] = {}
+
+    def add(self, req: Requirement) -> str | None:
+        err = req.validate()
+        if err:
+            return err
+        if req.id in self._index:
+            return f"duplicate ID: {req.id}"
+        self._index[req.id] = len(self._requirements)
+        self._requirements.append(req)
+        return None
