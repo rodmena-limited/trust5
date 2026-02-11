@@ -86,3 +86,9 @@ class RequirementSet:
 
     def filter_by_type(self, rt: RequirementType) -> list[Requirement]:
         return [r for r in self._requirements if r.type == rt]
+
+    def all(self) -> list[Requirement]:
+        return list(self._requirements)
+
+    def __len__(self) -> int:
+        return len(self._requirements)
