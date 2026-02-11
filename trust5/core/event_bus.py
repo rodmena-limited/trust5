@@ -19,3 +19,21 @@ _SENTINEL: Event | None = None
 _MAX_QUEUE = 10_000
 _REPLAY_BUFFER_SIZE = 100  # Keep last N events for replay to new subscribers
 _bus: EventBus | None = None
+_bus_lock = threading.Lock()
+
+@dataclass(frozen=True)
+class Event:
+    """Immutable event emitted by the pipeline."""
+    kind: str
+    code: str
+    ts: str
+    msg: str = ''
+    label: str = ''
+
+    def to_json(self) -> str:
+        d: dict[str, str] = {"k": self.kind, "c": self.code, "t": self.ts}
+        if self.msg:
+            d["m"] = self.msg
+        if self.label:
+            d["l"] = self.label
+        return json.dumps(d, ensure_ascii=False)
