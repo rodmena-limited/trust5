@@ -1,4 +1,18 @@
+"""IPC Event Bus for trust5.
+
+Decouples the core pipeline from rendering via a non-blocking event bus.
+Events are published to:
+  1. In-process listener queues (for the built-in StdoutViewer).
+  2. Connected Unix Domain Socket clients (for external TUI / watchers).
+
+Design principles:
+  - publish() NEVER blocks the pipeline (fire-and-forget).
+  - Viewer crash does NOT affect the core process.
+  - Socket path: <project>/.trust5/events.sock
+"""
+
 from __future__ import annotations
+
 import collections
 import json
 import logging
@@ -7,7 +21,12 @@ import queue
 import socket
 import threading
 from dataclasses import dataclass
+
 logger = logging.getLogger(__name__)
+
+# ── Event data model ─────────────────────────────────────────────────
+
+# Event kinds (short keys for wire efficiency during streaming)
 K_MSG = "msg"  # single-line message
 K_BLOCK_START = "bs"  # block start (label)
 K_BLOCK_LINE = "bl"  # block line (content)
@@ -15,20 +34,17 @@ K_BLOCK_END = "be"  # block end
 K_STREAM_START = "ss"  # stream start (label)
 K_STREAM_TOKEN = "st"  # stream token
 K_STREAM_END = "se"  # stream end
-_SENTINEL: Event | None = None
-_MAX_QUEUE = 10_000
-_REPLAY_BUFFER_SIZE = 100  # Keep last N events for replay to new subscribers
-_bus: EventBus | None = None
-_bus_lock = threading.Lock()
+
 
 @dataclass(frozen=True)
 class Event:
     """Immutable event emitted by the pipeline."""
-    kind: str
-    code: str
-    ts: str
-    msg: str = ''
-    label: str = ''
+
+    kind: str  # K_MSG, K_BLOCK_START, etc.
+    code: str  # M enum value (VRUN, QPAS, ...)
+    ts: str  # HH:MM:SS
+    msg: str = ""  # message text / token
+    label: str = ""  # for block_start / stream_start
 
     def to_json(self) -> str:
         d: dict[str, str] = {"k": self.kind, "c": self.code, "t": self.ts}
@@ -38,8 +54,20 @@ class Event:
             d["l"] = self.label
         return json.dumps(d, ensure_ascii=False)
 
+
+# Sentinel to signal listener shutdown
+_SENTINEL: Event | None = None
+
+
+# ── EventBus ─────────────────────────────────────────────────────────
+
+_MAX_QUEUE = 10_000
+_REPLAY_BUFFER_SIZE = 100  # Keep last N events for replay to new subscribers
+
+
 class EventBus:
     """Non-blocking event bus with UDS broadcast and event replay."""
+
     def __init__(self, sock_path: str) -> None:
         self._sock_path = sock_path
         self._listeners: list[queue.Queue[Event | None]] = []
@@ -52,6 +80,8 @@ class EventBus:
         # Circular buffer for event replay (deque is O(1) for append/popleft)
         self._replay_buffer: collections.deque[Event] = collections.deque(maxlen=_REPLAY_BUFFER_SIZE)
         self._replay_lock = threading.Lock()
+
+    # ── lifecycle ─────────────────────────────────────────────────
 
     def start(self) -> None:
         """Start the UDS accept loop in a daemon thread."""
@@ -123,6 +153,8 @@ class EventBus:
 
         logger.debug("EventBus stopped")
 
+    # ── publish (fire-and-forget) ─────────────────────────────────
+
     def publish(self, event: Event) -> None:
         """Enqueue event to all listeners and broadcast to UDS clients.
 
@@ -160,6 +192,8 @@ class EventBus:
                     pass
                 self._clients.remove(client)
 
+    # ── in-process subscription ───────────────────────────────────
+
     def subscribe(self) -> queue.Queue[Event | None]:
         """Create an in-process event queue for a local consumer (e.g. StdoutViewer).
 
@@ -187,3 +221,52 @@ class EventBus:
                 self._listeners.remove(q)
             except ValueError:
                 pass
+
+    # ── UDS accept loop ───────────────────────────────────────────
+
+    def _accept_loop(self) -> None:
+        while self._running and self._server_sock is not None:
+            try:
+                conn, _ = self._server_sock.accept()
+                conn.setblocking(True)
+                with self._clients_lock:
+                    self._clients.append(conn)
+                logger.debug("EventBus: new client connected")
+            except TimeoutError:
+                continue
+            except OSError:
+                if self._running:
+                    logger.debug("EventBus accept error (shutting down?)")
+                break
+
+
+# ── Module-level singleton ────────────────────────────────────────────
+
+_bus: EventBus | None = None
+_bus_lock = threading.Lock()
+
+
+def init_bus(project_root: str) -> EventBus:
+    """Initialize the module-level EventBus singleton and start it."""
+    global _bus
+    with _bus_lock:
+        if _bus is not None:
+            return _bus
+        sock_path = os.path.join(project_root, ".trust5", "events.sock")
+        _bus = EventBus(sock_path)
+        _bus.start()
+        return _bus
+
+
+def get_bus() -> EventBus | None:
+    """Return the current EventBus, or None if not initialized."""
+    return _bus
+
+
+def shutdown_bus() -> None:
+    """Stop and clear the module-level EventBus."""
+    global _bus
+    with _bus_lock:
+        if _bus is not None:
+            _bus.stop()
+            _bus = None
