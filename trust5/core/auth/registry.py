@@ -12,3 +12,10 @@ _PROVIDERS: dict[str, Callable[[], AuthProvider]] = {
 }
 _store_instance: TokenStore | None = None
 _provider_override: str | None = None
+DEFAULT_PROVIDER = "claude"
+
+def _get_store() -> TokenStore:
+    global _store_instance
+    if _store_instance is None:
+        _store_instance = TokenStore()
+    return _store_instance
