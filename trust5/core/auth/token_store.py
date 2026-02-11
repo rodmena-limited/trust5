@@ -54,3 +54,14 @@ class TokenStore:
             scopes=list(data.get("scopes", [])),
             extra=dict(data.get("extra", {})),
         )
+
+    def delete(self, provider_name: str) -> bool:
+        all_tokens = self._load_all()
+        if provider_name not in all_tokens:
+            return False
+        del all_tokens[provider_name]
+        self._save_all(all_tokens)
+        return True
+
+    def list_providers(self) -> list[str]:
+        return list(self._load_all().keys())
