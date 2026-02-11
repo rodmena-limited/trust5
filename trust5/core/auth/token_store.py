@@ -65,3 +65,30 @@ class TokenStore:
 
     def list_providers(self) -> list[str]:
         return list(self._load_all().keys())
+
+    def get_valid_token(self, provider_name: str, provider: AuthProvider) -> TokenData | None:
+        token_data = self.load(provider_name)
+        if token_data is None:
+            return None
+
+        if token_data.should_refresh:
+            try:
+                token_data = provider.refresh(token_data)
+                self.save(provider_name, token_data)
+                logger.info("Token refreshed for provider %s", provider_name)
+            except Exception:
+                logger.warning(
+                    "Token refresh failed for %s, using existing token",
+                    provider_name,
+                )
+
+        if token_data.is_expired:
+            logger.warning("Token expired for %s", provider_name)
+            return None
+
+        return token_data
+
+    def set_active(self, provider_name: str) -> None:
+        meta = self._load_meta()
+        meta["active_provider"] = provider_name
+        self._save_meta(meta)
