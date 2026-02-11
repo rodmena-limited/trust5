@@ -16,3 +16,6 @@ K_STREAM_START = "ss"  # stream start (label)
 K_STREAM_TOKEN = "st"  # stream token
 K_STREAM_END = "se"  # stream end
 _SENTINEL: Event | None = None
+_MAX_QUEUE = 10_000
+_REPLAY_BUFFER_SIZE = 100  # Keep last N events for replay to new subscribers
+_bus: EventBus | None = None
