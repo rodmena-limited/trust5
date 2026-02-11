@@ -79,3 +79,10 @@ class RequirementSet:
         self._index[req.id] = len(self._requirements)
         self._requirements.append(req)
         return None
+
+    def get(self, req_id: str) -> Requirement | None:
+        idx = self._index.get(req_id)
+        return self._requirements[idx] if idx is not None else None
+
+    def filter_by_type(self, rt: RequirementType) -> list[Requirement]:
+        return [r for r in self._requirements if r.type == rt]
