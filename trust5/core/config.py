@@ -105,3 +105,39 @@ class LanguageConfig(BaseModel):
 
 class WorkflowConfig(BaseModel):
     team: dict[str, Any] = Field(default_factory=lambda: {'enabled': False})
+
+class MoaiConfig(BaseModel):
+    quality: QualityConfig = Field(default_factory=QualityConfig)
+    git: GitStrategyConfig = Field(default_factory=GitStrategyConfig)
+    language: LanguageConfig = Field(default_factory=LanguageConfig)
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+
+class ConfigManager:
+    def __init__(self, project_root: str = "."):
+        self.project_root = project_root
+        self.config_dir = os.path.join(project_root, ".moai", "config")
+        self.sections_dir = os.path.join(self.config_dir, "sections")
+        self.config = MoaiConfig()
+
+    def load_config(self) -> MoaiConfig:
+        quality_path = os.path.join(self.sections_dir, "quality.yaml")
+        git_path = os.path.join(self.sections_dir, "git-strategy.yaml")
+        lang_path = os.path.join(self.sections_dir, "language.yaml")
+        workflow_path = os.path.join(self.sections_dir, "workflow.yaml")
+
+        quality_data = self._unwrap(self._load_yaml(quality_path), "quality")
+        git_data = self._unwrap(self._load_yaml(git_path), "git_strategy")
+        lang_data = self._unwrap(self._load_yaml(lang_path), "language")
+        workflow_data = self._unwrap(self._load_yaml(workflow_path), "workflow")
+
+        if quality_data:
+            quality_data = self._flatten_lsp_gates(quality_data)
+            self.config.quality = QualityConfig(**quality_data)
+        if git_data:
+            self.config.git = GitStrategyConfig(**git_data)
+        if lang_data:
+            self.config.language = LanguageConfig(**lang_data)
+        if workflow_data:
+            self.config.workflow = WorkflowConfig(**workflow_data)
+
+        return self.config
