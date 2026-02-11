@@ -92,3 +92,10 @@ class TokenStore:
         meta = self._load_meta()
         meta["active_provider"] = provider_name
         self._save_meta(meta)
+
+    def get_active(self) -> str | None:
+        meta = self._load_meta()
+        return meta.get("active_provider")
+
+    def _token_path(self) -> Path:
+        return self._dir / _TOKEN_FILE
