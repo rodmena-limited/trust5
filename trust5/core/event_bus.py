@@ -13,3 +13,6 @@ K_BLOCK_START = "bs"  # block start (label)
 K_BLOCK_LINE = "bl"  # block line (content)
 K_BLOCK_END = "be"  # block end
 K_STREAM_START = "ss"  # stream start (label)
+K_STREAM_TOKEN = "st"  # stream token
+K_STREAM_END = "se"  # stream end
+_SENTINEL: Event | None = None
