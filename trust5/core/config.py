@@ -53,3 +53,39 @@ class TestQuality(BaseModel):
     meaningful_assertions: bool = True
     avoid_implementation_coupling: bool = True
     mutation_testing_enabled: bool = False
+
+class SimplicityPrinciple(BaseModel):
+    max_parallel_tasks: int = 5
+
+class ReportGeneration(BaseModel):
+    enabled: bool = True
+    auto_create: bool = True
+
+class QualityConfig(BaseModel):
+    development_mode: str = 'hybrid'
+    coverage_threshold: float = 80.0
+    pass_score_threshold: float = 0.7
+    max_errors: int = 0
+    max_type_errors: int = 0
+    max_lint_errors: int = 0
+    max_warnings: int = 10
+    max_security_warnings: int = 0
+    max_quality_repairs: int = 3
+    max_file_lines: int = 500
+    enforce_quality: bool = True
+    spec_compliance_threshold: float = 0.7
+    spec_compliance_enabled: bool = True
+    plan_lint_command: str | None = None
+    plan_test_command: str | None = None
+    plan_coverage_command: str | None = None
+    plan_gate: PlanGateConfig = Field(default_factory=PlanGateConfig)
+    run_gate: RunGateConfig = Field(default_factory=RunGateConfig)
+    sync_gate: SyncGateConfig = Field(default_factory=SyncGateConfig)
+    regression: RegressionConfig = Field(default_factory=RegressionConfig)
+    ddd: DDDConfig = Field(default_factory=DDDConfig)
+    tdd: TDDConfig = Field(default_factory=TDDConfig)
+    hybrid: HybridConfig = Field(default_factory=HybridConfig)
+    coverage_exemptions: CoverageExemptions = Field(default_factory=CoverageExemptions)
+    test_quality: TestQuality = Field(default_factory=TestQuality)
+    simplicity: SimplicityPrinciple = Field(default_factory=SimplicityPrinciple)
+    report_generation: ReportGeneration = Field(default_factory=ReportGeneration)
