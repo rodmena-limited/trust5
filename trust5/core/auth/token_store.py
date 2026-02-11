@@ -8,3 +8,5 @@ from cryptography.fernet import Fernet, InvalidToken  # pyright: ignore[reportMi
 from .provider import AuthProvider, TokenData
 logger = logging.getLogger(__name__)
 _TRUST5_DIR = ".trust5"
+_KEY_FILE = "auth.key"
+_TOKEN_FILE = "tokens.enc"
