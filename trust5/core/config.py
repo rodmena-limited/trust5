@@ -89,3 +89,19 @@ class QualityConfig(BaseModel):
     test_quality: TestQuality = Field(default_factory=TestQuality)
     simplicity: SimplicityPrinciple = Field(default_factory=SimplicityPrinciple)
     report_generation: ReportGeneration = Field(default_factory=ReportGeneration)
+
+class GitStrategyConfig(BaseModel):
+    auto_branch: bool = True
+    branch_prefix: str = 'feature/'
+    spec_git_workflow: str = 'main_direct'
+    team: dict[str, Any] = Field(default_factory=lambda: {'enabled': False})
+
+class LanguageConfig(BaseModel):
+    conversation_language: str = 'en'
+    code_comments: str = 'en'
+    language: str = 'auto'
+    test_framework: str = 'auto'
+    lsp_command: list[str] = Field(default_factory=list)
+
+class WorkflowConfig(BaseModel):
+    team: dict[str, Any] = Field(default_factory=lambda: {'enabled': False})
