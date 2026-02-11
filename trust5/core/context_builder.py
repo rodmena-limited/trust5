@@ -79,3 +79,35 @@ IMPLEMENTATION RULES:
 9. Every public function must have at least one test.
 10. Handle edge cases that the acceptance criteria describe.
 """
+
+def _detect_project_layout(project_root: str, language_profile: dict[str, Any]) -> str:
+    """Detect project source layout and return a hint for the repair prompt."""
+    source_roots = language_profile.get("source_roots", ())
+    path_var = language_profile.get("path_env_var", "")
+    manifest_files = language_profile.get("manifest_files", ())
+    if not source_roots:
+        return ""
+
+    for root in source_roots:
+        src_dir = os.path.join(project_root, root)
+        if os.path.isdir(src_dir):
+            lines = [
+                f"PROJECT LAYOUT: Source code is in the '{root}/' subdirectory.",
+            ]
+            if path_var:
+                lines.append(f"The test runner sets {path_var}={root} automatically.")
+            # Check for missing manifest/package config
+            has_manifest = (
+                any(os.path.exists(os.path.join(project_root, mf)) for mf in manifest_files)
+                if manifest_files
+                else False
+            )
+            if not has_manifest:
+                manifest_names = ", ".join(manifest_files) if manifest_files else "manifest file"
+                lines.append(
+                    f"WARNING: No package configuration found ({manifest_names}). "
+                    f"If imports fail, the project may need a manifest file that "
+                    f"configures the test runner to find modules in '{root}/'."
+                )
+            return "\n".join(lines)
+    return ""
