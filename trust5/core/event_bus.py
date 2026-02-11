@@ -37,3 +37,88 @@ class Event:
         if self.label:
             d["l"] = self.label
         return json.dumps(d, ensure_ascii=False)
+
+class EventBus:
+    """Non-blocking event bus with UDS broadcast and event replay."""
+    def __init__(self, sock_path: str) -> None:
+        self._sock_path = sock_path
+        self._listeners: list[queue.Queue[Event | None]] = []
+        self._listeners_lock = threading.Lock()
+        self._clients: list[socket.socket] = []
+        self._clients_lock = threading.Lock()
+        self._server_sock: socket.socket | None = None
+        self._accept_thread: threading.Thread | None = None
+        self._running = False
+        # Circular buffer for event replay (deque is O(1) for append/popleft)
+        self._replay_buffer: collections.deque[Event] = collections.deque(maxlen=_REPLAY_BUFFER_SIZE)
+        self._replay_lock = threading.Lock()
+
+    def start(self) -> None:
+        """Start the UDS accept loop in a daemon thread."""
+        if self._running:
+            return
+        self._running = True
+
+        # Clean up stale socket
+        if os.path.exists(self._sock_path):
+            try:
+                os.unlink(self._sock_path)
+            except OSError:
+                pass
+
+        # Ensure parent directory exists
+        sock_dir = os.path.dirname(self._sock_path)
+        if sock_dir:
+            os.makedirs(sock_dir, exist_ok=True)
+
+        self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server_sock.bind(self._sock_path)
+        # Restrict socket to owner only (prevent other local users from reading events)
+        os.chmod(self._sock_path, 0o600)
+        self._server_sock.listen(5)
+        self._server_sock.settimeout(1.0)  # allows periodic shutdown check
+
+        self._accept_thread = threading.Thread(target=self._accept_loop, name="event-bus-accept", daemon=True)
+        self._accept_thread.start()
+        logger.debug("EventBus started on %s", self._sock_path)
+
+    def stop(self) -> None:
+        """Shutdown: close all clients, close server socket, signal listeners."""
+        if not self._running:
+            return
+        self._running = False
+
+        # Signal all in-process listeners to stop
+        with self._listeners_lock:
+            for listener in self._listeners:
+                try:
+                    listener.put(_SENTINEL, timeout=5.0)
+                except queue.Full:
+                    pass
+
+        # Close UDS clients
+        with self._clients_lock:
+            for client in self._clients:
+                try:
+                    client.close()
+                except OSError:
+                    pass
+            self._clients.clear()
+
+        # Close server socket
+        if self._server_sock is not None:
+            try:
+                self._server_sock.close()
+            except OSError:
+                pass
+            self._server_sock = None
+
+        # Clean up socket file
+        if os.path.exists(self._sock_path):
+            try:
+                os.unlink(self._sock_path)
+            except OSError:
+                pass
+
+        logger.debug("EventBus stopped")
