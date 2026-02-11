@@ -35,3 +35,21 @@ class TDDConfig(BaseModel):
     require_test_first: bool = True
     red_green_refactor: bool = True
     mutation_testing_enabled: bool = False
+
+class HybridConfig(BaseModel):
+    new_features: str = 'tdd'
+    legacy_refactoring: str = 'ddd'
+    min_coverage_new: int = 90
+    min_coverage_legacy: int = 85
+    preserve_refactoring: bool = True
+
+class CoverageExemptions(BaseModel):
+    enabled: bool = False
+    require_justification: bool = True
+    max_exempt_percentage: int = 20
+
+class TestQuality(BaseModel):
+    specification_based: bool = True
+    meaningful_assertions: bool = True
+    avoid_implementation_coupling: bool = True
+    mutation_testing_enabled: bool = False
