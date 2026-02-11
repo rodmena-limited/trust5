@@ -77,3 +77,7 @@ class GitManager:
 
     def remove_worktree(self, path: str) -> None:
         self._run_git(["worktree", "remove", path])
+
+    def commit(self, message: str, files: list[str] = ["."]) -> None:
+        self._run_git(["add"] + files)
+        self._run_git(["commit", "-m", message])
