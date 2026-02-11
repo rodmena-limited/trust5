@@ -209,3 +209,16 @@ REPAIR RULES:
 8. If dependencies are missing, use the project's virtual environment to install them.
 9. STOP IMMEDIATELY after all tests pass — return your summary.
 """
+
+def build_project_context(project_root: str) -> str:
+    parts = []
+    docs_pattern = os.path.join(project_root, ".moai", "project", "*.md")
+    for file_path in glob.glob(docs_pattern):
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                filename = os.path.basename(file_path)
+                content = f.read()
+                parts.append(f"--- PROJECT: {filename} ---\n{content}")
+        except Exception:
+            pass
+    return "\n\n".join(parts)
