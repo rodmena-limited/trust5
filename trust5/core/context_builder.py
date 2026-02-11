@@ -17,3 +17,13 @@ _FALLBACK_SKIP_DIRS = (
     "dist",
     "build",
 )
+
+def _read_file_safe(path: str, max_len: int = MAX_FILE_CONTENT) -> str:
+    try:
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        if len(content) > max_len:
+            return content[:max_len] + f"\n... [{len(content) - max_len} chars truncated]"
+        return content
+    except Exception as e:
+        return f"[Error reading {path}: {e}]"
