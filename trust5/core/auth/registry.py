@@ -19,3 +19,10 @@ def _get_store() -> TokenStore:
     if _store_instance is None:
         _store_instance = TokenStore()
     return _store_instance
+
+def set_provider_override(name: str | None) -> None:
+    global _provider_override
+    _provider_override = name
+
+def register_provider(name: str, factory: Callable[[], AuthProvider]) -> None:
+    _PROVIDERS[name] = factory
