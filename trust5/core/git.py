@@ -53,3 +53,6 @@ class GitManager:
         if is_new:
             self._run_git(["add", "."])
             self._run_git(["commit", "-m", "chore: initial commit"])
+
+    def create_worktree(self, branch_name: str, path: str) -> None:
+        self._run_git(["worktree", "add", "-b", branch_name, path])
