@@ -74,3 +74,6 @@ class GitManager:
         if current:
             trees.append(current)
         return trees
+
+    def remove_worktree(self, path: str) -> None:
+        self._run_git(["worktree", "remove", path])
