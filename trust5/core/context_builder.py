@@ -49,3 +49,33 @@ def build_spec_context(spec_id: str, project_root: str) -> str:
     if not parts:
         return f"(No SPEC files found for {spec_id})"
     return "\n\n".join(parts)
+
+def build_implementation_prompt(
+    spec_id: str,
+    project_root: str,
+    language_profile: dict[str, Any] | None = None,
+) -> str:
+    spec_content = build_spec_context(spec_id, project_root)
+    lp = language_profile or {}
+    verify_cmd = lp.get("test_verify_command", "the project's test command")
+
+    return f"""You are implementing {spec_id}.
+
+Below is the full SPEC content. Read it carefully and then IMPLEMENT the code.
+
+{spec_content}
+
+---
+
+IMPLEMENTATION RULES:
+1. Use the Write tool to create ALL source code files.
+2. Create complete, production-quality, working code with proper error handling.
+3. Create comprehensive tests alongside source code using the project's test framework.
+4. After writing all files, run: {verify_cmd} to verify tests pass.
+5. If any tests fail, read the failure output, fix the code, and re-run until ALL tests pass.
+6. Use Glob to verify all files exist on disk.
+7. Do NOT ask any questions. Implement with sensible defaults.
+8. Do NOT use AskUserQuestion.
+9. Every public function must have at least one test.
+10. Handle edge cases that the acceptance criteria describe.
+"""
