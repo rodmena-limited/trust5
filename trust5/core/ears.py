@@ -1,6 +1,27 @@
+"""EARS (Easy Approach to Requirements Syntax) patterns for planning phase."""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import StrEnum
+
+
+class RequirementType(StrEnum):
+    UBIQUITOUS = "ubiquitous"
+    EVENT_DRIVEN = "event_driven"
+    UNWANTED = "unwanted_behavior"
+    STATE_DRIVEN = "state_driven"
+    OPTIONAL = "optional"
+
+
+@dataclass(frozen=True)
+class EARSTemplate:
+    type: RequirementType
+    name: str
+    template: str
+    description: str
+
+
 TEMPLATES: dict[RequirementType, EARSTemplate] = {
     RequirementType.UBIQUITOUS: EARSTemplate(
         RequirementType.UBIQUITOUS,
@@ -34,19 +55,6 @@ TEMPLATES: dict[RequirementType, EARSTemplate] = {
     ),
 }
 
-class RequirementType(StrEnum):
-    UBIQUITOUS = 'ubiquitous'
-    EVENT_DRIVEN = 'event_driven'
-    UNWANTED = 'unwanted_behavior'
-    STATE_DRIVEN = 'state_driven'
-    OPTIONAL = 'optional'
-
-@dataclass(frozen=True)
-class EARSTemplate:
-    type: RequirementType
-    name: str
-    template: str
-    description: str
 
 @dataclass
 class Requirement:
@@ -64,6 +72,7 @@ class Requirement:
         if not self.description:
             return "requirement description cannot be empty"
         return None
+
 
 class RequirementSet:
     def __init__(self) -> None:
@@ -92,3 +101,11 @@ class RequirementSet:
 
     def __len__(self) -> int:
         return len(self._requirements)
+
+
+def get_template(rt: RequirementType) -> EARSTemplate:
+    return TEMPLATES[rt]
+
+
+def all_templates() -> list[EARSTemplate]:
+    return [TEMPLATES[rt] for rt in RequirementType]
