@@ -39,3 +39,17 @@ class GitManager:
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Git command failed: git {' '.join(args)}\nError: {e.stderr}")
+
+    def init_repo(self) -> None:
+        is_new = not os.path.exists(os.path.join(self.project_root, ".git"))
+        if is_new:
+            self._run_git(["init"])
+
+        gitignore_path = os.path.join(self.project_root, ".gitignore")
+        if not os.path.exists(gitignore_path):
+            with open(gitignore_path, "w", encoding="utf-8") as f:
+                f.write(_DEFAULT_GITIGNORE)
+
+        if is_new:
+            self._run_git(["add", "."])
+            self._run_git(["commit", "-m", "chore: initial commit"])
