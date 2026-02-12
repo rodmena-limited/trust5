@@ -542,6 +542,52 @@ def _build_ext_map() -> None:
         for ext in profile.extensions:
             _EXT_TO_LANG.setdefault(ext, lang)
 
+def _detect_by_extensions(project_root: str) -> str:
+    """Count source files by extension and return the dominant language."""
+    _build_ext_map()
+    counts: dict[str, int] = {}
+    try:
+        for entry in os.scandir(project_root):
+            if entry.is_dir():
+                if entry.name in _SKIP_DIRS_DETECT or entry.name.startswith("."):
+                    continue
+                # Scan one level deep for source files
+                try:
+                    for sub in os.scandir(entry.path):
+                        if sub.is_file():
+                            ext = os.path.splitext(sub.name)[1]
+                            lang = _EXT_TO_LANG.get(ext)
+                            if lang:
+                                counts[lang] = counts.get(lang, 0) + 1
+                except (PermissionError, OSError):
+                    pass
+            elif entry.is_file():
+                ext = os.path.splitext(entry.name)[1]
+                lang = _EXT_TO_LANG.get(ext)
+                if lang:
+                    counts[lang] = counts.get(lang, 0) + 1
+    except (PermissionError, FileNotFoundError, OSError):
+        pass
+
+    if not counts:
+        return "unknown"
+    return max(counts, key=counts.get)  # type: ignore[arg-type]
+
+def detect_language(project_root: str) -> str:
+    """Detect project language from manifest files, then file extensions."""
+    # Primary: check for manifest/config files (most reliable signal)
+    for lang, profile in PROFILES.items():
+        for manifest in profile.manifest_files:
+            if _manifest_exists(project_root, manifest):
+                return lang
+    for manifest, lang in _MANIFEST_TO_LANG.items():
+        if _manifest_exists(project_root, manifest):
+            return lang
+
+    # Secondary: scan for source file extensions (helps when manifest files
+    # haven't been created yet, e.g. pipeline build time before setup stage).
+    return _detect_by_extensions(project_root)
+
 @dataclass(frozen=True)
 class LanguageProfile:
     language: str
