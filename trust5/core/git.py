@@ -1,5 +1,6 @@
 import os
 import subprocess
+
 _DEFAULT_GITIGNORE = """\
 .trust5/
 __pycache__/
@@ -22,6 +23,7 @@ htmlcov/
 .env
 .env.local
 """
+
 
 class GitManager:
     def __init__(self, project_root: str = "."):
@@ -81,3 +83,6 @@ class GitManager:
     def commit(self, message: str, files: list[str] = ["."]) -> None:
         self._run_git(["add"] + files)
         self._run_git(["commit", "-m", message])
+
+    def get_current_branch(self) -> str:
+        return self._run_git(["rev-parse", "--abbrev-ref", "HEAD"])
