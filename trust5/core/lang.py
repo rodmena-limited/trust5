@@ -1,8 +1,80 @@
+"""Language profile system for multi-language trust5 support (23 languages)."""
+
 import glob as _glob
 import os
 from dataclasses import asdict, dataclass
 from typing import Any
+
 _COMMON_SKIP = (".moai", ".trust5", ".git")
+
+
+@dataclass(frozen=True)
+class LanguageProfile:
+    language: str
+    extensions: tuple[str, ...]
+    test_command: tuple[str, ...]
+    test_verify_command: str
+    lint_commands: tuple[str, ...]
+    syntax_check_command: tuple[str, ...] | None
+    package_install_prefix: str
+    lsp_language_id: str
+    skip_dirs: tuple[str, ...]
+    manifest_files: tuple[str, ...]
+    prompt_hints: str
+    lint_check_commands: tuple[str, ...] = ()
+    coverage_command: tuple[str, ...] | None = None
+    security_command: tuple[str, ...] | None = None
+    frameworks: tuple[str, ...] = ()
+    # Source layout: directories to check as source roots and the env var
+    # to set so that the test runner can find importable modules.
+    # Example: Python src/ layout needs PYTHONPATH=src.
+    source_roots: tuple[str, ...] = ()
+    path_env_var: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _p(
+    lang: str,
+    exts: tuple[str, ...],
+    test: tuple[str, ...],
+    verify: str,
+    lint: tuple[str, ...],
+    syntax: tuple[str, ...] | None,
+    pkg: str,
+    lsp_id: str,
+    skip: tuple[str, ...],
+    manifests: tuple[str, ...],
+    hints: str,
+    cov: tuple[str, ...] | None = None,
+    sec: tuple[str, ...] | None = None,
+    fw: tuple[str, ...] = (),
+    lint_check: tuple[str, ...] = (),
+    src_roots: tuple[str, ...] = (),
+    path_var: str = "",
+) -> LanguageProfile:
+    return LanguageProfile(
+        language=lang,
+        extensions=exts,
+        test_command=test,
+        test_verify_command=verify,
+        lint_commands=lint,
+        lint_check_commands=lint_check,
+        syntax_check_command=syntax,
+        package_install_prefix=pkg,
+        lsp_language_id=lsp_id,
+        skip_dirs=skip + _COMMON_SKIP,
+        manifest_files=manifests,
+        prompt_hints=hints,
+        coverage_command=cov,
+        security_command=sec,
+        frameworks=fw,
+        source_roots=src_roots,
+        path_env_var=path_var,
+    )
+
+
 PROFILES: dict[str, LanguageProfile] = {
     "python": _p(
         "python",
@@ -426,6 +498,8 @@ PROFILES: dict[str, LanguageProfile] = {
         lint_check=("npx eslint --format=unix .",),
     ),
 }
+
+# Framework detection: manifest file patterns -> framework name
 _FRAMEWORK_MARKERS: dict[str, str] = {
     "next.config.js": "Next.js",
     "next.config.mjs": "Next.js",
@@ -438,6 +512,8 @@ _FRAMEWORK_MARKERS: dict[str, str] = {
     "vite.config.ts": "Vite",
     "manage.py": "Django",
 }
+
+
 _MANIFEST_TO_LANG: dict[str, str] = {
     "nimble": "nim",
     "rebar.config": "erlang",
@@ -454,7 +530,43 @@ _MANIFEST_TO_LANG: dict[str, str] = {
     "v.mod": "v",
     "gleam.toml": "gleam",
 }
+
+
+def _manifest_exists(project_root: str, manifest: str) -> bool:
+    """Check if a manifest file exists, supporting glob patterns (e.g. *.csproj)."""
+    if "*" in manifest or "?" in manifest:
+        return bool(_glob.glob(os.path.join(project_root, manifest)))
+    return os.path.exists(os.path.join(project_root, manifest))
+
+
+def detect_language(project_root: str) -> str:
+    """Detect project language from manifest files, then file extensions."""
+    # Primary: check for manifest/config files (most reliable signal)
+    for lang, profile in PROFILES.items():
+        for manifest in profile.manifest_files:
+            if _manifest_exists(project_root, manifest):
+                return lang
+    for manifest, lang in _MANIFEST_TO_LANG.items():
+        if _manifest_exists(project_root, manifest):
+            return lang
+
+    # Secondary: scan for source file extensions (helps when manifest files
+    # haven't been created yet, e.g. pipeline build time before setup stage).
+    return _detect_by_extensions(project_root)
+
+
 _EXT_TO_LANG: dict[str, str] = {}
+
+
+def _build_ext_map() -> None:
+    """Lazily populate extension→language map from PROFILES."""
+    if _EXT_TO_LANG:
+        return
+    for lang, profile in PROFILES.items():
+        for ext in profile.extensions:
+            _EXT_TO_LANG.setdefault(ext, lang)
+
+
 _SKIP_DIRS_DETECT = frozenset(
     {
         ".git",
@@ -472,75 +584,7 @@ _SKIP_DIRS_DETECT = frozenset(
         ".mypy_cache",
     }
 )
-_EXTENSION_MAP: dict[str, tuple[str, ...]] = {
-    "nim": (".nim",),
-    "erlang": (".erl", ".hrl"),
-    "pascal": (".pas", ".pp"),
-    "perl": (".pl", ".pm"),
-    "ocaml": (".ml", ".mli"),
-    "clojure": (".clj", ".cljs", ".cljc"),
-    "groovy": (".groovy", ".gvy"),
-    "fortran": (".f90", ".f95", ".f03"),
-    "julia": (".jl",),
-    "crystal": (".cr",),
-    "d": (".d",),
-    "v": (".v",),
-    "gleam": (".gleam",),
-    "odin": (".odin",),
-}
 
-def _p(
-    lang: str,
-    exts: tuple[str, ...],
-    test: tuple[str, ...],
-    verify: str,
-    lint: tuple[str, ...],
-    syntax: tuple[str, ...] | None,
-    pkg: str,
-    lsp_id: str,
-    skip: tuple[str, ...],
-    manifests: tuple[str, ...],
-    hints: str,
-    cov: tuple[str, ...] | None = None,
-    sec: tuple[str, ...] | None = None,
-    fw: tuple[str, ...] = (),
-    lint_check: tuple[str, ...] = (),
-    src_roots: tuple[str, ...] = (),
-    path_var: str = "",
-) -> LanguageProfile:
-    return LanguageProfile(
-        language=lang,
-        extensions=exts,
-        test_command=test,
-        test_verify_command=verify,
-        lint_commands=lint,
-        lint_check_commands=lint_check,
-        syntax_check_command=syntax,
-        package_install_prefix=pkg,
-        lsp_language_id=lsp_id,
-        skip_dirs=skip + _COMMON_SKIP,
-        manifest_files=manifests,
-        prompt_hints=hints,
-        coverage_command=cov,
-        security_command=sec,
-        frameworks=fw,
-        source_roots=src_roots,
-        path_env_var=path_var,
-    )
-
-def _manifest_exists(project_root: str, manifest: str) -> bool:
-    """Check if a manifest file exists, supporting glob patterns (e.g. *.csproj)."""
-    if "*" in manifest or "?" in manifest:
-        return bool(_glob.glob(os.path.join(project_root, manifest)))
-    return os.path.exists(os.path.join(project_root, manifest))
-
-def _build_ext_map() -> None:
-    """Lazily populate extension→language map from PROFILES."""
-    if _EXT_TO_LANG:
-        return
-    for lang, profile in PROFILES.items():
-        for ext in profile.extensions:
-            _EXT_TO_LANG.setdefault(ext, lang)
 
 def _detect_by_extensions(project_root: str) -> str:
     """Count source files by extension and return the dominant language."""
@@ -573,20 +617,6 @@ def _detect_by_extensions(project_root: str) -> str:
         return "unknown"
     return max(counts, key=counts.get)  # type: ignore[arg-type]
 
-def detect_language(project_root: str) -> str:
-    """Detect project language from manifest files, then file extensions."""
-    # Primary: check for manifest/config files (most reliable signal)
-    for lang, profile in PROFILES.items():
-        for manifest in profile.manifest_files:
-            if _manifest_exists(project_root, manifest):
-                return lang
-    for manifest, lang in _MANIFEST_TO_LANG.items():
-        if _manifest_exists(project_root, manifest):
-            return lang
-
-    # Secondary: scan for source file extensions (helps when manifest files
-    # haven't been created yet, e.g. pipeline build time before setup stage).
-    return _detect_by_extensions(project_root)
 
 def detect_framework(project_root: str) -> str | None:
     """Detect framework from config/manifest files (GAP 10)."""
@@ -594,6 +624,7 @@ def detect_framework(project_root: str) -> str | None:
         if os.path.exists(os.path.join(project_root, marker)):
             return framework
     return None
+
 
 def _generic_profile(language: str) -> LanguageProfile:
     """Build a minimal profile for languages without a dedicated profile.
@@ -619,25 +650,65 @@ def _generic_profile(language: str) -> LanguageProfile:
         ),
     )
 
-@dataclass(frozen=True)
-class LanguageProfile:
-    language: str
-    extensions: tuple[str, ...]
-    test_command: tuple[str, ...]
-    test_verify_command: str
-    lint_commands: tuple[str, ...]
-    syntax_check_command: tuple[str, ...] | None
-    package_install_prefix: str
-    lsp_language_id: str
-    skip_dirs: tuple[str, ...]
-    manifest_files: tuple[str, ...]
-    prompt_hints: str
-    lint_check_commands: tuple[str, ...] = ()
-    coverage_command: tuple[str, ...] | None = None
-    security_command: tuple[str, ...] | None = None
-    frameworks: tuple[str, ...] = ()
-    source_roots: tuple[str, ...] = ()
-    path_env_var: str = ''
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+_EXTENSION_MAP: dict[str, tuple[str, ...]] = {
+    "nim": (".nim",),
+    "erlang": (".erl", ".hrl"),
+    "pascal": (".pas", ".pp"),
+    "perl": (".pl", ".pm"),
+    "ocaml": (".ml", ".mli"),
+    "clojure": (".clj", ".cljs", ".cljc"),
+    "groovy": (".groovy", ".gvy"),
+    "fortran": (".f90", ".f95", ".f03"),
+    "julia": (".jl",),
+    "crystal": (".cr",),
+    "d": (".d",),
+    "v": (".v",),
+    "gleam": (".gleam",),
+    "odin": (".odin",),
+}
+
+
+def get_profile(language: str) -> LanguageProfile:
+    """Get language profile by name. Returns a generic profile for unknown languages."""
+    if language in PROFILES:
+        return PROFILES[language]
+    return _generic_profile(language)
+
+
+def build_language_context(profile: LanguageProfile) -> str:
+    """Build LLM context string from a language profile.
+
+    This injects all language-specific details so that prompts can reference
+    "the Project Language section" instead of hardcoding language-specific commands.
+    """
+    fw = detect_framework(".")
+    fw_line = f"- Detected framework: {fw}\n" if fw else ""
+
+    test_cmd = " ".join(profile.test_command) if profile.test_command else "(none)"
+    lint_cmds = "; ".join(profile.lint_commands) if profile.lint_commands else "(none)"
+    cov_cmd = " ".join(profile.coverage_command) if profile.coverage_command else "(none)"
+    syntax_cmd = " ".join(profile.syntax_check_command) if profile.syntax_check_command else "(none)"
+    src_roots = ", ".join(profile.source_roots) if profile.source_roots else "(flat layout)"
+    manifests = ", ".join(profile.manifest_files) if profile.manifest_files else "(none)"
+    path_var = profile.path_env_var or "(none)"
+
+    return (
+        f"## Project Language\n\n"
+        f"{profile.prompt_hints}\n\n"
+        f"- Test verification command: {profile.test_verify_command}\n"
+        f"- Full test command: {test_cmd}\n"
+        f"- Lint commands: {lint_cmds}\n"
+        f"- Coverage command: {cov_cmd}\n"
+        f"- Syntax check command: {syntax_cmd}\n"
+        f"- Source extensions: {', '.join(profile.extensions)}\n"
+        f"- Package manager: {profile.package_install_prefix}\n"
+        f"- Source roots: {src_roots}\n"
+        f"- Path env var: {path_var}\n"
+        f"- Manifest files: {manifests}\n"
+        f"{fw_line}"
+        f"\nIMPORTANT: The working directory is the project root. "
+        f"Do NOT cd to /testbed or other paths. "
+        f"STOP immediately after tests pass and files are verified — "
+        f"return your summary.\n"
+    )
