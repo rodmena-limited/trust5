@@ -29,3 +29,56 @@ class ProjectInitializer:
         self._write_default_config(language)
 
         console.print("[green]Project initialized successfully![/green]")
+
+    def _setup_structure(self) -> None:
+        dirs = [
+            ".moai/config/sections",
+            ".moai/specs",
+            ".moai/project",
+            ".moai/memory/checkpoints",
+            ".moai/cache/loop-snapshots",
+            ".trust5",
+        ]
+        for d in dirs:
+            os.makedirs(os.path.join(self.project_root, d), exist_ok=True)
+
+        self._create_file(
+            ".moai/project/product.md",
+            "# Product Requirements\n\nTODO: Describe product vision.",
+        )
+        self._create_file(
+            ".moai/project/structure.md",
+            "# System Architecture\n\nTODO: Describe system structure.",
+        )
+        self._create_file(".moai/project/tech.md", "# Technology Stack\n\nTODO: Describe tech stack.")
+        # Create legacy config.json for compatibility with older prompts if needed
+        # But better to fix prompts. We are fixing prompts.
+        # However, let's create a symlink or dummy json if agents are hardcoded.
+        # manager-spec looked for .moai/config.json explicitly.
+
+        # Create a combined config.json for convenience/compatibility
+        import json
+
+        config_data = {
+            "quality": {"development_mode": "hybrid"},
+            "project": {"name": "Correcto Project"},
+        }  # Default
+        self._create_file(".moai/config.json", json.dumps(config_data, indent=2))
+
+        # Default MCP config:
+        # - stabilize: Stabilize workflow engine (remote SSE, always available)
+        # - docker: Docker MCP gateway (only if Docker Desktop + MCP Toolkit)
+        default_mcp = {
+            "mcpServers": {
+                "stabilize": {
+                    "transport": "sse",
+                    "url": "https://mcp.stabilize.rodmena.ai/sse",
+                },
+                "docker": {
+                    "command": "docker",
+                    "args": ["mcp", "gateway", "run"],
+                    "requireDocker": True,
+                },
+            }
+        }
+        self._create_file(".trust5/mcp.json", json.dumps(default_mcp, indent=2))
