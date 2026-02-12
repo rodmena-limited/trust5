@@ -88,3 +88,29 @@ class ProjectInitializer:
         if not os.path.exists(full_path):
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
+
+    def _write_default_config(self, language: str) -> None:
+        config_path = os.path.join(self.project_root, ".moai/config/sections")
+
+        with open(os.path.join(config_path, "quality.yaml"), "w") as f:
+            f.write("""development_mode: hybrid
+    coverage_threshold: 85.0
+    pass_score_threshold: 0.70
+    max_errors: 0
+    max_type_errors: 0
+    max_lint_errors: 0
+    max_warnings: 10
+    max_security_warnings: 0
+    max_quality_repairs: 3
+    enforce_quality: true
+    """)
+
+        with open(os.path.join(config_path, "git-strategy.yaml"), "w") as f:
+            f.write("""auto_branch: true
+    branch_prefix: feature/
+    """)
+
+        with open(os.path.join(config_path, "language.yaml"), "w") as f:
+            f.write(f"""language: {language}
+    test_framework: {self._get_default_test_framework(language)}
+    """)
