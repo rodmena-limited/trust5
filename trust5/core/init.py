@@ -1,9 +1,13 @@
 import os
+
 from rich.console import Console
 from rich.prompt import Prompt
+
 from .config import ConfigManager
 from .lang import PROFILES, detect_language
+
 console = Console()
+
 
 class ProjectInitializer:
     def __init__(self, project_root: str = "."):
@@ -94,23 +98,32 @@ class ProjectInitializer:
 
         with open(os.path.join(config_path, "quality.yaml"), "w") as f:
             f.write("""development_mode: hybrid
-    coverage_threshold: 85.0
-    pass_score_threshold: 0.70
-    max_errors: 0
-    max_type_errors: 0
-    max_lint_errors: 0
-    max_warnings: 10
-    max_security_warnings: 0
-    max_quality_repairs: 3
-    enforce_quality: true
-    """)
+coverage_threshold: 85.0
+pass_score_threshold: 0.70
+max_errors: 0
+max_type_errors: 0
+max_lint_errors: 0
+max_warnings: 10
+max_security_warnings: 0
+max_quality_repairs: 3
+enforce_quality: true
+""")
 
         with open(os.path.join(config_path, "git-strategy.yaml"), "w") as f:
             f.write("""auto_branch: true
-    branch_prefix: feature/
-    """)
+branch_prefix: feature/
+""")
 
         with open(os.path.join(config_path, "language.yaml"), "w") as f:
             f.write(f"""language: {language}
-    test_framework: {self._get_default_test_framework(language)}
-    """)
+test_framework: {self._get_default_test_framework(language)}
+""")
+
+    @staticmethod
+    def _get_default_test_framework(lang: str) -> str:
+        from .lang import get_profile
+
+        profile = get_profile(lang)
+        if profile.test_command:
+            return profile.test_command[0]
+        return "auto"
