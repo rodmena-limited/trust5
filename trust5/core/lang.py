@@ -426,3 +426,31 @@ PROFILES: dict[str, LanguageProfile] = {
         lint_check=("npx eslint --format=unix .",),
     ),
 }
+_FRAMEWORK_MARKERS: dict[str, str] = {
+    "next.config.js": "Next.js",
+    "next.config.mjs": "Next.js",
+    "next.config.ts": "Next.js",
+    "nuxt.config.ts": "Nuxt",
+    "angular.json": "Angular",
+    "svelte.config.js": "SvelteKit",
+    "astro.config.mjs": "Astro",
+    "remix.config.js": "Remix",
+    "vite.config.ts": "Vite",
+    "manage.py": "Django",
+}
+_MANIFEST_TO_LANG: dict[str, str] = {
+    "nimble": "nim",
+    "rebar.config": "erlang",
+    "*.lpi": "pascal",
+    "Makefile.PL": "perl",
+    "cpanfile": "perl",
+    "dune-project": "ocaml",
+    "project.clj": "clojure",
+    "deps.edn": "clojure",
+    "JuliaProject.toml": "julia",
+    "shard.yml": "crystal",
+    "dub.json": "d",
+    "dub.sdl": "d",
+    "v.mod": "v",
+    "gleam.toml": "gleam",
+}
