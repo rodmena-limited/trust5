@@ -528,6 +528,20 @@ def _p(
         path_env_var=path_var,
     )
 
+def _manifest_exists(project_root: str, manifest: str) -> bool:
+    """Check if a manifest file exists, supporting glob patterns (e.g. *.csproj)."""
+    if "*" in manifest or "?" in manifest:
+        return bool(_glob.glob(os.path.join(project_root, manifest)))
+    return os.path.exists(os.path.join(project_root, manifest))
+
+def _build_ext_map() -> None:
+    """Lazily populate extension→language map from PROFILES."""
+    if _EXT_TO_LANG:
+        return
+    for lang, profile in PROFILES.items():
+        for ext in profile.extensions:
+            _EXT_TO_LANG.setdefault(ext, lang)
+
 @dataclass(frozen=True)
 class LanguageProfile:
     language: str
