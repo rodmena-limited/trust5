@@ -1,15 +1,18 @@
 import logging
 import os
+
 from stabilize import StageExecution, Task, TaskResult
 from stabilize.errors import TransientError
+
 from .agent import Agent
 from .context_builder import build_implementation_prompt, discover_latest_spec
 from .llm import LLM, LLMError
 from .mcp_manager import mcp_clients
+
 logger = logging.getLogger(__name__)
 
-class ImplementerTask(Task):
 
+class ImplementerTask(Task):
     def execute(self, stage: StageExecution) -> TaskResult:
         project_root = os.getcwd()
         spec_id = stage.context.get("spec_id")
@@ -56,3 +59,24 @@ class ImplementerTask(Task):
             except Exception as e:
                 logger.exception("Implementation failed")
                 return TaskResult.terminal(error=f"Implementation failed: {e}")
+
+    @staticmethod
+    def _load_system_prompt() -> str:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        prompt_path = os.path.join(base_path, "..", "assets", "prompts", "implementer.md")
+
+        if not os.path.exists(prompt_path):
+            return "You are a code implementer. Write complete, working code."
+
+        try:
+            with open(prompt_path, encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            return "You are a code implementer. Write complete, working code."
+
+        if content.startswith("---\n"):
+            parts = content.split("---\n", 2)
+            if len(parts) >= 3:
+                return parts[2]
+
+        return content
