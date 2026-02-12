@@ -588,6 +588,37 @@ def detect_language(project_root: str) -> str:
     # haven't been created yet, e.g. pipeline build time before setup stage).
     return _detect_by_extensions(project_root)
 
+def detect_framework(project_root: str) -> str | None:
+    """Detect framework from config/manifest files (GAP 10)."""
+    for marker, framework in _FRAMEWORK_MARKERS.items():
+        if os.path.exists(os.path.join(project_root, marker)):
+            return framework
+    return None
+
+def _generic_profile(language: str) -> LanguageProfile:
+    """Build a minimal profile for languages without a dedicated profile.
+
+    The planner's SETUP_COMMANDS and QUALITY_CONFIG take full responsibility
+    for tool commands. This profile only provides detection metadata.
+    """
+    return LanguageProfile(
+        language=language,
+        extensions=_EXTENSION_MAP.get(language, ()),
+        test_command=("echo", "no default test command — see QUALITY_CONFIG"),
+        test_verify_command="echo 'run tests via QUALITY_CONFIG'",
+        lint_commands=(),
+        lint_check_commands=(),
+        syntax_check_command=None,
+        package_install_prefix="",
+        lsp_language_id=language,
+        skip_dirs=_COMMON_SKIP,
+        manifest_files=(),
+        prompt_hints=(
+            f"Language: {language}. No built-in profile — the planner MUST provide "
+            f"SETUP_COMMANDS and QUALITY_CONFIG for this language."
+        ),
+    )
+
 @dataclass(frozen=True)
 class LanguageProfile:
     language: str
