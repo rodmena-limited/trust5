@@ -472,3 +472,39 @@ _SKIP_DIRS_DETECT = frozenset(
         ".mypy_cache",
     }
 )
+_EXTENSION_MAP: dict[str, tuple[str, ...]] = {
+    "nim": (".nim",),
+    "erlang": (".erl", ".hrl"),
+    "pascal": (".pas", ".pp"),
+    "perl": (".pl", ".pm"),
+    "ocaml": (".ml", ".mli"),
+    "clojure": (".clj", ".cljs", ".cljc"),
+    "groovy": (".groovy", ".gvy"),
+    "fortran": (".f90", ".f95", ".f03"),
+    "julia": (".jl",),
+    "crystal": (".cr",),
+    "d": (".d",),
+    "v": (".v",),
+    "gleam": (".gleam",),
+    "odin": (".odin",),
+}
+
+@dataclass(frozen=True)
+class LanguageProfile:
+    language: str
+    extensions: tuple[str, ...]
+    test_command: tuple[str, ...]
+    test_verify_command: str
+    lint_commands: tuple[str, ...]
+    syntax_check_command: tuple[str, ...] | None
+    package_install_prefix: str
+    lsp_language_id: str
+    skip_dirs: tuple[str, ...]
+    manifest_files: tuple[str, ...]
+    prompt_hints: str
+    lint_check_commands: tuple[str, ...] = ()
+    coverage_command: tuple[str, ...] | None = None
+    security_command: tuple[str, ...] | None = None
+    frameworks: tuple[str, ...] = ()
+    source_roots: tuple[str, ...] = ()
+    path_env_var: str = ''
