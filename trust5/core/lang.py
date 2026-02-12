@@ -489,6 +489,45 @@ _EXTENSION_MAP: dict[str, tuple[str, ...]] = {
     "odin": (".odin",),
 }
 
+def _p(
+    lang: str,
+    exts: tuple[str, ...],
+    test: tuple[str, ...],
+    verify: str,
+    lint: tuple[str, ...],
+    syntax: tuple[str, ...] | None,
+    pkg: str,
+    lsp_id: str,
+    skip: tuple[str, ...],
+    manifests: tuple[str, ...],
+    hints: str,
+    cov: tuple[str, ...] | None = None,
+    sec: tuple[str, ...] | None = None,
+    fw: tuple[str, ...] = (),
+    lint_check: tuple[str, ...] = (),
+    src_roots: tuple[str, ...] = (),
+    path_var: str = "",
+) -> LanguageProfile:
+    return LanguageProfile(
+        language=lang,
+        extensions=exts,
+        test_command=test,
+        test_verify_command=verify,
+        lint_commands=lint,
+        lint_check_commands=lint_check,
+        syntax_check_command=syntax,
+        package_install_prefix=pkg,
+        lsp_language_id=lsp_id,
+        skip_dirs=skip + _COMMON_SKIP,
+        manifest_files=manifests,
+        prompt_hints=hints,
+        coverage_command=cov,
+        security_command=sec,
+        frameworks=fw,
+        source_roots=src_roots,
+        path_env_var=path_var,
+    )
+
 @dataclass(frozen=True)
 class LanguageProfile:
     language: str
@@ -508,3 +547,6 @@ class LanguageProfile:
     frameworks: tuple[str, ...] = ()
     source_roots: tuple[str, ...] = ()
     path_env_var: str = ''
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
