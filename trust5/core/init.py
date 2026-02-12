@@ -82,3 +82,9 @@ class ProjectInitializer:
             }
         }
         self._create_file(".trust5/mcp.json", json.dumps(default_mcp, indent=2))
+
+    def _create_file(self, path: str, content: str) -> None:
+        full_path = os.path.join(self.project_root, path)
+        if not os.path.exists(full_path):
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(content)
