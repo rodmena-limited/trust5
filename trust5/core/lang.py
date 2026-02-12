@@ -454,3 +454,21 @@ _MANIFEST_TO_LANG: dict[str, str] = {
     "v.mod": "v",
     "gleam.toml": "gleam",
 }
+_EXT_TO_LANG: dict[str, str] = {}
+_SKIP_DIRS_DETECT = frozenset(
+    {
+        ".git",
+        ".moai",
+        ".trust5",
+        "node_modules",
+        "vendor",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "target",
+        "dist",
+        "build",
+        ".tox",
+        ".mypy_cache",
+    }
+)
