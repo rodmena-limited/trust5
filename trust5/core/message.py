@@ -32,6 +32,19 @@ def set_enabled(value: bool) -> None:
     global _enabled
     _enabled = value
 
+def set_print_fallback(value: bool) -> None:
+    """Disable print fallback when TUI is active.
+
+    When Textual owns the terminal, any print() to stdout/stderr corrupts
+    the layout. Call set_print_fallback(False) before starting the TUI so
+    emit functions silently drop events when the bus isn't ready yet.
+    """
+    global _print_fallback
+    _print_fallback = value
+
+def _ts() -> str:
+    return datetime.now().strftime("%H:%M:%S")
+
 class M(StrEnum):
     ATRN = 'ATRN'
     ATHK = 'ATHK'
