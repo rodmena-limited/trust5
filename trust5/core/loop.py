@@ -112,3 +112,24 @@ class RalphLoop:
                 issues.append({"type": "test_error", "message": str(e)})
 
         return issues
+
+    def fix_issue(self, issue: dict[str, Any]) -> None:
+        emit(M.LFIX, f"Fixing issue: {issue['message']}")
+
+        agent_name = "expert-debug"
+        prompt_file = "expert-debug.md"
+
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        prompt_path = os.path.join(base_path, "assets", "prompts", prompt_file)
+        with open(prompt_path) as f:
+            system_prompt = f.read()
+
+        issue_context = (
+            f"\n\nActive Issue:\nType: {issue['type']}\nFile: {issue.get('file')}\nMessage: {issue['message']}\n"
+        )
+        system_prompt += issue_context
+
+        llm = LLM()
+        with mcp_clients() as mcp:
+            agent = Agent(name=agent_name, prompt=system_prompt, llm=llm, mcp_clients=mcp)
+            agent.run(f"Fix this issue: {issue['message']}")
