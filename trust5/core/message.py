@@ -25,3 +25,5 @@ TOOL_CODE_MAP = {
     "AskUserQuestion": M.UASK,
 }
 _enabled = True
+_print_fallback = True
+_stream_local = threading.local()
