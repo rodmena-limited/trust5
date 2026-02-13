@@ -51,3 +51,7 @@ class JsonRpcClient:
             time.sleep(0.01)
 
         raise TimeoutError(f"RPC Timeout for {method}")
+
+    def send_notification(self, method: str, params: Any = None) -> None:
+        req: dict[str, Any] = {"jsonrpc": "2.0", "method": method, "params": params}
+        self._send(req)
