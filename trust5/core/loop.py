@@ -52,3 +52,63 @@ class RalphLoop:
             emit(M.LERR, f"Loop Error: {e}")
         finally:
             self.lsp.stop()
+
+    def diagnose(self) -> list[dict[str, Any]]:
+        issues = []
+
+        source_files = []
+        for root, dirs, files in os.walk(self.project_root):
+            dirs[:] = [d for d in dirs if d not in self.profile.skip_dirs]
+            for file in files:
+                if any(file.endswith(ext) for ext in self.profile.extensions):
+                    source_files.append(os.path.join(root, file))
+
+        for file_path in source_files:
+            uri = f"file://{os.path.abspath(file_path)}"
+            self.lsp.rpc.send_notification(
+                "textDocument/didOpen",
+                {
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": self.profile.lsp_language_id,
+                        "version": 1,
+                        "text": open(file_path).read(),
+                    }
+                },
+            )
+            time.sleep(0.5)
+
+            diags = self.lsp.get_diagnostics(uri)
+            for d in diags:
+                issues.append(
+                    {
+                        "type": "lsp_error",
+                        "file": file_path,
+                        "message": d.get("message"),
+                        "severity": d.get("severity"),
+                        "range": d.get("range"),
+                    }
+                )
+
+        test_cmd = self.config.language.test_framework
+        if test_cmd:
+            try:
+                result = subprocess.run(
+                    test_cmd,
+                    shell=True,
+                    cwd=self.project_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    issues.append(
+                        {
+                            "type": "test_failure",
+                            "message": result.stderr or result.stdout,
+                            "file": "tests",
+                        }
+                    )
+            except Exception as e:
+                issues.append({"type": "test_error", "message": str(e)})
+
+        return issues
