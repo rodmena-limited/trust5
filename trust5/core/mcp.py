@@ -87,3 +87,55 @@ class MCPClient:
         if params is not None:
             req["params"] = params
         self._write_json(req)
+
+    def _write_json(self, data: dict[str, Any]) -> None:
+        if not self.process or not self.process.stdin:
+            raise RuntimeError(f"MCP server '{self.name}' not running")
+
+        json_str = json.dumps(data)
+        self.process.stdin.write(json_str + "\n")
+        self.process.stdin.flush()
+
+    def _read_response(self) -> dict[str, Any]:
+        if not self.process or not self.process.stdout:
+            raise RuntimeError(f"MCP server '{self.name}' not running")
+
+        fd = self.process.stdout.fileno()
+        ready, _, _ = select.select([fd], [], [], self.start_timeout)
+        if not ready:
+            raise RuntimeError(f"MCP server '{self.name}' timed out after {self.start_timeout}s")
+
+        line = self.process.stdout.readline()
+        if not line:
+            raise RuntimeError(f"MCP server '{self.name}' closed connection")
+
+        result: dict[str, Any] = json.loads(line)
+        return result
+
+class MCPSSEClient:
+    """MCP client using SSE (Server-Sent Events) transport.
+
+    Fully synchronous — no threading. Trust5 agents process tool calls
+    one at a time, so we simply POST a request then read the SSE stream
+    until the matching response arrives.
+
+    SSE protocol flow:
+    1. GET /sse -> server opens SSE stream, sends 'endpoint' event with POST URL
+    2. Client POSTs JSON-RPC to that URL
+    3. Server sends response as SSE 'message' event with matching id
+    """
+    def __init__(
+        self,
+        url: str,
+        name: str = "mcp-sse",
+        timeout: float = 30.0,
+    ):
+        self.url = url
+        self.name = name
+        self.timeout = timeout
+        self.msg_id = 0
+        self._message_url: str | None = None
+        self._session: Any = None
+        self._sse_response: Any = None
+        self._sse_lines: Any = None
+        self.server_capabilities: dict[str, Any] = {}
