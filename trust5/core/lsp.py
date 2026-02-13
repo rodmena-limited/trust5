@@ -35,3 +35,19 @@ class JsonRpcClient:
         if self.process:
             self.process.terminate()
             self.process = None
+
+    def send_request(self, method: str, params: Any = None) -> Any:
+        with self._lock:
+            self.msg_id += 1
+            mid = self.msg_id
+
+        req = {"jsonrpc": "2.0", "id": mid, "method": method, "params": params}
+        self._send(req)
+
+        start_time = time.time()
+        while time.time() - start_time < 10:
+            if mid in self.responses:
+                return self.responses.pop(mid)
+            time.sleep(0.01)
+
+        raise TimeoutError(f"RPC Timeout for {method}")
