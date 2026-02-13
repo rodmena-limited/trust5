@@ -55,3 +55,10 @@ class JsonRpcClient:
     def send_notification(self, method: str, params: Any = None) -> None:
         req: dict[str, Any] = {"jsonrpc": "2.0", "method": method, "params": params}
         self._send(req)
+
+    def _send(self, msg: dict[str, Any]) -> None:
+        content = json.dumps(msg).encode("utf-8")
+        header = f"Content-Length: {len(content)}\r\n\r\n".encode()
+        if self.process and self.process.stdin:
+            self.process.stdin.write(header + content)
+            self.process.stdin.flush()
