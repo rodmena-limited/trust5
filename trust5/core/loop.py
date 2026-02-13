@@ -2,7 +2,9 @@ import os
 import subprocess
 import time
 from typing import Any
+
 from stabilize import StageExecution, Task, TaskResult
+
 from ..core.agent import Agent
 from ..core.config import ConfigManager
 from ..core.lang import detect_language, get_profile
@@ -10,6 +12,7 @@ from ..core.llm import LLM
 from ..core.lsp import LSPClient
 from ..core.mcp_manager import mcp_clients
 from ..core.message import M, emit
+
 
 class RalphLoop:
     def __init__(self, project_root: str):
@@ -134,5 +137,9 @@ class RalphLoop:
             agent = Agent(name=agent_name, prompt=system_prompt, llm=llm, mcp_clients=mcp)
             agent.run(f"Fix this issue: {issue['message']}")
 
+
 class LoopTask(Task):
-    pass
+    def execute(self, stage: StageExecution) -> TaskResult:
+        loop = RalphLoop(os.getcwd())
+        loop.start_loop()
+        return TaskResult.success(outputs={"status": "loop_complete"})
