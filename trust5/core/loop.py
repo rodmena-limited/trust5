@@ -133,3 +133,6 @@ class RalphLoop:
         with mcp_clients() as mcp:
             agent = Agent(name=agent_name, prompt=system_prompt, llm=llm, mcp_clients=mcp)
             agent.run(f"Fix this issue: {issue['message']}")
+
+class LoopTask(Task):
+    pass
