@@ -126,3 +126,13 @@ class LSPClient:
             {"processId": os.getpid(), "rootUri": self.root_uri, "capabilities": {}},
         )
         self.rpc.send_notification("initialized", {})
+
+    def get_diagnostics(self, uri: str) -> list[dict[str, Any]]:
+        diags = []
+        while not self.rpc.notifications.empty():
+            msg = self.rpc.notifications.get()
+            if msg.get("method") == "textDocument/publishDiagnostics":
+                params = msg.get("params", {})
+                if params.get("uri") == uri:
+                    diags = params.get("diagnostics", [])
+        return diags
