@@ -7,6 +7,7 @@ import threading
 import time
 from typing import Any
 
+
 class JsonRpcClient:
     def __init__(self, command: list[str], cwd: str = "."):
         self.command = command
@@ -106,6 +107,7 @@ class JsonRpcClient:
             except Exception as e:
                 logging.getLogger(__name__).debug("JSON Parse Error: %s", e)
 
+
 class LSPClient:
     def __init__(self, command: list[str], root_uri: str):
         self.rpc = JsonRpcClient(command)
@@ -136,3 +138,9 @@ class LSPClient:
                 if params.get("uri") == uri:
                     diags = params.get("diagnostics", [])
         return diags
+
+    def document_symbols(self, uri: str) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = self.rpc.send_request(
+            "textDocument/documentSymbol", {"textDocument": {"uri": uri}}
+        )
+        return result
