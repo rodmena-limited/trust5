@@ -139,3 +139,61 @@ class MCPSSEClient:
         self._sse_response: Any = None
         self._sse_lines: Any = None
         self.server_capabilities: dict[str, Any] = {}
+
+    def is_running(self) -> bool:
+        return self._message_url is not None
+
+    def start(self) -> None:
+        import requests
+
+        self._session = requests.Session()
+        self._sse_response = self._session.get(
+            self.url,
+            stream=True,
+            headers={"Accept": "text/event-stream"},
+            timeout=self.timeout,
+        )
+        self._sse_response.raise_for_status()
+        self._sse_lines = self._sse_response.iter_lines(decode_unicode=True)
+
+        # Read SSE stream until we get the 'endpoint' event
+        endpoint = self._read_sse_event("endpoint")
+        if not endpoint:
+            raise RuntimeError(f"MCP SSE server '{self.name}' didn't send endpoint event")
+
+        # Build full URL for POSTing JSON-RPC messages
+        base = self.url.rsplit("/", 1)[0]
+        if endpoint.startswith("http"):
+            self._message_url = endpoint
+        elif endpoint.startswith("/"):
+            self._message_url = base + endpoint
+        else:
+            self._message_url = base + "/" + endpoint
+
+        # MCP initialize handshake
+        resp = self._send_request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "trust5", "version": "0.1.0"},
+            },
+        )
+        self.server_capabilities = resp.get("result", {}).get("capabilities", {})
+        self._send_notification("notifications/initialized")
+
+    def stop(self) -> None:
+        if self._sse_response:
+            try:
+                self._sse_response.close()
+            except Exception:
+                pass
+        if self._session:
+            try:
+                self._session.close()
+            except Exception:
+                pass
+        self._sse_response = None
+        self._session = None
+        self._message_url = None
+        self._sse_lines = None
