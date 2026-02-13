@@ -25,3 +25,45 @@ class MCPClient:
 
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
+
+    def start(self) -> None:
+        self.process = subprocess.Popen(
+            self.command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.env,
+            text=True,
+        )
+        self._send_request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "trust5", "version": "0.1.0"},
+            },
+        )
+        resp = self._read_response()
+        self.server_capabilities = resp.get("result", {}).get("capabilities", {})
+
+        self._send_notification("notifications/initialized")
+
+    def stop(self) -> None:
+        if self.process:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except ProcessLookupError:
+                pass  # Process already exited between poll() and kill()
+            except Exception:
+                try:
+                    if self.process.poll() is None:
+                        self.process.kill()
+                except ProcessLookupError:
+                    pass  # Race: process exited between poll() and kill()
+            self.process = None
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        resp = self._send_request("tools/list")
+        result: list[dict[str, Any]] = resp.get("result", {}).get("tools", [])
+        return result
