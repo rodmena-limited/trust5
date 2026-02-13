@@ -29,3 +29,9 @@ class JsonRpcClient:
         )
         self.running = True
         threading.Thread(target=self._read_loop, daemon=True).start()
+
+    def stop(self) -> None:
+        self.running = False
+        if self.process:
+            self.process.terminate()
+            self.process = None
