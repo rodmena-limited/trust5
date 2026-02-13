@@ -110,3 +110,7 @@ class LSPClient:
     def __init__(self, command: list[str], root_uri: str):
         self.rpc = JsonRpcClient(command)
         self.root_uri = root_uri
+
+    def start(self) -> None:
+        self.rpc.start()
+        self.initialize()
