@@ -197,3 +197,32 @@ class MCPSSEClient:
         self._session = None
         self._message_url = None
         self._sse_lines = None
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        resp = self._send_request("tools/list")
+        result: list[dict[str, Any]] = resp.get("result", {}).get("tools", [])
+        return result
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+        resp = self._send_request("tools/call", {"name": name, "arguments": arguments})
+        result: dict[str, Any] | None = resp.get("result")
+        return result
+
+    def _send_request(self, method: str, params: Any = None) -> dict[str, Any]:
+        self.msg_id += 1
+        msg_id = self.msg_id
+
+        req: dict[str, Any] = {"jsonrpc": "2.0", "id": msg_id, "method": method}
+        if params is not None:
+            req["params"] = params
+
+        # POST the JSON-RPC request
+        resp = self._session.post(
+            self._message_url,
+            json=req,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+
+        # Read SSE stream until we get the matching response
+        return self._read_sse_response(msg_id)
