@@ -87,6 +87,27 @@ def emit_block(code: M, label: str, content: str, *, max_lines: int = 0) -> None
             print(f"{tag}{_ts()}  \u2502 {line}", flush=True)
         print(f"{tag}{_ts()} \u2514\u2500\u2500", flush=True)
 
+def emit_stream_start(code: M, label: str) -> None:
+    if not _enabled:
+        return
+    _stream_local.code = code.value
+    bus = get_bus()
+    if bus is not None:
+        bus.publish(Event(kind=K_STREAM_START, code=code.value, ts=_ts(), label=label))
+    elif _print_fallback:
+        print(f"{{{code.value}}}{_ts()} {label}", end="", flush=True)
+
+def emit_stream_token(token: str) -> None:
+    if not _enabled:
+        return
+    code = getattr(_stream_local, "code", "")
+    bus = get_bus()
+    if bus is not None:
+        bus.publish(Event(kind=K_STREAM_TOKEN, code=code, ts=_ts(), msg=token))
+    elif _print_fallback:
+        sys.stdout.write(token)
+        sys.stdout.flush()
+
 class M(StrEnum):
     ATRN = 'ATRN'
     ATHK = 'ATHK'
