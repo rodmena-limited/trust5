@@ -3,24 +3,45 @@ import logging
 import threading
 import time
 from typing import Any
+
 import requests
+
 from .constants import (
     STREAM_READ_TIMEOUT_STANDARD,
     STREAM_READ_TIMEOUT_THINKING,
     STREAM_TOTAL_TIMEOUT,
 )
 from .message import M, emit, emit_stream_end, emit_stream_start, emit_stream_token
+
 logger = logging.getLogger(__name__)
+
 TIMEOUT_FAST = 120
 TIMEOUT_STANDARD = 300
 TIMEOUT_EXTENDED = 600
+
+# Connection timeout: max seconds to establish TCP connection.
+# Keep short — if the server is unreachable, fail fast and retry.
 CONNECT_TIMEOUT = 10
+
+# Per-chunk read timeout is now dynamic — see _stream_read_timeout property.
+# Thinking models (Ollama think=True, Anthropic extended-thinking) need long
+# pauses between chunks; non-thinking models should fail fast.
+
+# Refresh token if it expires within this many seconds.
 TOKEN_REFRESH_MARGIN = 300  # 5 minutes
+
+# ── Retry budgets ─────────────────────────────────────────────────────────
+# Total seconds to spend retrying per error class before giving up.
+# Combined with Stabilize-level retries (120s wait + another cycle), this
+# covers 20+ minutes of downtime: 5 min inner + 2 min wait + 5 min inner + ...
 RETRY_BUDGET_CONNECT = 300  # 5 min: network outages, DNS failures
 RETRY_BUDGET_SERVER = 180  # 3 min: 5xx errors, overloaded backends
 RETRY_BUDGET_RATE = 300  # 5 min: rate limiting (uses server's Retry-After)
+
+# Delay between retries per error class
 RETRY_DELAY_CONNECT = 5  # quick retries — network may recover any moment
 RETRY_DELAY_SERVER = 30  # give server time to recover
+
 MODEL_CONTEXT_WINDOW: dict[str, int] = {
     "claude-opus-4-20250514": 200_000,
     "claude-sonnet-4-20250514": 200_000,
@@ -29,13 +50,18 @@ MODEL_CONTEXT_WINDOW: dict[str, int] = {
     "gemini-2.5-pro": 1_048_576,
     "gemini-2.5-flash": 1_048_576,
 }
+
 MODEL_TIERS = {
     "best": "qwen3-coder-next:cloud",
     "good": "kimi-k2.5:cloud",
     "fast": "nemotron-3-nano:30b-cloud",
     "default": "qwen3-coder-next:cloud",
 }
+
 THINKING_TIERS = {"best", "good"}
+
+# Per-stage thinking levels: None=off, "low", "high"
+# Planner needs deep reasoning; test-writer needs some; implementer needs max output tokens.
 STAGE_THINKING_LEVEL: dict[str, str] = {
     "trust5-planner": "high",
     "planner": "high",
@@ -44,13 +70,47 @@ STAGE_THINKING_LEVEL: dict[str, str] = {
     "repairer": "low",
     "repair": "low",
 }
+
+# Anthropic thinking budget mapped from level
 _ANTHROPIC_THINKING_BUDGET = {"low": 5000, "high": 10000}
+
+# Gemini 2.5 thinking budget mapped from level
 _GEMINI_25_THINKING_BUDGET = {"low": 5000, "high": 10000}
+
 DEFAULT_FALLBACK_CHAIN = [
     "qwen3-coder-next:cloud",
     "kimi-k2.5:cloud",
     "nemotron-3-nano:30b-cloud",
 ]
+
+
+class LLMError(Exception):
+    """LLM call failure with error classification for smart retry logic.
+
+    error_class values:
+      "connection"  — network unreachable, DNS failure, TCP connect timeout
+      "server"      — 5xx, read timeout (server alive but struggling)
+      "rate_limit"  — 429 (use retry_after from server header)
+      "permanent"   — 4xx, auth failure, bad request (no retry)
+    """
+
+    def __init__(
+        self,
+        message: str,
+        retryable: bool = False,
+        retry_after: float = 0,
+        error_class: str = "permanent",
+    ):
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = retry_after
+        self.error_class = error_class
+
+    @property
+    def is_network_error(self) -> bool:
+        """True when the failure is infrastructure-related (not a logic error)."""
+        return self.error_class in ("connection", "server", "rate_limit")
+
 
 def _resolve_thinking_level(
     tier: str,
@@ -64,30 +124,6 @@ def _resolve_thinking_level(
         return STAGE_THINKING_LEVEL.get(stage_name.lower())
     return "low" if tier in thinking_tiers else None
 
-class LLMError(Exception):
-    """LLM call failure with error classification for smart retry logic.
-
-    error_class values:
-      "connection"  — network unreachable, DNS failure, TCP connect timeout
-      "server"      — 5xx, read timeout (server alive but struggling)
-      "rate_limit"  — 429 (use retry_after from server header)
-      "permanent"   — 4xx, auth failure, bad request (no retry)
-    """
-    def __init__(
-        self,
-        message: str,
-        retryable: bool = False,
-        retry_after: float = 0,
-        error_class: str = "permanent",
-    ):
-        super().__init__(message)
-        self.retryable = retryable
-        self.retry_after = retry_after
-        self.error_class = error_class
-
-    def is_network_error(self) -> bool:
-        """True when the failure is infrastructure-related (not a logic error)."""
-        return self.error_class in ("connection", "server", "rate_limit")
 
 class LLM:
     def __init__(
@@ -123,6 +159,8 @@ class LLM:
                 self._session.headers["anthropic-version"] = "2023-06-01"
                 self._session.headers["anthropic-beta"] = "oauth-2025-04-20"
 
+    # ── Abort / watchdog support ─────────────────────────────────────────────
+
     def abort(self) -> None:
         """Signal the current streaming call to stop.
 
@@ -135,12 +173,14 @@ class LLM:
         """Clear the abort flag before starting a new LLM call."""
         self._abort.clear()
 
+    @property
     def _stream_read_timeout(self) -> int:
         """Per-chunk read timeout, dynamic based on thinking mode."""
         if self.thinking_level:
             return STREAM_READ_TIMEOUT_THINKING
         return STREAM_READ_TIMEOUT_STANDARD
 
+    @classmethod
     def for_tier(
         cls,
         tier: str = "default",
@@ -367,6 +407,7 @@ class LLM:
         response = self._post(f"{self.base_url}/v1/messages", payload, model, timeout)
         return self._consume_anthropic_stream(response, model)
 
+    @staticmethod
     def _convert_tools_to_anthropic(
         tools: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
@@ -467,6 +508,7 @@ class LLM:
         response = self._post(url, payload, model, timeout)
         return self._consume_google_stream(response, model)
 
+    @staticmethod
     def _convert_tools_to_google(
         tools: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
@@ -591,3 +633,422 @@ class LLM:
         emit(M.MCTX, f"used={input_tokens} remaining={ctx_window - input_tokens} window={ctx_window}")
 
         return {"message": assembled_msg, "done": True}
+
+    def _consume_anthropic_stream(self, response: requests.Response, model: str) -> dict[str, Any]:
+        content_parts: list[str] = []
+        tool_calls_agg: list[dict[str, Any]] = []
+        thinking_started = False
+        response_started = False
+        current_tool: dict[str, Any] = {}
+        input_json_parts: list[str] = []
+        input_tokens = 0
+        output_tokens = 0
+        stream_start = time.monotonic()
+
+        try:
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if self._abort.is_set():
+                    emit(M.SWRN, f"[{model}] LLM call aborted by watchdog")
+                    break
+                if time.monotonic() - stream_start > STREAM_TOTAL_TIMEOUT:
+                    emit(M.SWRN, f"[{model}] Stream total timeout ({STREAM_TOTAL_TIMEOUT}s)")
+                    break
+                if not raw_line:
+                    continue
+                if raw_line.startswith("event: "):
+                    event_type = raw_line[7:].strip()
+                    if event_type == "message_stop":
+                        break
+                    continue
+                if not raw_line.startswith("data: "):
+                    continue
+
+                try:
+                    data = json.loads(raw_line[6:])
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                evt = data.get("type", "")
+
+                if evt == "message_start":
+                    usage = data.get("message", {}).get("usage", {})
+                    input_tokens = usage.get("input_tokens", 0)
+
+                elif evt == "content_block_start":
+                    block = data.get("content_block", {})
+                    if block.get("type") == "tool_use":
+                        current_tool = {
+                            "id": block.get("id", ""),
+                            "function": {
+                                "name": block.get("name", ""),
+                                "arguments": "",
+                            },
+                        }
+                        input_json_parts = []
+
+                elif evt == "content_block_delta":
+                    delta = data.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text", "")
+                        if text:
+                            # Close thinking stream before starting response
+                            if thinking_started:
+                                emit_stream_end()
+                                thinking_started = False
+                            if not response_started:
+                                emit_stream_start(M.ARSP, f"[{model}] ")
+                                response_started = True
+                            emit_stream_token(text)
+                            content_parts.append(text)
+                    elif delta.get("type") == "thinking_delta":
+                        text = delta.get("thinking", "")
+                        if text:
+                            if not thinking_started:
+                                emit_stream_start(M.ATHK, f"[{model}] Thinking")
+                                thinking_started = True
+                            emit_stream_token(text)
+                    elif delta.get("type") == "input_json_delta":
+                        input_json_parts.append(delta.get("partial_json", ""))
+
+                elif evt == "content_block_stop":
+                    if current_tool:
+                        raw_json = "".join(input_json_parts)
+                        current_tool["function"]["arguments"] = raw_json
+                        tool_calls_agg.append(current_tool)
+                        current_tool = {}
+                        input_json_parts = []
+
+                elif evt == "message_delta":
+                    delta_usage = data.get("usage", {})
+                    output_tokens = delta_usage.get("output_tokens", output_tokens)
+
+                elif evt == "error":
+                    err = data.get("error", {})
+                    raise LLMError(
+                        f"Anthropic stream error: {err.get('message', str(err))}",
+                        retryable=True,
+                        retry_after=10,
+                        error_class="server",
+                    )
+        finally:
+            if thinking_started:
+                emit_stream_end()
+            if response_started:
+                emit_stream_end()
+            response.close()
+
+        full_content = "".join(content_parts)
+        assembled_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": full_content,
+        }
+        if tool_calls_agg:
+            assembled_msg["tool_calls"] = tool_calls_agg
+
+        tc_count = len(tool_calls_agg)
+        total_tokens = input_tokens + output_tokens
+        emit(
+            M.CRES,
+            f"LLM response model={model} content={len(full_content)} chars tool_calls={tc_count} tokens={total_tokens}",
+        )
+        emit(M.MTKN, f"in={input_tokens} out={output_tokens} total={total_tokens}")
+        ctx_window = MODEL_CONTEXT_WINDOW.get(model, 200_000)
+        emit(M.MCTX, f"used={input_tokens} remaining={ctx_window - input_tokens} window={ctx_window}")
+
+        return {"message": assembled_msg, "done": True}
+
+    def _emit_request_log(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None,
+        model: str,
+        timeout: int,
+    ) -> None:
+        msg_roles = [m.get("role", "?") for m in messages]
+        role_counts = {r: msg_roles.count(r) for r in set(msg_roles)}
+        emit(
+            M.CREQ,
+            f"LLM request model={model} msgs={len(messages)} "
+            f"roles={role_counts} tools={len(tools or [])} "
+            f"timeout={timeout}s",
+        )
+
+    def _post(self, url: str, payload: dict[str, Any], model: str, timeout: int) -> requests.Response:
+        self._ensure_token_fresh()
+        read_timeout = self._stream_read_timeout
+        try:
+            response = self._session.post(
+                url,
+                json=payload,
+                timeout=(CONNECT_TIMEOUT, read_timeout),
+                stream=True,
+            )
+        except requests.exceptions.ConnectTimeout:
+            raise LLMError(
+                f"Connection timeout ({CONNECT_TIMEOUT}s) for {model}",
+                retryable=True,
+                retry_after=RETRY_DELAY_CONNECT,
+                error_class="connection",
+            )
+        except requests.exceptions.ReadTimeout:
+            raise LLMError(
+                f"Read timeout ({read_timeout}s) for {model}",
+                retryable=True,
+                retry_after=RETRY_DELAY_SERVER,
+                error_class="server",
+            )
+        except requests.exceptions.ConnectionError:
+            raise LLMError(
+                f"Connection error for {model} (server unreachable)",
+                retryable=True,
+                retry_after=RETRY_DELAY_CONNECT,
+                error_class="connection",
+            )
+        except requests.exceptions.Timeout:
+            raise LLMError(
+                f"Timeout for {model}",
+                retryable=True,
+                retry_after=RETRY_DELAY_CONNECT,
+                error_class="connection",
+            )
+        except requests.exceptions.RequestException as e:
+            raise LLMError(
+                f"Request failed for {model}: {e}",
+                retryable=False,
+                error_class="permanent",
+            )
+
+        if response.status_code == 429:
+            retry_after = float(response.headers.get("Retry-After", "60"))
+            raise LLMError(
+                f"Rate limited on {model}",
+                retryable=True,
+                retry_after=retry_after,
+                error_class="rate_limit",
+            )
+
+        if response.status_code >= 500:
+            raise LLMError(
+                f"Server error {response.status_code} on {model}",
+                retryable=True,
+                retry_after=RETRY_DELAY_SERVER,
+                error_class="server",
+            )
+
+        if response.status_code == 401 and self._auth_header and self._provider_name:
+            refreshed = self._try_refresh_token()
+            if refreshed:
+                emit(
+                    M.ARTY,
+                    f"Token refreshed for {self._provider_name}, retrying request",
+                )
+                try:
+                    response = self._session.post(
+                        url,
+                        json=payload,
+                        timeout=(CONNECT_TIMEOUT, read_timeout),
+                        stream=True,
+                    )
+                except requests.exceptions.RequestException as e:
+                    raise LLMError(
+                        f"Retry after refresh failed for {model}: {e}",
+                        retryable=False,
+                        error_class="permanent",
+                    )
+                if response.status_code == 401:
+                    raise LLMError(
+                        f"Authentication failed for {model} even after token refresh",
+                        retryable=False,
+                        error_class="permanent",
+                    )
+            else:
+                raise LLMError(
+                    f"Authentication failed for {model} (401) and token refresh failed",
+                    retryable=False,
+                    error_class="permanent",
+                )
+
+        if response.status_code != 200:
+            raise LLMError(
+                f"HTTP {response.status_code} from {model}: {response.text[:200]}",
+                retryable=False,
+                error_class="permanent",
+            )
+
+        return response
+
+    def _ensure_token_fresh(self) -> None:
+        if not self._provider_name or not self._auth_header:
+            return
+        try:
+            from .auth.token_store import TokenStore
+
+            store = TokenStore()
+            token_data = store.load(self._provider_name)
+            if token_data is None or token_data.expires_at is None:
+                return
+            remaining = token_data.expires_at - time.time()
+            if remaining > TOKEN_REFRESH_MARGIN:
+                return
+            emit(M.ARTY, f"Token expires in {remaining:.0f}s, refreshing proactively")
+            self._try_refresh_token()
+        except Exception:
+            logger.debug("Proactive token refresh check failed", exc_info=True)
+
+    def _try_refresh_token(self) -> bool:
+        if not self._provider_name or not self._auth_header:
+            return False
+        try:
+            from .auth.registry import get_provider
+            from .auth.token_store import TokenStore
+
+            provider = get_provider(self._provider_name)
+            store = TokenStore()
+            token_data = store.load(self._provider_name)
+            if token_data is None:
+                return False
+
+            new_token = provider.refresh(token_data)
+            store.save(self._provider_name, new_token)
+            if self._auth_header == "Authorization":
+                self._session.headers[self._auth_header] = f"Bearer {new_token.access_token}"
+            else:
+                self._session.headers[self._auth_header] = new_token.access_token
+            logger.info("Token refreshed mid-pipeline for %s", self._provider_name)
+            return True
+        except Exception:
+            logger.warning("Token refresh failed for %s", self._provider_name, exc_info=True)
+            return False
+
+    def _consume_stream(
+        self,
+        response: requests.Response,
+        model: str,
+    ) -> dict[str, Any]:
+        content_parts: list[str] = []
+        tool_calls_agg: list[dict[str, Any]] = []
+        final_data: dict[str, Any] = {}
+        thinking_started = False
+        response_started = False
+        stream_start = time.monotonic()
+
+        try:
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if self._abort.is_set():
+                    emit(M.SWRN, f"[{model}] LLM call aborted by watchdog")
+                    break
+                if time.monotonic() - stream_start > STREAM_TOTAL_TIMEOUT:
+                    emit(M.SWRN, f"[{model}] Stream total timeout ({STREAM_TOTAL_TIMEOUT}s)")
+                    break
+                if not raw_line:
+                    continue
+                try:
+                    chunk = json.loads(raw_line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                if "error" in chunk and "message" not in chunk:
+                    raise LLMError(
+                        f"API error from {model}: {chunk['error']}",
+                        retryable=True,
+                        retry_after=10,
+                        error_class="server",
+                    )
+
+                msg = chunk.get("message", {})
+
+                # Ollama thinking content (think=True mode)
+                thinking = msg.get("thinking", "")
+                if thinking:
+                    if not thinking_started:
+                        emit_stream_start(M.ATHK, f"[{model}] Thinking")
+                        thinking_started = True
+                    emit_stream_token(thinking)
+
+                # Ollama response content
+                delta = msg.get("content", "")
+                if delta:
+                    if thinking_started:
+                        emit_stream_end()
+                        thinking_started = False
+                    if not response_started:
+                        emit_stream_start(M.ARSP, f"[{model}] ")
+                        response_started = True
+                    emit_stream_token(delta)
+                    content_parts.append(delta)
+
+                chunk_tc = msg.get("tool_calls", [])
+                if chunk_tc:
+                    tool_calls_agg.extend(chunk_tc)
+
+                if chunk.get("done", False):
+                    final_data = chunk
+                    break
+        finally:
+            if thinking_started:
+                emit_stream_end()
+            if response_started:
+                emit_stream_end()
+            response.close()
+
+        full_content = "".join(content_parts)
+        assembled_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": full_content,
+        }
+        if tool_calls_agg:
+            assembled_msg["tool_calls"] = tool_calls_agg
+
+        result: dict[str, Any] = {**final_data, "message": assembled_msg}
+
+        tc_count = len(tool_calls_agg)
+        input_tokens = final_data.get("prompt_eval_count", 0)
+        output_tokens = final_data.get("eval_count", 0)
+        total_tokens = input_tokens + output_tokens
+        emit(
+            M.CRES,
+            f"LLM response model={model} content={len(full_content)} chars tool_calls={tc_count} tokens={total_tokens}",
+        )
+        if input_tokens or output_tokens:
+            emit(M.MTKN, f"in={input_tokens} out={output_tokens} total={total_tokens}")
+            ctx_window = MODEL_CONTEXT_WINDOW.get(model, 128_000)
+            emit(M.MCTX, f"used={input_tokens} remaining={ctx_window - input_tokens} window={ctx_window}")
+
+        return result
+
+    def generate(self, prompt: str, model: str | None = None) -> str:
+        effective_model = model or self.model
+        payload = {
+            "model": effective_model,
+            "prompt": prompt,
+            "stream": False,
+        }
+        try:
+            response = self._session.post(
+                f"{self.base_url}/api/generate",
+                json=payload,
+                timeout=(CONNECT_TIMEOUT, self.timeout),
+            )
+            response.raise_for_status()
+            result: str = response.json().get("response", "")
+            return result
+        except requests.exceptions.ConnectTimeout:
+            raise LLMError(
+                f"Generation connect timeout ({CONNECT_TIMEOUT}s) for {effective_model}",
+                retryable=True,
+                retry_after=RETRY_DELAY_CONNECT,
+                error_class="connection",
+            )
+        except requests.exceptions.ConnectionError:
+            raise LLMError(
+                f"Generation connection error for {effective_model}",
+                retryable=True,
+                retry_after=RETRY_DELAY_CONNECT,
+                error_class="connection",
+            )
+        except requests.exceptions.RequestException as e:
+            raise LLMError(
+                f"Generation failed for {effective_model}: {e}",
+                retryable=True,
+                error_class="server",
+            )
