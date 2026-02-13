@@ -62,3 +62,46 @@ class JsonRpcClient:
         if self.process and self.process.stdin:
             self.process.stdin.write(header + content)
             self.process.stdin.flush()
+
+    def _read_loop(self) -> None:
+        buffer = b""
+        while self.running and self.process:
+            while b"\r\n\r\n" not in buffer:
+                if self.process.stdout is None:
+                    self.running = False
+                    return
+                chunk = self.process.stdout.read(1)
+                if not chunk:
+                    self.running = False
+                    return
+                buffer += chunk
+
+            header_part, body_part = buffer.split(b"\r\n\r\n", 1)
+            buffer = body_part
+
+            content_len = 0
+            for line in header_part.decode("utf-8").split("\r\n"):
+                if line.startswith("Content-Length:"):
+                    content_len = int(line.split(":")[1].strip())
+
+            while len(buffer) < content_len:
+                if self.process.stdout is None:
+                    self.running = False
+                    return
+                chunk = self.process.stdout.read(content_len - len(buffer))
+                if not chunk:
+                    self.running = False
+                    return
+                buffer += chunk
+
+            msg_bytes = buffer[:content_len]
+            buffer = buffer[content_len:]
+
+            try:
+                msg = json.loads(msg_bytes.decode("utf-8"))
+                if "id" in msg:
+                    self.responses[msg["id"]] = msg.get("result") or msg.get("error")
+                else:
+                    self.notifications.put(msg)
+            except Exception as e:
+                logging.getLogger(__name__).debug("JSON Parse Error: %s", e)
