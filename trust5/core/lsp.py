@@ -119,3 +119,10 @@ class LSPClient:
         self.rpc.send_request("shutdown")
         self.rpc.send_notification("exit")
         self.rpc.stop()
+
+    def initialize(self) -> None:
+        self.rpc.send_request(
+            "initialize",
+            {"processId": os.getpid(), "rootUri": self.root_uri, "capabilities": {}},
+        )
+        self.rpc.send_notification("initialized", {})
