@@ -114,3 +114,8 @@ class LSPClient:
     def start(self) -> None:
         self.rpc.start()
         self.initialize()
+
+    def stop(self) -> None:
+        self.rpc.send_request("shutdown")
+        self.rpc.send_notification("exit")
+        self.rpc.stop()
