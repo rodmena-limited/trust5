@@ -88,3 +88,163 @@ class LLMError(Exception):
     def is_network_error(self) -> bool:
         """True when the failure is infrastructure-related (not a logic error)."""
         return self.error_class in ("connection", "server", "rate_limit")
+
+class LLM:
+    def __init__(
+        self,
+        model: str = "glm-4.7:cloud",
+        base_url: str = "http://localhost:11434",
+        timeout: int = TIMEOUT_STANDARD,
+        fallback_models: list[str] | None = None,
+        thinking_level: str | None = None,
+        backend: str = "ollama",
+        auth_header: str | None = None,
+        auth_token: str | None = None,
+        provider_name: str | None = None,
+    ):
+        self.model = model
+        self.base_url = base_url
+        self.timeout = timeout
+        self.fallback_models = fallback_models or []
+        self.thinking_level = thinking_level
+        self.backend = backend
+        emit(M.MMDL, f"model={model} backend={backend} thinking={thinking_level or 'off'}")
+        self._auth_header = auth_header
+        self._provider_name = provider_name
+        self._abort = threading.Event()
+        self._session = requests.Session()
+        self._session.headers.update({"Content-Type": "application/json"})
+        if auth_header and auth_token:
+            if auth_header == "Authorization":
+                self._session.headers[auth_header] = f"Bearer {auth_token}"
+            else:
+                self._session.headers[auth_header] = auth_token
+            if backend == "anthropic":
+                self._session.headers["anthropic-version"] = "2023-06-01"
+                self._session.headers["anthropic-beta"] = "oauth-2025-04-20"
+
+    def abort(self) -> None:
+        """Signal the current streaming call to stop.
+
+        Called by a watchdog timer from another thread.  The stream
+        consumers check this flag between chunks and break out cleanly.
+        """
+        self._abort.set()
+
+    def reset_abort(self) -> None:
+        """Clear the abort flag before starting a new LLM call."""
+        self._abort.clear()
+
+    def _stream_read_timeout(self) -> int:
+        """Per-chunk read timeout, dynamic based on thinking mode."""
+        if self.thinking_level:
+            return STREAM_READ_TIMEOUT_THINKING
+        return STREAM_READ_TIMEOUT_STANDARD
+
+    def for_tier(
+        cls,
+        tier: str = "default",
+        stage_name: str | None = None,
+        thinking_level: str | None = None,
+        **kwargs: Any,
+    ) -> "LLM":
+        from .auth.registry import get_active_token
+
+        active = get_active_token()
+        if active is not None:
+            provider, token_data = active
+            cfg = provider.config
+            model = cfg.models.get(tier, cfg.models.get("default", ""))
+            fallback = [m for m in cfg.fallback_chain if m != model]
+            resolved = _resolve_thinking_level(tier, cfg.thinking_tiers, stage_name, thinking_level)
+            return cls(
+                model=model,
+                base_url=cfg.api_base_url,
+                fallback_models=fallback,
+                thinking_level=resolved,
+                backend=cfg.backend,
+                auth_header=cfg.auth_header,
+                auth_token=token_data.access_token,
+                provider_name=cfg.name,
+                **kwargs,
+            )
+
+        model = MODEL_TIERS.get(tier, MODEL_TIERS["default"])
+        fallback = [m for m in DEFAULT_FALLBACK_CHAIN if m != model]
+        resolved = _resolve_thinking_level(tier, THINKING_TIERS, stage_name, thinking_level)
+        return cls(model=model, fallback_models=fallback, thinking_level=resolved, **kwargs)
+
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        effective_model = model or self.model
+        effective_timeout = timeout or self.timeout
+        models_to_try = [effective_model] + [m for m in self.fallback_models if m != effective_model]
+
+        last_error = None
+        for try_model in models_to_try:
+            try:
+                return self._chat_with_retry(messages, tools, try_model, effective_timeout)
+            except LLMError as e:
+                last_error = e
+                # Connection errors affect ALL models (same network) — don't
+                # waste time trying fallbacks that will also fail.
+                if e.error_class == "connection":
+                    break
+                emit(M.AFBK, f"Model {try_model} failed: {e}. Trying fallback.")
+                continue
+
+        raise LLMError(
+            f"All models exhausted. Last error: {last_error}",
+            retryable=last_error.retryable if last_error else False,
+            error_class=last_error.error_class if last_error else "permanent",
+        )
+
+    def _chat_with_retry(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None,
+        model: str,
+        timeout: int,
+    ) -> dict[str, Any]:
+        """Retry with a time budget that varies by error class.
+
+        Connection errors get 5 min of quick retries (5s apart).
+        Server/rate errors get 3-5 min of slower retries (30s+ apart).
+        """
+        start = time.monotonic()
+        attempt = 0
+        while True:
+            try:
+                return self._do_chat(messages, tools, model, timeout)
+            except LLMError as e:
+                if not e.retryable:
+                    raise
+                attempt += 1
+                elapsed = time.monotonic() - start
+
+                budget: float
+                delay: float
+                if e.error_class == "connection":
+                    budget = RETRY_BUDGET_CONNECT
+                    delay = RETRY_DELAY_CONNECT
+                elif e.error_class == "rate_limit":
+                    budget = RETRY_BUDGET_RATE
+                    delay = max(e.retry_after, float(RETRY_DELAY_SERVER))
+                else:
+                    budget = RETRY_BUDGET_SERVER
+                    delay = max(e.retry_after, float(RETRY_DELAY_SERVER))
+
+                remaining = budget - elapsed
+                if remaining <= delay:
+                    raise  # budget exhausted
+
+                emit(
+                    M.ARTY,
+                    f"Retry {attempt} for {model} in {delay:.0f}s ({e.error_class}, {remaining:.0f}s budget left): {e}",
+                )
+                time.sleep(delay)
