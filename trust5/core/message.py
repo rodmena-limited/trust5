@@ -2,6 +2,7 @@ import sys
 import threading
 from datetime import datetime
 from enum import StrEnum
+
 from .event_bus import (
     K_BLOCK_END,
     K_BLOCK_LINE,
@@ -13,6 +14,127 @@ from .event_bus import (
     Event,
     get_bus,
 )
+
+
+class M(StrEnum):
+    # ── Agent / LLM Communication ──
+    ATRN = "ATRN"  # agent turn start (Turn X/Y)
+    ATHK = "ATHK"  # agent thinking / reasoning
+    ARSP = "ARSP"  # agent text response (assistant content)
+    ASUM = "ASUM"  # agent summary / final answer
+    AERR = "AERR"  # agent or LLM error
+    ARTY = "ARTY"  # LLM retry (with backoff)
+    AFBK = "AFBK"  # LLM model fallback
+
+    # ── Tool Calls & Results ──
+    TCAL = "TCAL"  # tool call (generic, before execution)
+    TRES = "TRES"  # tool result (generic, after execution)
+    TBSH = "TBSH"  # tool: Bash
+    TRED = "TRED"  # tool: Read file
+    TWRT = "TWRT"  # tool: Write file
+    TEDT = "TEDT"  # tool: Edit file
+    TGLB = "TGLB"  # tool: Glob / list files
+    TGRP = "TGRP"  # tool: Grep / search
+    TPKG = "TPKG"  # tool: package install
+    TINI = "TINI"  # tool: init project
+    TGIT = "TGIT"  # tool: git operations
+
+    # ── Context / Prompt Flow (LLM ↔ Agent) ──
+    CSYS = "CSYS"  # system prompt sent to LLM
+    CUSR = "CUSR"  # user message sent to LLM
+    CAST = "CAST"  # assistant message from LLM (raw)
+    CTLC = "CTLC"  # tool_call from LLM (name + args)
+    CTLR = "CTLR"  # tool result sent back to LLM
+    CTRM = "CTRM"  # context trimmed / history pruned
+    CTKN = "CTKN"  # token count / context size info
+    CMDL = "CMDL"  # model info (name, tier)
+    CREQ = "CREQ"  # LLM API request metadata (model, msg count, tool count)
+    CRES = "CRES"  # LLM API response metadata (tokens, finish reason)
+
+    # ── Workflow / Pipeline ──
+    WSTR = "WSTR"  # workflow started
+    WEND = "WEND"  # workflow ended
+    WSUC = "WSUC"  # workflow succeeded
+    WFAL = "WFAL"  # workflow failed
+    WTMO = "WTMO"  # workflow timeout
+    WCAN = "WCAN"  # workflow canceled
+    WRCV = "WRCV"  # workflow recovered on startup
+    WSTG = "WSTG"  # stage started / transition
+    WJMP = "WJMP"  # stage jump (jump_to)
+    WSKP = "WSKP"  # stage skipped
+    WINT = "WINT"  # workflow interrupted (signal)
+
+    # ── Validation / Testing ──
+    VRUN = "VRUN"  # validation running
+    VPAS = "VPAS"  # validation passed (all tests OK)
+    VFAL = "VFAL"  # validation failed (tests failing)
+    VSYN = "VSYN"  # syntax check result
+    VTST = "VTST"  # raw test output
+
+    # ── Repair ──
+    RSTR = "RSTR"  # repair started
+    REND = "REND"  # repair completed
+    RFAL = "RFAL"  # repair failed
+    RSKP = "RSKP"  # repair skipped (no failures)
+    RJMP = "RJMP"  # repair jumping back to validate
+
+    # ── Quality Gate ──
+    QRUN = "QRUN"  # quality gate running
+    QPAS = "QPAS"  # quality gate passed
+    QFAL = "QFAL"  # quality gate failed
+    QVAL = "QVAL"  # individual validator result
+    QRPT = "QRPT"  # quality report summary
+    QJMP = "QJMP"  # quality jumping to repair
+
+    # ── Loop (Ralph) ──
+    LSTR = "LSTR"  # loop started
+    LITR = "LITR"  # loop iteration
+    LEND = "LEND"  # loop ended (no issues)
+    LFIX = "LFIX"  # loop fixing issue
+    LDIG = "LDIG"  # loop diagnostics count
+    LERR = "LERR"  # loop error
+
+    # ── User Interaction ──
+    UASK = "UASK"  # question to user
+    UANS = "UANS"  # answer from user
+    UAUT = "UAUT"  # auto-answer (non-interactive)
+
+    # ── System / Infrastructure ──
+    SINF = "SINF"  # system info
+    SWRN = "SWRN"  # system warning
+    SERR = "SERR"  # system error
+    SDBG = "SDBG"  # system debug
+    SCFG = "SCFG"  # config message
+    SLSP = "SLSP"  # LSP diagnostic
+    SRCV = "SRCV"  # recovery message
+    SDB = "SDB_"  # database operation
+
+    # ── Code Artifacts ──
+    KDIF = "KDIF"  # diff / patch
+    KCOD = "KCOD"  # code block / snippet
+    KFMT = "KFMT"  # format / lint output
+    KBLD = "KBLD"  # build output
+
+    # ── Planning / Progress ──
+    PTDO = "PTDO"  # todo / task list
+    PPLN = "PPLN"  # plan step
+    PPRG = "PPRG"  # progress update
+    PDNE = "PDNE"  # done / complete marker
+
+    # ── Model / Token Tracking (TUI status bar) ──
+    MTKN = "MTKN"  # token usage (in/out/total per call)
+    MCTX = "MCTX"  # context window remaining
+    MBDG = "MBDG"  # budget / rate limit info
+    MMDL = "MMDL"  # model metadata (name, provider, tier)
+    MPRF = "MPRF"  # provider info (active provider, auth status)
+
+    # ── TUI Layout Events ──
+    FCHG = "FCHG"  # file changed (path + action)
+    SELP = "SELP"  # stage elapsed time
+    SPRG = "SPRG"  # stage progress (current/total)
+    GSTS = "GSTS"  # git status (branch, dirty, commits)
+
+
 TOOL_CODE_MAP = {
     "Bash": M.TBSH,
     "Read": M.TRED,
@@ -24,13 +146,16 @@ TOOL_CODE_MAP = {
     "InitProject": M.TINI,
     "AskUserQuestion": M.UASK,
 }
+
+
 _enabled = True
 _print_fallback = True
-_stream_local = threading.local()
+
 
 def set_enabled(value: bool) -> None:
     global _enabled
     _enabled = value
+
 
 def set_print_fallback(value: bool) -> None:
     """Disable print fallback when TUI is active.
@@ -42,8 +167,10 @@ def set_print_fallback(value: bool) -> None:
     global _print_fallback
     _print_fallback = value
 
+
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
+
 
 def emit(code: M, message: str, *, truncate: int = 0, label: str = "") -> None:
     if not _enabled:
@@ -59,6 +186,7 @@ def emit(code: M, message: str, *, truncate: int = 0, label: str = "") -> None:
             print(f"{{{code.value}}}{_ts()} {message}", flush=True)
     elif _print_fallback:
         print(f"{{{code.value}}}{_ts()} {message}", flush=True)
+
 
 def emit_block(code: M, label: str, content: str, *, max_lines: int = 0) -> None:
     if not _enabled:
@@ -87,6 +215,10 @@ def emit_block(code: M, label: str, content: str, *, max_lines: int = 0) -> None
             print(f"{tag}{_ts()}  \u2502 {line}", flush=True)
         print(f"{tag}{_ts()} \u2514\u2500\u2500", flush=True)
 
+
+_stream_local = threading.local()
+
+
 def emit_stream_start(code: M, label: str) -> None:
     if not _enabled:
         return
@@ -96,6 +228,7 @@ def emit_stream_start(code: M, label: str) -> None:
         bus.publish(Event(kind=K_STREAM_START, code=code.value, ts=_ts(), label=label))
     elif _print_fallback:
         print(f"{{{code.value}}}{_ts()} {label}", end="", flush=True)
+
 
 def emit_stream_token(token: str) -> None:
     if not _enabled:
@@ -108,93 +241,17 @@ def emit_stream_token(token: str) -> None:
         sys.stdout.write(token)
         sys.stdout.flush()
 
-class M(StrEnum):
-    ATRN = 'ATRN'
-    ATHK = 'ATHK'
-    ARSP = 'ARSP'
-    ASUM = 'ASUM'
-    AERR = 'AERR'
-    ARTY = 'ARTY'
-    AFBK = 'AFBK'
-    TCAL = 'TCAL'
-    TRES = 'TRES'
-    TBSH = 'TBSH'
-    TRED = 'TRED'
-    TWRT = 'TWRT'
-    TEDT = 'TEDT'
-    TGLB = 'TGLB'
-    TGRP = 'TGRP'
-    TPKG = 'TPKG'
-    TINI = 'TINI'
-    TGIT = 'TGIT'
-    CSYS = 'CSYS'
-    CUSR = 'CUSR'
-    CAST = 'CAST'
-    CTLC = 'CTLC'
-    CTLR = 'CTLR'
-    CTRM = 'CTRM'
-    CTKN = 'CTKN'
-    CMDL = 'CMDL'
-    CREQ = 'CREQ'
-    CRES = 'CRES'
-    WSTR = 'WSTR'
-    WEND = 'WEND'
-    WSUC = 'WSUC'
-    WFAL = 'WFAL'
-    WTMO = 'WTMO'
-    WCAN = 'WCAN'
-    WRCV = 'WRCV'
-    WSTG = 'WSTG'
-    WJMP = 'WJMP'
-    WSKP = 'WSKP'
-    WINT = 'WINT'
-    VRUN = 'VRUN'
-    VPAS = 'VPAS'
-    VFAL = 'VFAL'
-    VSYN = 'VSYN'
-    VTST = 'VTST'
-    RSTR = 'RSTR'
-    REND = 'REND'
-    RFAL = 'RFAL'
-    RSKP = 'RSKP'
-    RJMP = 'RJMP'
-    QRUN = 'QRUN'
-    QPAS = 'QPAS'
-    QFAL = 'QFAL'
-    QVAL = 'QVAL'
-    QRPT = 'QRPT'
-    QJMP = 'QJMP'
-    LSTR = 'LSTR'
-    LITR = 'LITR'
-    LEND = 'LEND'
-    LFIX = 'LFIX'
-    LDIG = 'LDIG'
-    LERR = 'LERR'
-    UASK = 'UASK'
-    UANS = 'UANS'
-    UAUT = 'UAUT'
-    SINF = 'SINF'
-    SWRN = 'SWRN'
-    SERR = 'SERR'
-    SDBG = 'SDBG'
-    SCFG = 'SCFG'
-    SLSP = 'SLSP'
-    SRCV = 'SRCV'
-    SDB = 'SDB_'
-    KDIF = 'KDIF'
-    KCOD = 'KCOD'
-    KFMT = 'KFMT'
-    KBLD = 'KBLD'
-    PTDO = 'PTDO'
-    PPLN = 'PPLN'
-    PPRG = 'PPRG'
-    PDNE = 'PDNE'
-    MTKN = 'MTKN'
-    MCTX = 'MCTX'
-    MBDG = 'MBDG'
-    MMDL = 'MMDL'
-    MPRF = 'MPRF'
-    FCHG = 'FCHG'
-    SELP = 'SELP'
-    SPRG = 'SPRG'
-    GSTS = 'GSTS'
+
+def emit_stream_end() -> None:
+    if not _enabled:
+        return
+    code = getattr(_stream_local, "code", "")
+    bus = get_bus()
+    if bus is not None:
+        bus.publish(Event(kind=K_STREAM_END, code=code, ts=_ts()))
+    elif _print_fallback:
+        print("", flush=True)
+
+
+def tool_code(name: str) -> M:
+    return TOOL_CODE_MAP.get(name, M.TCAL)
