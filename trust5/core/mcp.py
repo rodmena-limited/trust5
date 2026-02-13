@@ -67,3 +67,23 @@ class MCPClient:
         resp = self._send_request("tools/list")
         result: list[dict[str, Any]] = resp.get("result", {}).get("tools", [])
         return result
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+        resp = self._send_request("tools/call", {"name": name, "arguments": arguments})
+        result: dict[str, Any] | None = resp.get("result")
+        return result
+
+    def _send_request(self, method: str, params: Any = None) -> dict[str, Any]:
+        self.msg_id += 1
+        req = {"jsonrpc": "2.0", "id": self.msg_id, "method": method}
+        if params is not None:
+            req["params"] = params
+
+        self._write_json(req)
+        return self._read_response()
+
+    def _send_notification(self, method: str, params: Any = None) -> None:
+        req: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            req["params"] = params
+        self._write_json(req)
