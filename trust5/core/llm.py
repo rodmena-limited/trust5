@@ -36,3 +36,55 @@ MODEL_TIERS = {
     "default": "qwen3-coder-next:cloud",
 }
 THINKING_TIERS = {"best", "good"}
+STAGE_THINKING_LEVEL: dict[str, str] = {
+    "trust5-planner": "high",
+    "planner": "high",
+    "test-writer": "low",
+    "test_writer": "low",
+    "repairer": "low",
+    "repair": "low",
+}
+_ANTHROPIC_THINKING_BUDGET = {"low": 5000, "high": 10000}
+_GEMINI_25_THINKING_BUDGET = {"low": 5000, "high": 10000}
+DEFAULT_FALLBACK_CHAIN = [
+    "qwen3-coder-next:cloud",
+    "kimi-k2.5:cloud",
+    "nemotron-3-nano:30b-cloud",
+]
+
+def _resolve_thinking_level(
+    tier: str,
+    thinking_tiers: set[str],
+    stage_name: str | None,
+    thinking_level_override: str | None = None,
+) -> str | None:
+    if thinking_level_override is not None:
+        return thinking_level_override
+    if stage_name is not None:
+        return STAGE_THINKING_LEVEL.get(stage_name.lower())
+    return "low" if tier in thinking_tiers else None
+
+class LLMError(Exception):
+    """LLM call failure with error classification for smart retry logic.
+
+    error_class values:
+      "connection"  — network unreachable, DNS failure, TCP connect timeout
+      "server"      — 5xx, read timeout (server alive but struggling)
+      "rate_limit"  — 429 (use retry_after from server header)
+      "permanent"   — 4xx, auth failure, bad request (no retry)
+    """
+    def __init__(
+        self,
+        message: str,
+        retryable: bool = False,
+        retry_after: float = 0,
+        error_class: str = "permanent",
+    ):
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = retry_after
+        self.error_class = error_class
+
+    def is_network_error(self) -> bool:
+        """True when the failure is infrastructure-related (not a logic error)."""
+        return self.error_class in ("connection", "server", "rate_limit")
