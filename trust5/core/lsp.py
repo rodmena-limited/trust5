@@ -17,3 +17,15 @@ class JsonRpcClient:
         self.notifications: queue.Queue[dict[str, Any]] = queue.Queue()
         self.running = False
         self._lock = threading.Lock()
+
+    def start(self) -> None:
+        self.process = subprocess.Popen(
+            self.command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=self.cwd,
+            text=False,
+        )
+        self.running = True
+        threading.Thread(target=self._read_loop, daemon=True).start()
