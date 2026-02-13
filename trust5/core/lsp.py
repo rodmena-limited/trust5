@@ -105,3 +105,8 @@ class JsonRpcClient:
                     self.notifications.put(msg)
             except Exception as e:
                 logging.getLogger(__name__).debug("JSON Parse Error: %s", e)
+
+class LSPClient:
+    def __init__(self, command: list[str], root_uri: str):
+        self.rpc = JsonRpcClient(command)
+        self.root_uri = root_uri
