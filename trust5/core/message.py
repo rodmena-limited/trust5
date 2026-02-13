@@ -45,6 +45,48 @@ def set_print_fallback(value: bool) -> None:
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
+def emit(code: M, message: str, *, truncate: int = 0, label: str = "") -> None:
+    if not _enabled:
+        return
+    if truncate > 0 and len(message) > truncate:
+        message = message[:truncate] + f"... [{len(message) - truncate} chars]"
+    bus = get_bus()
+    if bus is not None:
+        bus.publish(Event(kind=K_MSG, code=code.value, ts=_ts(), msg=message, label=label))
+        # Also print if fallback is on and no one is listening on the bus
+        # (pre-TUI state: bus exists but TUI hasn't subscribed yet)
+        if _print_fallback and not bus._listeners:
+            print(f"{{{code.value}}}{_ts()} {message}", flush=True)
+    elif _print_fallback:
+        print(f"{{{code.value}}}{_ts()} {message}", flush=True)
+
+def emit_block(code: M, label: str, content: str, *, max_lines: int = 0) -> None:
+    if not _enabled:
+        return
+    lines = content.splitlines()
+    if max_lines > 0 and len(lines) > max_lines:
+        lines = lines[:max_lines] + [f"... [{len(lines) - max_lines} more lines]"]
+    bus = get_bus()
+    if bus is not None:
+        ts = _ts()
+        cv = code.value
+        bus.publish(Event(kind=K_BLOCK_START, code=cv, ts=ts, label=label))
+        for line in lines:
+            bus.publish(Event(kind=K_BLOCK_LINE, code=cv, ts=ts, msg=line))
+        bus.publish(Event(kind=K_BLOCK_END, code=cv, ts=ts))
+        if _print_fallback and not bus._listeners:
+            tag = f"{{{cv}}}"
+            print(f"{tag}{_ts()} \u250c\u2500\u2500 {label}", flush=True)
+            for line in lines:
+                print(f"{tag}{_ts()}  \u2502 {line}", flush=True)
+            print(f"{tag}{_ts()} \u2514\u2500\u2500", flush=True)
+    elif _print_fallback:
+        tag = f"{{{code.value}}}"
+        print(f"{tag}{_ts()} \u250c\u2500\u2500 {label}", flush=True)
+        for line in lines:
+            print(f"{tag}{_ts()}  \u2502 {line}", flush=True)
+        print(f"{tag}{_ts()} \u2514\u2500\u2500", flush=True)
+
 class M(StrEnum):
     ATRN = 'ATRN'
     ATHK = 'ATHK'
