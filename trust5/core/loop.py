@@ -25,3 +25,30 @@ class RalphLoop:
 
         self.max_iterations = 100
         self.iteration_count = 0
+
+    def start_loop(self) -> None:
+        emit(M.LSTR, "Starting Ralph Loop...")
+        try:
+            self.lsp.start()
+            time.sleep(2)
+
+            while self.iteration_count < self.max_iterations:
+                self.iteration_count += 1
+                emit(M.LITR, f"Iteration {self.iteration_count}/{self.max_iterations}")
+
+                issues = self.diagnose()
+                if not issues:
+                    emit(M.LEND, "No issues found. Loop complete.")
+                    break
+
+                emit(M.LDIG, f"Found {len(issues)} issues.")
+
+                for issue in issues:
+                    self.fix_issue(issue)
+
+                time.sleep(1)
+
+        except Exception as e:
+            emit(M.LERR, f"Loop Error: {e}")
+        finally:
+            self.lsp.stop()
