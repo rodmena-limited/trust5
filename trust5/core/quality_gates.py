@@ -10,6 +10,12 @@ CONVENTIONAL_COMMIT_RE = re.compile(
 PILLAR_PASS_THRESHOLD = 0.85
 PILLAR_WARNING_THRESHOLD = 0.50
 
+def is_conventional_commit(msg: str) -> bool:
+    return bool(CONVENTIONAL_COMMIT_RE.match(msg.strip().split("\n")[0]))
+
+def validate_plan_phase(snapshot: DiagnosticSnapshot) -> list[Issue]:
+    return []
+
 @dataclass
 class DiagnosticSnapshot:
     errors: int = 0
@@ -55,3 +61,6 @@ class Assessment:
         if any(p.status == PillarStatus.WARNING for p in self.pillars.values()):
             return PillarStatus.WARNING
         return PillarStatus.PASS
+
+    def is_pass(self) -> bool:
+        return all(p.score >= PILLAR_PASS_THRESHOLD for p in self.pillars.values())
