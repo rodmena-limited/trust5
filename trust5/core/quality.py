@@ -292,6 +292,54 @@ def _is_tool_missing(output: str) -> bool:
     lower = output.lower()
     return any(pat in lower for pat in _TOOL_MISSING_PATTERNS)
 
+def _parse_security_json(out: str) -> list[dict[str, str]]:
+    """Parse JSON security output (bandit, gosec). Returns list of findings."""
+    try:
+        data = json.loads(out.strip())
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return []
+    results = data.get("results", []) if isinstance(data, dict) else []
+    findings: list[dict[str, str]] = []
+    for r in results:
+        findings.append(
+            {
+                "sev": str(r.get("issue_severity", "LOW")).upper(),
+                "text": str(r.get("issue_text", "")),
+                "file": str(r.get("filename", "")),
+                "line": str(r.get("line_number", 0)),
+                "rule": str(r.get("test_id", "")),
+            }
+        )
+    return findings
+
+def _path_in_skip_dirs(filepath: str, skip_dirs: set[str]) -> bool:
+    """Return True if *filepath* is inside any of *skip_dirs*."""
+    parts = os.path.normpath(filepath).split(os.sep)
+    # Check every directory component (exclude the filename itself).
+    return any(p in skip_dirs for p in parts[:-1])
+
+def _filter_excluded_findings(
+    findings: list[dict[str, str]],
+    skip_dirs: tuple[str, ...],
+) -> list[dict[str, str]]:
+    """Remove findings whose file path falls inside a skipped directory.
+
+    Defense-in-depth: security tools (bandit, gosec) have their own
+    ``--exclude`` flags but behaviour is version-dependent and may miss
+    directory variants (e.g. ``venv`` vs ``./venv``).  Filtering here
+    guarantees that third-party / vendored code never poisons the score.
+    """
+    if not skip_dirs:
+        return findings
+    skip = set(skip_dirs)
+    out: list[dict[str, str]] = []
+    for f in findings:
+        fpath = f.get("file", "")
+        if fpath and _path_in_skip_dirs(fpath, skip):
+            continue
+        out.append(f)
+    return out
+
 class Issue(BaseModel):
     file: str = ''
     line: int = 0
@@ -433,3 +481,102 @@ class ReadableValidator(_ValidatorBase):
     interpret it in context. Scoring is based on exit codes, not parsed
     violation counts.
     """
+
+    def name(self) -> str:
+        return PRINCIPLE_READABLE
+
+    def validate(self) -> PrincipleResult:
+        result = PrincipleResult(name=self.name(), passed=True, score=1.0)
+        lint_failures = 0
+
+        plan_lint = self._config.plan_lint_command
+        if plan_lint:
+            cmds: tuple[str, ...] = (plan_lint,)
+        else:
+            cmds = self._profile.lint_check_commands or self._profile.lint_commands
+
+        for cmd_str in cmds:
+            rc, out = _run_command(("sh", "-c", cmd_str), self._root)
+            if rc == 0:
+                continue
+            if rc == 127 or _is_tool_missing(out):
+                continue
+            lint_failures += 1
+            result.issues.append(
+                Issue(
+                    severity="error",
+                    message=out[:2000],
+                    rule="lint-raw",
+                )
+            )
+
+        result.score = max(0.0, round(1.0 - lint_failures * 0.2, 3))
+        result.passed = lint_failures == 0
+        return result
+
+class UnderstandableValidator(_ValidatorBase):
+
+    def name(self) -> str:
+        return PRINCIPLE_UNDERSTANDABLE
+
+    def validate(self) -> PrincipleResult:
+        result = PrincipleResult(name=self.name(), passed=True, score=1.0)
+        checks = 3.0
+        score = 0.0
+
+        warnings = 0
+        skip = set(self._profile.skip_dirs)
+        for cmd_str in self._profile.lint_commands:
+            _, out = _run_command(("sh", "-c", cmd_str), self._root)
+            for line in out.splitlines():
+                if not re.search(r"warning", line, re.IGNORECASE):
+                    continue
+                # Skip warnings originating from excluded directories
+                if skip and any(
+                    f"/{d}/" in line or line.startswith(f"{d}/") or line.startswith(f"./{d}/") for d in skip
+                ):
+                    continue
+                warnings += 1
+
+        threshold = self._config.max_warnings
+        if threshold > 0 and warnings > threshold:
+            result.issues.append(
+                Issue(
+                    severity="warning",
+                    message=f"warning count {warnings} exceeds threshold {threshold}",
+                    rule="warnings-threshold",
+                )
+            )
+            score += max(0.0, 1.0 - (warnings - threshold) * 0.05)
+        else:
+            score += 1.0
+
+        source_files = _find_source_files(self._root, self._profile.extensions, self._profile.skip_dirs)
+        non_test_files = [f for f in source_files if not _TEST_PATTERN.search(os.path.basename(f))]
+        max_lines = self._config.max_file_lines or MAX_FILE_LINES
+        size_issues = _check_file_sizes(non_test_files, max_lines)
+        if size_issues:
+            result.issues.extend(size_issues)
+            score += 0.5
+        else:
+            score += 1.0
+
+        doc_score = _check_doc_completeness(source_files, self._profile.language)
+        if doc_score < 0.5:
+            result.issues.append(
+                Issue(
+                    severity="warning",
+                    message=f"documentation completeness {doc_score:.0%} is low",
+                    rule="doc-completeness",
+                )
+            )
+            score += doc_score
+        else:
+            score += 1.0
+
+        result.score = round(score / checks, 3)
+        result.passed = (threshold == 0 or warnings <= threshold) and len(size_issues) == 0
+        return result
+
+class SecuredValidator(_ValidatorBase):
+    pass
