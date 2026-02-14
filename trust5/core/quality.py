@@ -269,6 +269,29 @@ def _check_generic_assertions(test_files: list[str], language: str) -> tuple[flo
         )
     return density, issues
 
+def check_assertion_density(
+    project_root: str,
+    extensions: tuple[str, ...],
+    skip_dirs: tuple[str, ...],
+    language: str,
+) -> tuple[float, list[Issue]]:
+    """Check that test functions contain meaningful assertions.
+
+    Returns (density_score, issues).
+    1.0 = all tests have assertions, 0.0 = no tests have assertions.
+    """
+    all_files = _find_source_files(project_root, extensions, skip_dirs)
+    test_files = [f for f in all_files if _TEST_PATTERN.search(os.path.basename(f))]
+    if not test_files:
+        return 1.0, []
+    if language == "python":
+        return _check_python_assertions(test_files)
+    return _check_generic_assertions(test_files, language)
+
+def _is_tool_missing(output: str) -> bool:
+    lower = output.lower()
+    return any(pat in lower for pat in _TOOL_MISSING_PATTERNS)
+
 class Issue(BaseModel):
     file: str = ''
     line: int = 0
@@ -290,3 +313,123 @@ class QualityReport(BaseModel):
     total_warnings: int = 0
     coverage_pct: float = -1.0
     timestamp: str = ''
+
+class _ValidatorBase:
+    def __init__(self, project_root: str, profile: LanguageProfile, config: QualityConfig):
+        self._root = project_root
+        self._profile = profile
+        self._config = config
+
+    def name(self) -> str:
+        raise NotImplementedError
+
+    def validate(self) -> PrincipleResult:
+        raise NotImplementedError
+
+class TestedValidator(_ValidatorBase):
+
+    def name(self) -> str:
+        return PRINCIPLE_TESTED
+
+    def validate(self) -> PrincipleResult:
+        result = PrincipleResult(name=self.name(), passed=True, score=1.0)
+        checks, score = 4.0, 0.0
+
+        plan_test = self._config.plan_test_command
+        if plan_test:
+            test_cmd: tuple[str, ...] = ("sh", "-c", plan_test)
+        else:
+            test_cmd = self._profile.test_command
+        rc_test, out_test = _run_command(test_cmd, self._root)
+        if rc_test == 0:
+            score += 1.0
+        else:
+            result.issues.append(Issue(severity="error", message="tests failed", rule="tests-pass"))
+
+        type_errors = len(re.findall(r"(?i)type\s*error", out_test))
+        if type_errors == 0:
+            score += 1.0
+        else:
+            result.issues.append(
+                Issue(
+                    severity="error",
+                    message=f"{type_errors} type error(s)",
+                    rule="type-error",
+                )
+            )
+
+        cov = -1.0
+        plan_cov = self._config.plan_coverage_command
+        if plan_cov:
+            cov_cmd: tuple[str, ...] | None = ("sh", "-c", plan_cov)
+        else:
+            cov_cmd = self._profile.coverage_command
+        rc_cov, out_cov = _run_command(cov_cmd, self._root)
+        if rc_cov == 127:
+            score += 0.5
+            result.issues.append(
+                Issue(
+                    severity="hint",
+                    message="coverage tool not available",
+                    rule="coverage-unavailable",
+                )
+            )
+        else:
+            cov = _parse_coverage(out_cov, self._profile.language)
+            if cov < 0:
+                score += 0.5
+                result.issues.append(
+                    Issue(
+                        severity="hint",
+                        message="coverage output unparseable",
+                        rule="coverage-parse-fail",
+                    )
+                )
+            elif cov >= self._config.coverage_threshold:
+                score += 1.0
+            else:
+                score += min(1.0, cov / self._config.coverage_threshold)
+                result.issues.append(
+                    Issue(
+                        severity="error",
+                        message=f"coverage {cov:.1f}% below {self._config.coverage_threshold}%",
+                        rule="coverage-threshold",
+                    )
+                )
+
+        if cov >= 0:
+            result.issues.append(
+                Issue(
+                    severity="hint",
+                    message=f"coverage={cov:.1f}%",
+                    rule="coverage-measured",
+                )
+            )
+
+        # Check 4: Assertion density (Oracle Problem mitigation)
+        assertion_density, assertion_issues = check_assertion_density(
+            self._root, self._profile.extensions, self._profile.skip_dirs, self._profile.language,
+        )
+        score += assertion_density
+        result.issues.extend(assertion_issues)
+        result.issues.append(
+            Issue(severity="hint", message=f"assertion_density={assertion_density:.2f}", rule="assertion-density-measured")
+        )
+
+        result.score = round(score / checks, 3)
+        result.passed = (
+            rc_test == 0
+            and type_errors == 0
+            and (cov < 0 or cov >= self._config.coverage_threshold)
+            and assertion_density >= 0.5
+        )
+        return result
+
+class ReadableValidator(_ValidatorBase):
+    """LLM-first readable validator.
+
+    Runs lint commands, captures raw output. Does NOT regex-parse errors.
+    Raw output is stored as Issue.message so the repair agent (LLM) can
+    interpret it in context. Scoring is based on exit codes, not parsed
+    violation counts.
+    """
