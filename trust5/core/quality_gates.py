@@ -1,20 +1,83 @@
+"""Phase-specific quality gates, regression detection, and methodology validation."""
+
 from __future__ import annotations
+
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+
 from .config import QualityConfig
 from .quality import Issue, QualityReport
+
 CONVENTIONAL_COMMIT_RE = re.compile(
     r"^(feat|fix|build|chore|ci|docs|style|refactor|perf|test)" r"(\([a-zA-Z0-9_./-]+\))?!?: .+$"
 )
+
 PILLAR_PASS_THRESHOLD = 0.85
 PILLAR_WARNING_THRESHOLD = 0.50
+
+
+@dataclass
+class DiagnosticSnapshot:
+    errors: int = 0
+    warnings: int = 0
+    type_errors: int = 0
+    lint_errors: int = 0
+    security_warnings: int = 0
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+class PillarStatus:
+    PASS = "pass"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+    @staticmethod
+    def from_score(score: float) -> str:
+        if score >= PILLAR_PASS_THRESHOLD:
+            return PillarStatus.PASS
+        if score >= PILLAR_WARNING_THRESHOLD:
+            return PillarStatus.WARNING
+        return PillarStatus.CRITICAL
+
+
+@dataclass
+class PillarAssessment:
+    pillar: str
+    score: float
+    status: str
+    issues: list[str] = field(default_factory=list)
+
+
+class Assessment:
+    def __init__(self, report: QualityReport) -> None:
+        self.pillars: dict[str, PillarAssessment] = {}
+        for name, pr in report.principles.items():
+            self.pillars[name] = PillarAssessment(
+                pillar=name,
+                score=pr.score,
+                status=PillarStatus.from_score(pr.score),
+                issues=[i.message for i in pr.issues if i.severity in ("error", "warning")],
+            )
+
+    def overall_status(self) -> str:
+        if any(p.status == PillarStatus.CRITICAL for p in self.pillars.values()):
+            return PillarStatus.CRITICAL
+        if any(p.status == PillarStatus.WARNING for p in self.pillars.values()):
+            return PillarStatus.WARNING
+        return PillarStatus.PASS
+
+    def is_pass(self) -> bool:
+        return all(p.score >= PILLAR_PASS_THRESHOLD for p in self.pillars.values())
+
 
 def is_conventional_commit(msg: str) -> bool:
     return bool(CONVENTIONAL_COMMIT_RE.match(msg.strip().split("\n")[0]))
 
+
 def validate_plan_phase(snapshot: DiagnosticSnapshot) -> list[Issue]:
     return []
+
 
 def validate_run_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> list[Issue]:
     issues: list[Issue] = []
@@ -45,6 +108,7 @@ def validate_run_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> l
         )
     return issues
 
+
 def validate_sync_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> list[Issue]:
     issues: list[Issue] = []
     gate = config.sync_gate
@@ -66,6 +130,7 @@ def validate_sync_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> 
         )
     return issues
 
+
 def validate_phase(
     phase: str,
     snapshot: DiagnosticSnapshot,
@@ -78,6 +143,7 @@ def validate_phase(
     if phase == "sync":
         return validate_sync_phase(snapshot, config)
     return []
+
 
 def detect_regression(
     baseline: DiagnosticSnapshot,
@@ -122,6 +188,42 @@ def detect_regression(
 
     return issues
 
+
+@dataclass
+class MethodologyContext:
+    characterization_tests_exist: bool = False
+    preserve_step_completed: bool = False
+    behavior_snapshot_regressed: bool = False
+    test_first_verified: bool = False
+    commit_coverage: int = 0
+    coverage_exemption_requested: bool = False
+    new_files: list[str] = field(default_factory=list)
+    modified_files: list[str] = field(default_factory=list)
+    new_code_coverage: int = 0
+    legacy_code_coverage: int = 0
+    # Oracle Problem mitigation fields
+    assertion_density: float = -1.0  # -1.0 = not measured, 0.0-1.0 = ratio
+    mutation_score: float = -1.0  # -1.0 = not measured, 0.0-1.0 = kill rate
+
+
+def validate_methodology(
+    mode: str,
+    ctx: MethodologyContext,
+    config: QualityConfig,
+) -> list[Issue]:
+    if mode == "ddd":
+        issues = _validate_ddd(ctx, config)
+    elif mode == "tdd":
+        issues = _validate_tdd(ctx, config)
+    elif mode == "hybrid":
+        issues = _validate_hybrid(ctx, config)
+    else:
+        issues = []
+    # Oracle Problem checks apply to ALL modes
+    issues.extend(_validate_oracle_mitigations(ctx, config))
+    return issues
+
+
 def _validate_ddd(ctx: MethodologyContext, config: QualityConfig) -> list[Issue]:
     issues: list[Issue] = []
     ddd = config.ddd
@@ -151,66 +253,117 @@ def _validate_ddd(ctx: MethodologyContext, config: QualityConfig) -> list[Issue]
         )
     return issues
 
-@dataclass
-class DiagnosticSnapshot:
-    errors: int = 0
-    warnings: int = 0
-    type_errors: int = 0
-    lint_errors: int = 0
-    security_warnings: int = 0
-    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-class PillarStatus:
-    PASS = 'pass'
-    WARNING = 'warning'
-    CRITICAL = 'critical'
-
-    def from_score(score: float) -> str:
-        if score >= PILLAR_PASS_THRESHOLD:
-            return PillarStatus.PASS
-        if score >= PILLAR_WARNING_THRESHOLD:
-            return PillarStatus.WARNING
-        return PillarStatus.CRITICAL
-
-@dataclass
-class PillarAssessment:
-    pillar: str
-    score: float
-    status: str
-    issues: list[str] = field(default_factory=list)
-
-class Assessment:
-    def __init__(self, report: QualityReport) -> None:
-        self.pillars: dict[str, PillarAssessment] = {}
-        for name, pr in report.principles.items():
-            self.pillars[name] = PillarAssessment(
-                pillar=name,
-                score=pr.score,
-                status=PillarStatus.from_score(pr.score),
-                issues=[i.message for i in pr.issues if i.severity in ("error", "warning")],
+def _validate_tdd(ctx: MethodologyContext, config: QualityConfig) -> list[Issue]:
+    issues: list[Issue] = []
+    tdd = config.tdd
+    if tdd.require_test_first and not ctx.test_first_verified:
+        issues.append(
+            Issue(
+                severity="error",
+                message="tests must be written before implementation in TDD mode",
+                rule="tdd-test-first",
             )
+        )
+    if ctx.coverage_exemption_requested:
+        issues.append(
+            Issue(
+                severity="error",
+                message="coverage exemptions not allowed in TDD mode",
+                rule="tdd-no-exemption",
+            )
+        )
+    if tdd.min_coverage_per_commit > 0 and ctx.commit_coverage < tdd.min_coverage_per_commit:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"commit coverage {ctx.commit_coverage}% below TDD minimum {tdd.min_coverage_per_commit}%",
+                rule="tdd-min-coverage",
+            )
+        )
+    return issues
 
-    def overall_status(self) -> str:
-        if any(p.status == PillarStatus.CRITICAL for p in self.pillars.values()):
-            return PillarStatus.CRITICAL
-        if any(p.status == PillarStatus.WARNING for p in self.pillars.values()):
-            return PillarStatus.WARNING
-        return PillarStatus.PASS
 
-    def is_pass(self) -> bool:
-        return all(p.score >= PILLAR_PASS_THRESHOLD for p in self.pillars.values())
+def _validate_hybrid(ctx: MethodologyContext, config: QualityConfig) -> list[Issue]:
+    issues: list[Issue] = []
+    hyb = config.hybrid
+    if ctx.new_files and hyb.min_coverage_new > 0 and ctx.new_code_coverage < hyb.min_coverage_new:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"new code coverage {ctx.new_code_coverage}% below hybrid minimum {hyb.min_coverage_new}%",
+                rule="hybrid-new-coverage",
+            )
+        )
+    if ctx.modified_files and hyb.min_coverage_legacy > 0 and ctx.legacy_code_coverage < hyb.min_coverage_legacy:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"legacy code coverage {ctx.legacy_code_coverage}% below hybrid minimum "
+                f"{hyb.min_coverage_legacy}%",
+                rule="hybrid-legacy-coverage",
+            )
+        )
+    return issues
 
-@dataclass
-class MethodologyContext:
-    characterization_tests_exist: bool = False
-    preserve_step_completed: bool = False
-    behavior_snapshot_regressed: bool = False
-    test_first_verified: bool = False
-    commit_coverage: int = 0
-    coverage_exemption_requested: bool = False
-    new_files: list[str] = field(default_factory=list)
-    modified_files: list[str] = field(default_factory=list)
-    new_code_coverage: int = 0
-    legacy_code_coverage: int = 0
-    assertion_density: float = -1.0
-    mutation_score: float = -1.0
+
+def _validate_oracle_mitigations(ctx: MethodologyContext, config: QualityConfig) -> list[Issue]:
+    """Validate oracle problem mitigations — applies to ALL development modes."""
+    issues: list[Issue] = []
+    # Assertion density: flag vacuous test suites
+    if ctx.assertion_density >= 0 and ctx.assertion_density < 0.5:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"assertion density {ctx.assertion_density:.0%} — "
+                "test suite may contain vacuous tests (Oracle Problem risk)",
+                rule="oracle-assertion-density",
+            )
+        )
+    elif ctx.assertion_density >= 0 and ctx.assertion_density < 0.8:
+        issues.append(
+            Issue(
+                severity="warning",
+                message=f"assertion density {ctx.assertion_density:.0%} — "
+                "some test functions may lack meaningful assertions",
+                rule="oracle-assertion-density",
+            )
+        )
+    # Mutation score: flag when mutation testing was run and score is low
+    mutation_enabled = config.tdd.mutation_testing_enabled or config.test_quality.mutation_testing_enabled
+    if mutation_enabled and ctx.mutation_score >= 0 and ctx.mutation_score < 0.8:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"mutation score {ctx.mutation_score:.0%} — "
+                "tests failed to detect injected faults (Oracle Problem detected)",
+                rule="oracle-mutation-score",
+            )
+        )
+    elif mutation_enabled and ctx.mutation_score >= 0 and ctx.mutation_score < 0.95:
+        issues.append(
+            Issue(
+                severity="warning",
+                message=f"mutation score {ctx.mutation_score:.0%} — "
+                "some mutations survived the test suite",
+                rule="oracle-mutation-score",
+            )
+        )
+    return issues
+
+
+def build_snapshot_from_report(report: QualityReport) -> DiagnosticSnapshot:
+    snap = DiagnosticSnapshot()
+    for pr in report.principles.values():
+        for issue in pr.issues:
+            if issue.severity == "error":
+                snap.errors += 1
+                if issue.rule == "type-error":
+                    snap.type_errors += 1
+                elif issue.rule == "lint-errors":
+                    snap.lint_errors += 1
+            elif issue.severity == "warning":
+                snap.warnings += 1
+                if "security" in issue.rule:
+                    snap.security_warnings += 1
+    return snap
