@@ -30,3 +30,28 @@ class PillarStatus:
         if score >= PILLAR_WARNING_THRESHOLD:
             return PillarStatus.WARNING
         return PillarStatus.CRITICAL
+
+@dataclass
+class PillarAssessment:
+    pillar: str
+    score: float
+    status: str
+    issues: list[str] = field(default_factory=list)
+
+class Assessment:
+    def __init__(self, report: QualityReport) -> None:
+        self.pillars: dict[str, PillarAssessment] = {}
+        for name, pr in report.principles.items():
+            self.pillars[name] = PillarAssessment(
+                pillar=name,
+                score=pr.score,
+                status=PillarStatus.from_score(pr.score),
+                issues=[i.message for i in pr.issues if i.severity in ("error", "warning")],
+            )
+
+    def overall_status(self) -> str:
+        if any(p.status == PillarStatus.CRITICAL for p in self.pillars.values()):
+            return PillarStatus.CRITICAL
+        if any(p.status == PillarStatus.WARNING for p in self.pillars.values()):
+            return PillarStatus.WARNING
+        return PillarStatus.PASS
