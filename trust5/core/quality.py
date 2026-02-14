@@ -1,4 +1,7 @@
+"""TRUST 5 quality gate framework for Correcto."""
+
 from __future__ import annotations
+
 import ast
 import json
 import logging
@@ -8,11 +11,15 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
+
 from pydantic import BaseModel, Field
+
 from .config import QualityConfig
 from .lang import LanguageProfile
 from .message import M, emit
+
 logger = logging.getLogger(__name__)
+
 PRINCIPLE_TESTED = "tested"
 PRINCIPLE_READABLE = "readable"
 PRINCIPLE_UNDERSTANDABLE = "understandable"
@@ -29,7 +36,11 @@ ALL_PRINCIPLES = list(PRINCIPLE_WEIGHTS.keys())
 PASS_SCORE_THRESHOLD = 0.70
 SUBPROCESS_TIMEOUT = 120
 MAX_FILE_LINES = 500  # fallback; prefer QualityConfig.max_file_lines
+
+# Test file detection patterns — these are specification, not output.
+# They are excluded from file-size checks since the repairer cannot modify them.
 _TEST_PATTERN = re.compile(r"(test_|_test\.|\.test\.|spec_|_spec\.)", re.IGNORECASE)
+
 _SKIP_SIZE_CHECK = frozenset(
     {
         "package-lock.json",
@@ -43,51 +54,32 @@ _SKIP_SIZE_CHECK = frozenset(
         "pubspec.lock",
     }
 )
-_ASSERTION_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
-    "go": (
-        re.compile(r"\bt\.\w*(?:Error|Fatal|Fail)\w*\("),
-        re.compile(r"\b(?:assert|require)\.\w+\("),
-    ),
-    "rust": (re.compile(r"\bassert(?:_eq|_ne)?!"),),
-    "javascript": (re.compile(r"\bexpect\("), re.compile(r"\bassert[.(]")),
-    "typescript": (re.compile(r"\bexpect\("), re.compile(r"\bassert[.(]")),
-    "java": (re.compile(r"\bassert(?:Equals|True|False|NotNull|Null|That|Throws)\("),),
-    "ruby": (re.compile(r"\bexpect\("), re.compile(r"\bassert(?:_equal|_nil|_match)?\b")),
-    "kotlin": (re.compile(r"\bassert(?:Equals|True|False|NotNull|That)\("),),
-    "swift": (re.compile(r"\bXCTAssert\w*\("),),
-    "elixir": (re.compile(r"\bassert\b"),),
-    "dart": (re.compile(r"\bexpect\("),),
-    "php": (re.compile(r"\$this->assert\w+\("), re.compile(r"\bassert\w+\(")),
-    "cpp": (re.compile(r"\b(?:ASSERT|EXPECT)_\w+\("),),
-    "c": (re.compile(r"\b(?:ASSERT|CU_ASSERT|ck_assert)\w*\("),),
-    "csharp": (re.compile(r"\bAssert\.\w+\("),),
-    "scala": (re.compile(r"\bassert\b"),),
-}
-_TEST_FUNC_PATTERNS: dict[str, re.Pattern[str]] = {
-    "go": re.compile(r"^func\s+Test\w+\s*\("),
-    "rust": re.compile(r"^\s*fn\s+test_\w+"),
-    "javascript": re.compile(r"^\s*(?:it|test)\s*\("),
-    "typescript": re.compile(r"^\s*(?:it|test)\s*\("),
-    "java": re.compile(r"^\s*@Test\b"),
-    "ruby": re.compile(r"^\s*(?:it|test)\s+['\"]"),
-    "kotlin": re.compile(r"^\s*@Test\b"),
-    "swift": re.compile(r"^\s*func\s+test\w+\s*\("),
-    "elixir": re.compile(r"^\s*test\s+"),
-    "dart": re.compile(r"^\s*test\s*\("),
-    "php": re.compile(r"^\s*(?:public\s+)?function\s+test\w+\s*\("),
-    "cpp": re.compile(r"^\s*TEST(?:_F)?\s*\("),
-    "c": re.compile(r"^\s*void\s+test_\w+\s*\("),
-    "csharp": re.compile(r"^\s*\[(?:Test|Fact)\]"),
-    "scala": re.compile(r"^\s*(?:it|test)\s*[(\"]"),
-}
-_TOOL_MISSING_PATTERNS = (
-    "no module named",
-    "command not found",
-    "not found in path",
-    "is not recognized",
-    "not installed",
-    "cannot run program",
-)
+
+
+class Issue(BaseModel):
+    file: str = ""
+    line: int = 0
+    severity: str = "error"
+    message: str = ""
+    rule: str = ""
+
+
+class PrincipleResult(BaseModel):
+    name: str
+    passed: bool = False
+    score: float = 0.0
+    issues: list[Issue] = Field(default_factory=list)
+
+
+class QualityReport(BaseModel):
+    passed: bool = False
+    score: float = 0.0
+    principles: dict[str, PrincipleResult] = Field(default_factory=dict)
+    total_errors: int = 0
+    total_warnings: int = 0
+    coverage_pct: float = -1.0
+    timestamp: str = ""
+
 
 def _run_command(cmd: tuple[str, ...] | None, cwd: str, timeout: int = SUBPROCESS_TIMEOUT) -> tuple[int, str]:
     if cmd is None:
@@ -102,6 +94,7 @@ def _run_command(cmd: tuple[str, ...] | None, cwd: str, timeout: int = SUBPROCES
     except Exception as e:
         return 1, str(e)
 
+
 def _parse_coverage(output: str, language: str) -> float:
     patterns = {"python": r"TOTAL\s+\d+\s+\d+\s+(\d+)%", "go": r"coverage:\s+([\d.]+)%"}
     pat = patterns.get(language)
@@ -112,6 +105,7 @@ def _parse_coverage(output: str, language: str) -> float:
     matches = re.findall(r"(\d+(?:\.\d+)?)\s*%", output)
     return float(matches[-1]) if matches else -1.0
 
+
 def _find_source_files(root: str, extensions: tuple[str, ...], skip_dirs: tuple[str, ...]) -> list[str]:
     files: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
@@ -120,6 +114,7 @@ def _find_source_files(root: str, extensions: tuple[str, ...], skip_dirs: tuple[
             if any(fname.endswith(ext) for ext in extensions):
                 files.append(os.path.join(dirpath, fname))
     return files
+
 
 def _check_file_sizes(files: list[str], max_lines: int) -> list[Issue]:
     issues: list[Issue] = []
@@ -141,6 +136,7 @@ def _check_file_sizes(files: list[str], max_lines: int) -> list[Issue]:
         except OSError:
             pass
     return issues
+
 
 def _check_doc_completeness(files: list[str], language: str) -> float:
     if not files:
@@ -166,6 +162,51 @@ def _check_doc_completeness(files: list[str], language: str) -> float:
             pass
     return documented / max(total, 1)
 
+
+# ── Assertion density checking (Oracle Problem mitigation) ──────────
+
+# Regex patterns to detect assertion statements per language.
+# Used for generic (non-Python) file-level density heuristic.
+_ASSERTION_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "go": (
+        re.compile(r"\bt\.\w*(?:Error|Fatal|Fail)\w*\("),
+        re.compile(r"\b(?:assert|require)\.\w+\("),
+    ),
+    "rust": (re.compile(r"\bassert(?:_eq|_ne)?!"),),
+    "javascript": (re.compile(r"\bexpect\("), re.compile(r"\bassert[.(]")),
+    "typescript": (re.compile(r"\bexpect\("), re.compile(r"\bassert[.(]")),
+    "java": (re.compile(r"\bassert(?:Equals|True|False|NotNull|Null|That|Throws)\("),),
+    "ruby": (re.compile(r"\bexpect\("), re.compile(r"\bassert(?:_equal|_nil|_match)?\b")),
+    "kotlin": (re.compile(r"\bassert(?:Equals|True|False|NotNull|That)\("),),
+    "swift": (re.compile(r"\bXCTAssert\w*\("),),
+    "elixir": (re.compile(r"\bassert\b"),),
+    "dart": (re.compile(r"\bexpect\("),),
+    "php": (re.compile(r"\$this->assert\w+\("), re.compile(r"\bassert\w+\(")),
+    "cpp": (re.compile(r"\b(?:ASSERT|EXPECT)_\w+\("),),
+    "c": (re.compile(r"\b(?:ASSERT|CU_ASSERT|ck_assert)\w*\("),),
+    "csharp": (re.compile(r"\bAssert\.\w+\("),),
+    "scala": (re.compile(r"\bassert\b"),),
+}
+
+_TEST_FUNC_PATTERNS: dict[str, re.Pattern[str]] = {
+    "go": re.compile(r"^func\s+Test\w+\s*\("),
+    "rust": re.compile(r"^\s*fn\s+test_\w+"),
+    "javascript": re.compile(r"^\s*(?:it|test)\s*\("),
+    "typescript": re.compile(r"^\s*(?:it|test)\s*\("),
+    "java": re.compile(r"^\s*@Test\b"),
+    "ruby": re.compile(r"^\s*(?:it|test)\s+['\"]"),
+    "kotlin": re.compile(r"^\s*@Test\b"),
+    "swift": re.compile(r"^\s*func\s+test\w+\s*\("),
+    "elixir": re.compile(r"^\s*test\s+"),
+    "dart": re.compile(r"^\s*test\s*\("),
+    "php": re.compile(r"^\s*(?:public\s+)?function\s+test\w+\s*\("),
+    "cpp": re.compile(r"^\s*TEST(?:_F)?\s*\("),
+    "c": re.compile(r"^\s*void\s+test_\w+\s*\("),
+    "csharp": re.compile(r"^\s*\[(?:Test|Fact)\]"),
+    "scala": re.compile(r"^\s*(?:it|test)\s*[(\"]"),
+}
+
+
 def _has_python_assertions(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Return True if a Python function AST contains assertion statements."""
     for node in ast.walk(func_node):
@@ -184,6 +225,7 @@ def _has_python_assertions(func_node: ast.FunctionDef | ast.AsyncFunctionDef) ->
                     if ctx.func.attr == "raises":
                         return True
     return False
+
 
 def _check_python_assertions(test_files: list[str]) -> tuple[float, list[Issue]]:
     """AST-based per-function assertion check for Python test files."""
@@ -223,6 +265,7 @@ def _check_python_assertions(test_files: list[str]) -> tuple[float, list[Issue]]
             )
         )
     return density, issues
+
 
 def _check_generic_assertions(test_files: list[str], language: str) -> tuple[float, list[Issue]]:
     """Regex-based file-level assertion density for non-Python languages."""
@@ -269,6 +312,7 @@ def _check_generic_assertions(test_files: list[str], language: str) -> tuple[flo
         )
     return density, issues
 
+
 def check_assertion_density(
     project_root: str,
     extensions: tuple[str, ...],
@@ -288,84 +332,6 @@ def check_assertion_density(
         return _check_python_assertions(test_files)
     return _check_generic_assertions(test_files, language)
 
-def _is_tool_missing(output: str) -> bool:
-    lower = output.lower()
-    return any(pat in lower for pat in _TOOL_MISSING_PATTERNS)
-
-def _parse_security_json(out: str) -> list[dict[str, str]]:
-    """Parse JSON security output (bandit, gosec). Returns list of findings."""
-    try:
-        data = json.loads(out.strip())
-    except (json.JSONDecodeError, ValueError, TypeError):
-        return []
-    results = data.get("results", []) if isinstance(data, dict) else []
-    findings: list[dict[str, str]] = []
-    for r in results:
-        findings.append(
-            {
-                "sev": str(r.get("issue_severity", "LOW")).upper(),
-                "text": str(r.get("issue_text", "")),
-                "file": str(r.get("filename", "")),
-                "line": str(r.get("line_number", 0)),
-                "rule": str(r.get("test_id", "")),
-            }
-        )
-    return findings
-
-def _path_in_skip_dirs(filepath: str, skip_dirs: set[str]) -> bool:
-    """Return True if *filepath* is inside any of *skip_dirs*."""
-    parts = os.path.normpath(filepath).split(os.sep)
-    # Check every directory component (exclude the filename itself).
-    return any(p in skip_dirs for p in parts[:-1])
-
-def _filter_excluded_findings(
-    findings: list[dict[str, str]],
-    skip_dirs: tuple[str, ...],
-) -> list[dict[str, str]]:
-    """Remove findings whose file path falls inside a skipped directory.
-
-    Defense-in-depth: security tools (bandit, gosec) have their own
-    ``--exclude`` flags but behaviour is version-dependent and may miss
-    directory variants (e.g. ``venv`` vs ``./venv``).  Filtering here
-    guarantees that third-party / vendored code never poisons the score.
-    """
-    if not skip_dirs:
-        return findings
-    skip = set(skip_dirs)
-    out: list[dict[str, str]] = []
-    for f in findings:
-        fpath = f.get("file", "")
-        if fpath and _path_in_skip_dirs(fpath, skip):
-            continue
-        out.append(f)
-    return out
-
-def meets_quality_gate(report: QualityReport, config: QualityConfig) -> bool:
-    if not report.passed or report.total_errors > config.max_errors:
-        return False
-    return not (report.coverage_pct >= 0 and report.coverage_pct < config.coverage_threshold)
-
-class Issue(BaseModel):
-    file: str = ''
-    line: int = 0
-    severity: str = 'error'
-    message: str = ''
-    rule: str = ''
-
-class PrincipleResult(BaseModel):
-    name: str
-    passed: bool = False
-    score: float = 0.0
-    issues: list[Issue] = Field(default_factory=list)
-
-class QualityReport(BaseModel):
-    passed: bool = False
-    score: float = 0.0
-    principles: dict[str, PrincipleResult] = Field(default_factory=dict)
-    total_errors: int = 0
-    total_warnings: int = 0
-    coverage_pct: float = -1.0
-    timestamp: str = ''
 
 class _ValidatorBase:
     def __init__(self, project_root: str, profile: LanguageProfile, config: QualityConfig):
@@ -379,8 +345,8 @@ class _ValidatorBase:
     def validate(self) -> PrincipleResult:
         raise NotImplementedError
 
-class TestedValidator(_ValidatorBase):
 
+class TestedValidator(_ValidatorBase):
     def name(self) -> str:
         return PRINCIPLE_TESTED
 
@@ -478,6 +444,17 @@ class TestedValidator(_ValidatorBase):
         )
         return result
 
+
+_TOOL_MISSING_PATTERNS = (
+    "no module named",
+    "command not found",
+    "not found in path",
+    "is not recognized",
+    "not installed",
+    "cannot run program",
+)
+
+
 class ReadableValidator(_ValidatorBase):
     """LLM-first readable validator.
 
@@ -519,8 +496,13 @@ class ReadableValidator(_ValidatorBase):
         result.passed = lint_failures == 0
         return result
 
-class UnderstandableValidator(_ValidatorBase):
 
+def _is_tool_missing(output: str) -> bool:
+    lower = output.lower()
+    return any(pat in lower for pat in _TOOL_MISSING_PATTERNS)
+
+
+class UnderstandableValidator(_ValidatorBase):
     def name(self) -> str:
         return PRINCIPLE_UNDERSTANDABLE
 
@@ -583,8 +565,59 @@ class UnderstandableValidator(_ValidatorBase):
         result.passed = (threshold == 0 or warnings <= threshold) and len(size_issues) == 0
         return result
 
-class SecuredValidator(_ValidatorBase):
 
+def _parse_security_json(out: str) -> list[dict[str, str]]:
+    """Parse JSON security output (bandit, gosec). Returns list of findings."""
+    try:
+        data = json.loads(out.strip())
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return []
+    results = data.get("results", []) if isinstance(data, dict) else []
+    findings: list[dict[str, str]] = []
+    for r in results:
+        findings.append(
+            {
+                "sev": str(r.get("issue_severity", "LOW")).upper(),
+                "text": str(r.get("issue_text", "")),
+                "file": str(r.get("filename", "")),
+                "line": str(r.get("line_number", 0)),
+                "rule": str(r.get("test_id", "")),
+            }
+        )
+    return findings
+
+
+def _filter_excluded_findings(
+    findings: list[dict[str, str]],
+    skip_dirs: tuple[str, ...],
+) -> list[dict[str, str]]:
+    """Remove findings whose file path falls inside a skipped directory.
+
+    Defense-in-depth: security tools (bandit, gosec) have their own
+    ``--exclude`` flags but behaviour is version-dependent and may miss
+    directory variants (e.g. ``venv`` vs ``./venv``).  Filtering here
+    guarantees that third-party / vendored code never poisons the score.
+    """
+    if not skip_dirs:
+        return findings
+    skip = set(skip_dirs)
+    out: list[dict[str, str]] = []
+    for f in findings:
+        fpath = f.get("file", "")
+        if fpath and _path_in_skip_dirs(fpath, skip):
+            continue
+        out.append(f)
+    return out
+
+
+def _path_in_skip_dirs(filepath: str, skip_dirs: set[str]) -> bool:
+    """Return True if *filepath* is inside any of *skip_dirs*."""
+    parts = os.path.normpath(filepath).split(os.sep)
+    # Check every directory component (exclude the filename itself).
+    return any(p in skip_dirs for p in parts[:-1])
+
+
+class SecuredValidator(_ValidatorBase):
     def name(self) -> str:
         return PRINCIPLE_SECURED
 
@@ -673,8 +706,11 @@ class SecuredValidator(_ValidatorBase):
         result.passed = high_count == 0
         return result
 
+
 class TrackableValidator(_ValidatorBase):
-    _CONVENTIONAL_RE = re.compile('^(feat|fix|build|chore|ci|docs|style|refactor|perf|test)(\\([a-zA-Z0-9_./-]+\\))?!?: .+$')
+    _CONVENTIONAL_RE = re.compile(
+        r"^(feat|fix|build|chore|ci|docs|style|refactor|perf|test)" r"(\([a-zA-Z0-9_./-]+\))?!?: .+$"
+    )
 
     def name(self) -> str:
         return PRINCIPLE_TRACKABLE
@@ -733,6 +769,7 @@ class TrackableValidator(_ValidatorBase):
         result.score = round(score / checks, 3)
         result.passed = len(bad_names) == 0 and (not non_test or len(test_files) > 0)
         return result
+
 
 class TrustGate:
     def __init__(self, config: QualityConfig, profile: LanguageProfile, project_root: str):
@@ -799,3 +836,25 @@ class TrustGate:
             coverage_pct=coverage_pct,
             timestamp=datetime.now(UTC).isoformat(),
         )
+
+
+def meets_quality_gate(report: QualityReport, config: QualityConfig) -> bool:
+    if not report.passed or report.total_errors > config.max_errors:
+        return False
+    return not (report.coverage_pct >= 0 and report.coverage_pct < config.coverage_threshold)
+
+
+def is_improved(prev: dict[str, Any] | None, curr: QualityReport) -> bool:
+    if prev is None:
+        return False
+    return bool(curr.score > prev.get("score", 0.0) or curr.total_errors < prev.get("total_errors", 999))
+
+
+def is_stagnant(prev: dict[str, Any] | None, curr: QualityReport) -> bool:
+    if prev is None:
+        return False
+    return bool(
+        curr.score == prev.get("score", -1)
+        and curr.total_errors == prev.get("total_errors", -1)
+        and curr.total_warnings == prev.get("total_warnings", -1)
+    )
