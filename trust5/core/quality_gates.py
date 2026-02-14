@@ -79,6 +79,78 @@ def validate_phase(
         return validate_sync_phase(snapshot, config)
     return []
 
+def detect_regression(
+    baseline: DiagnosticSnapshot,
+    current: DiagnosticSnapshot,
+    config: QualityConfig,
+) -> list[Issue]:
+    issues: list[Issue] = []
+    reg = config.regression
+
+    err_inc = current.errors - baseline.errors
+    if err_inc > reg.error_increase_threshold:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"errors increased {baseline.errors} -> {current.errors} "
+                f"(threshold {reg.error_increase_threshold})",
+                rule="regression-errors",
+            )
+        )
+
+    warn_inc = current.warnings - baseline.warnings
+    if warn_inc > reg.warning_increase_threshold:
+        issues.append(
+            Issue(
+                severity="warning",
+                message=f"warnings increased {baseline.warnings} -> {current.warnings} "
+                f"(threshold {reg.warning_increase_threshold})",
+                rule="regression-warnings",
+            )
+        )
+
+    te_inc = current.type_errors - baseline.type_errors
+    if te_inc > reg.type_error_increase_threshold:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"type errors increased {baseline.type_errors} -> {current.type_errors} "
+                f"(threshold {reg.type_error_increase_threshold})",
+                rule="regression-type-errors",
+            )
+        )
+
+    return issues
+
+def _validate_ddd(ctx: MethodologyContext, config: QualityConfig) -> list[Issue]:
+    issues: list[Issue] = []
+    ddd = config.ddd
+    if ddd.characterization_tests and not ctx.characterization_tests_exist:
+        issues.append(
+            Issue(
+                severity="error",
+                message="characterization tests required for modified files in DDD mode",
+                rule="ddd-characterization",
+            )
+        )
+    if ddd.preserve_before_improve and not ctx.preserve_step_completed:
+        issues.append(
+            Issue(
+                severity="error",
+                message="PRESERVE step must complete before IMPROVE",
+                rule="ddd-preserve-before-improve",
+            )
+        )
+    if ctx.behavior_snapshot_regressed:
+        issues.append(
+            Issue(
+                severity="error",
+                message="behavior snapshot regression detected",
+                rule="ddd-behavior-snapshot",
+            )
+        )
+    return issues
+
 @dataclass
 class DiagnosticSnapshot:
     errors: int = 0
@@ -127,3 +199,18 @@ class Assessment:
 
     def is_pass(self) -> bool:
         return all(p.score >= PILLAR_PASS_THRESHOLD for p in self.pillars.values())
+
+@dataclass
+class MethodologyContext:
+    characterization_tests_exist: bool = False
+    preserve_step_completed: bool = False
+    behavior_snapshot_regressed: bool = False
+    test_first_verified: bool = False
+    commit_coverage: int = 0
+    coverage_exemption_requested: bool = False
+    new_files: list[str] = field(default_factory=list)
+    modified_files: list[str] = field(default_factory=list)
+    new_code_coverage: int = 0
+    legacy_code_coverage: int = 0
+    assertion_density: float = -1.0
+    mutation_score: float = -1.0
