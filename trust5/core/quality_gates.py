@@ -16,6 +16,69 @@ def is_conventional_commit(msg: str) -> bool:
 def validate_plan_phase(snapshot: DiagnosticSnapshot) -> list[Issue]:
     return []
 
+def validate_run_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> list[Issue]:
+    issues: list[Issue] = []
+    gate = config.run_gate
+    if snapshot.errors > gate.max_errors:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"run phase: {snapshot.errors} errors (max {gate.max_errors})",
+                rule="phase-run-errors",
+            )
+        )
+    if snapshot.type_errors > gate.max_type_errors:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"run phase: {snapshot.type_errors} type errors (max {gate.max_type_errors})",
+                rule="phase-run-type-errors",
+            )
+        )
+    if snapshot.lint_errors > gate.max_lint_errors:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"run phase: {snapshot.lint_errors} lint errors (max {gate.max_lint_errors})",
+                rule="phase-run-lint-errors",
+            )
+        )
+    return issues
+
+def validate_sync_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> list[Issue]:
+    issues: list[Issue] = []
+    gate = config.sync_gate
+    if snapshot.errors > gate.max_errors:
+        issues.append(
+            Issue(
+                severity="error",
+                message=f"sync phase: {snapshot.errors} errors (max {gate.max_errors})",
+                rule="phase-sync-errors",
+            )
+        )
+    if snapshot.warnings > gate.max_warnings:
+        issues.append(
+            Issue(
+                severity="warning",
+                message=f"sync phase: {snapshot.warnings} warnings (max {gate.max_warnings})",
+                rule="phase-sync-warnings",
+            )
+        )
+    return issues
+
+def validate_phase(
+    phase: str,
+    snapshot: DiagnosticSnapshot,
+    config: QualityConfig,
+) -> list[Issue]:
+    if phase == "plan":
+        return validate_plan_phase(snapshot)
+    if phase == "run":
+        return validate_run_phase(snapshot, config)
+    if phase == "sync":
+        return validate_sync_phase(snapshot, config)
+    return []
+
 @dataclass
 class DiagnosticSnapshot:
     errors: int = 0
