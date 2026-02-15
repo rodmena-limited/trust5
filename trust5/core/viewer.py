@@ -15,3 +15,10 @@ from .event_bus import (
     EventBus,
 )
 logger = logging.getLogger(__name__)
+
+class StdoutViewer:
+    """Renders pipeline events to stdout."""
+    def __init__(self, bus: EventBus) -> None:
+        self._queue: queue.Queue[Event | None] = bus.subscribe()
+        self._thread: threading.Thread | None = None
+        self._running = False
