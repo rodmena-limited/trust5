@@ -62,3 +62,112 @@ class Tools:
 
     def is_non_interactive(cls) -> bool:
         return cls._non_interactive
+
+    def _check_write_allowed(self, file_path: str) -> str | None:
+        real_path = os.path.realpath(file_path)
+
+        # Layer 1: Explicit denylist — hard block, checked first
+        if self._denied_files and real_path in self._denied_files:
+            return (
+                f"BLOCKED: Write to {real_path} denied — file is in denied_files "
+                f"(test files are read-only for this agent)."
+            )
+
+        # Layer 2: Pattern-based test file blocking
+        if self._deny_test_patterns and _matches_test_pattern(real_path):
+            return (
+                f"BLOCKED: Write to {real_path} denied — matches test file pattern. "
+                f"Test files are read-only for implementer/repairer agents."
+            )
+
+        # Layer 3: Owned-files allowlist
+        if self._owned_files is None:
+            return None
+        if real_path in self._owned_files:
+            return None
+        return (
+            f"BLOCKED: Write to {real_path} denied — file not in owned_files. "
+            f"This module may only write to: {sorted(self._owned_files)}"
+        )
+
+    def init_project(path: str = ".") -> str:
+        """Initializes a new project."""
+        try:
+            from .lang import detect_language
+
+            initializer = ProjectInitializer(path)
+            initializer._setup_structure()
+            detected = detect_language(path)
+            initializer._write_default_config(detected)
+            return "Project initialized successfully."
+        except Exception as e:
+            return f"Error initializing project: {str(e)}"
+
+    def read_file(
+        file_path: str,
+        offset: int | None = None,
+        limit: int | None = None,
+    ) -> str:
+        """Reads a file from the local filesystem.
+
+        When offset/limit are provided, returns only the specified line range.
+        Lines are 1-indexed (offset=1 is the first line). Without offset/limit,
+        returns the full file content.
+        """
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                if offset is not None or limit is not None:
+                    lines = f.readlines()
+                    total = len(lines)
+                    start = max(0, (offset or 1) - 1)  # 1-indexed to 0-indexed
+                    end = start + limit if limit else total
+                    selected = lines[start:end]
+                    header = f"[Lines {start + 1}-{min(end, total)} of {total}]\n"
+                    return header + "".join(selected)
+                return f.read()
+        except Exception as e:
+            return f"Error reading file {file_path}: {str(e)}"
+
+    def write_file(self, file_path: str, content: str) -> str:
+        try:
+            real_path = os.path.realpath(file_path)
+            blocked = self._check_write_allowed(real_path)
+            if blocked:
+                return blocked
+            old_content = None
+            if os.path.exists(real_path):
+                try:
+                    with open(real_path, encoding="utf-8") as f:
+                        old_content = f.read()
+                except Exception:
+                    pass
+
+            emit(M.TWRT, f"Writing {len(content)} chars to {real_path}")
+            os.makedirs(os.path.dirname(real_path), exist_ok=True)
+            with open(real_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+
+            if old_content is not None and old_content != content:
+                diff = difflib.unified_diff(
+                    old_content.splitlines(),
+                    content.splitlines(),
+                    fromfile=f"a/{file_path}",
+                    tofile=f"b/{file_path}",
+                    lineterm="",
+                )
+                emit_block(M.KDIF, f"PATCH {file_path}", "\n".join(diff), max_lines=60)
+            else:
+                emit_block(
+                    M.KCOD,
+                    f"NEW {file_path} ({len(content)} chars)",
+                    content,
+                    max_lines=60,
+                )
+
+            action = "modified" if old_content is not None else "created"
+            emit(M.FCHG, f"path={real_path} action={action}")
+            return f"Successfully wrote to {file_path}"
+        except Exception as e:
+            return f"Error writing file {file_path}: {str(e)}"
