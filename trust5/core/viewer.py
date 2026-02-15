@@ -29,3 +29,11 @@ class StdoutViewer:
         self._running = True
         self._thread = threading.Thread(target=self._render_loop, name="stdout-viewer", daemon=True)
         self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        # Put sentinel to unblock the queue.get()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
