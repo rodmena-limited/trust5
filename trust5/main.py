@@ -609,3 +609,76 @@ def run(spec_id: str) -> None:
     processor, orchestrator, store, _queue, db_path = setup_stabilize()
     workflow = create_run_workflow(spec_id)
     _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_RUN, "Run", db_path)
+
+def init(path: str = ".") -> None:
+    initializer = ProjectInitializer(path)
+    initializer.run_wizard()
+    GitManager(path).init_repo()
+
+def login(provider: str) -> None:
+    from .core.auth.registry import do_login, list_providers
+
+    available = list_providers()
+    if provider not in available:
+        emit(M.SERR, f"Unknown provider '{provider}'. Available: {', '.join(available)}")
+        raise typer.Exit(1)
+
+    try:
+        token_data = do_login(provider)
+        expires_min = int(token_data.expires_in_seconds / 60)
+        emit(M.WSUC, f"Logged in to {provider}. Token expires in {expires_min} min.")
+    except Exception as e:
+        emit(M.SERR, f"Login failed: {e}")
+        raise typer.Exit(1)
+
+def logout(provider: str | None = None) -> None:
+    from .core.auth.registry import do_logout
+
+    if do_logout(provider):
+        emit(M.WSUC, f"Logged out from {provider or 'active provider'}.")
+    else:
+        emit(M.SWRN, "No active session to log out from.")
+
+def auth_status() -> None:
+    from .core.auth.token_store import TokenStore
+
+    store = TokenStore()
+    active = store.get_active()
+    providers = store.list_providers()
+
+    if not providers:
+        emit(M.SWRN, "No providers authenticated. Run 'trust5 login <provider>'.")
+        return
+
+    for name in providers:
+        token = store.load(name)
+        is_active = name == active
+        marker = " (active)" if is_active else ""
+        if token and not token.is_expired:
+            mins = int(token.expires_in_seconds / 60)
+            emit(M.WSUC, f"  {name}{marker}: authenticated (expires in {mins} min)")
+        elif token and token.is_expired:
+            emit(M.WFAL, f"  {name}{marker}: token expired (needs refresh)")
+        else:
+            emit(M.WFAL, f"  {name}{marker}: no token")
+
+def loop() -> None:
+    Tools.set_non_interactive(True)
+    processor, orchestrator, store, _queue, db_path = setup_stabilize()
+    workflow = create_loop_workflow()
+    _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_LOOP, "Ralph Loop", db_path)
+
+def _reset_stage_for_resume(stage: Any) -> None:
+    """Clear stale counters so a resumed stage gets fresh attempts."""
+    ctx = stage.context
+    ctx.pop("quality_attempt", None)
+    ctx.pop("prev_quality_report", None)
+    ctx.pop("tests_partial", None)
+    ctx.pop("previous_failures", None)
+    ctx.pop("reimplementation_count", None)
+    ctx.pop("diagnostic_baseline", None)
+    ctx.pop("last_repair_summary", None)
+    ctx.pop("_repair_requested", None)
+    stage.outputs = {}
+    stage.end_time = None
+    stage.start_time = None
