@@ -37,3 +37,20 @@ class StdoutViewer:
             self._queue.put_nowait(None)
         except queue.Full:
             pass
+
+    def _render_loop(self) -> None:
+        """Main loop: pull events and render them."""
+        while self._running:
+            try:
+                event = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if event is None:
+                break  # sentinel received
+
+            try:
+                self._render(event)
+            except Exception:
+                # Viewer crash must never propagate to pipeline
+                logger.debug("StdoutViewer render error", exc_info=True)
