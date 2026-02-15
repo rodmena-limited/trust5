@@ -367,3 +367,245 @@ def _init_viewer_once() -> None:
         viewer = StdoutViewer(bus)
         viewer.start()
         atexit.register(_shutdown_ipc, viewer)
+
+def setup_stabilize() -> tuple[QueueProcessor, Orchestrator, SqliteWorkflowStore, SqliteQueue, str]:
+    db_path = _resolve_db_path()
+    conn_str = f"sqlite:///{db_path}"
+
+    _init_viewer_once()
+    init_mcp()
+    atexit.register(shutdown_mcp)
+    _configure_event_sourcing_once(conn_str)
+
+    store = SqliteWorkflowStore(conn_str, create_tables=True)
+    queue = SqliteQueue(conn_str, table_name="queue_messages")
+    queue._create_table()
+
+    try:
+        recovered = recover_on_startup(store, queue, application="trust5")
+        if recovered:
+            emit(M.WRCV, f"Recovered {len(recovered)} pending workflow(s)")
+    except Exception as e:
+        emit(M.SWRN, f"Recovery check failed (non-fatal): {e}")
+
+    processor = QueueProcessor(queue, store=store, task_registry=_build_task_registry())
+    orchestrator = Orchestrator(queue)
+
+    _emit_provider_info()
+
+    return processor, orchestrator, store, queue, db_path
+
+def plan(request: str) -> None:
+    Tools.set_non_interactive(True)
+    processor, orchestrator, store, _queue, db_path = setup_stabilize()
+    workflow = create_plan_workflow(request)
+    _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_PLAN, "Plan", db_path)
+
+def _cancel_stale_workflows() -> None:
+    """Mark any RUNNING trust5 workflows as CANCELED so 'resume' can find them."""
+    try:
+        from stabilize.persistence.store import WorkflowCriteria
+
+        db_path = _resolve_db_path()
+        conn_str = f"sqlite:///{db_path}"
+        store = SqliteWorkflowStore(conn_str)
+        criteria = WorkflowCriteria(
+            statuses={WorkflowStatus.RUNNING},
+            page_size=10,
+        )
+        for wf in store.retrieve_by_application("trust5", criteria):
+            wf.status = WorkflowStatus.CANCELED
+            store.update_status(wf)
+    except Exception:
+        pass  # best-effort — don't block exit
+
+def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Workflow | None:
+    """Run run_fn in a background thread with a single TUI alive throughout.
+
+    This avoids the screen-clearing problem where develop() previously created
+    two separate TUI instances (plan + implement). The TUI stays in the
+    alternate screen buffer for the entire duration.
+
+    The run_fn receives a ``threading.Event`` that is set when the TUI exits
+    (Ctrl+C / q). run_fn should pass this event to ``wait_for_completion()``
+    so the poll loop can exit promptly and clean up its QueueProcessor.
+    """
+    from .core.event_bus import get_bus
+    from .tui.app import Trust5App
+
+    bus = get_bus()
+    if not bus:
+        bus = init_bus(os.path.abspath(os.getcwd()))
+
+    eq = bus.subscribe()
+    tui_app = Trust5App(eq)  # No store/workflow_id — won't auto-exit
+
+    result_holder: list[Workflow | None] = [None]
+    stop_event = threading.Event()
+
+    def _background() -> None:
+        try:
+            result_holder[0] = run_fn(stop_event)
+        except Exception as e:
+            if not stop_event.is_set():
+                emit(M.SERR, f"Pipeline failed: {e}")
+
+    t = threading.Thread(target=_background, daemon=True)
+    t.start()
+
+    try:
+        _suppress_print_fallback()
+        tui_app.run()
+    except Exception:
+        pass
+    finally:
+        bus.unsubscribe(eq)
+
+    # TUI exited (user pressed q/Ctrl+C) — restore stdout for final summary
+    _restore_stdout_after_tui()
+
+    # Signal background to stop and wait for graceful shutdown.
+    # The stop_event causes wait_for_completion() to return immediately,
+    # allowing _pipeline()'s finally blocks to clean up QueueProcessors.
+    stop_event.set()
+    t.join(timeout=5.0)
+
+    result = result_holder[0]
+    if result is not None:
+        tui_changed: set[str] = getattr(tui_app, "_changed_files", set())
+        _print_final_summary(result, changed_files=tui_changed)
+    else:
+        # Pipeline didn't complete — mark RUNNING workflows as CANCELED
+        # so 'trust5 resume' can find and restart them.
+        _cancel_stale_workflows()
+        print("\nPipeline interrupted. Run 'trust5 resume' to continue.")
+
+    return result
+
+def develop(request: str) -> None:
+    Tools.set_non_interactive(True)
+    _init_viewer_once()
+
+    def _pipeline(shutdown: threading.Event | None = None) -> Workflow | None:
+        """Run plan → implement pipeline.
+
+        *shutdown* is a ``threading.Event`` set by ``_run_tui_multi`` when the
+        TUI exits (Ctrl+C).  It is threaded into ``wait_for_completion`` so the
+        poll loop can exit promptly, and checked between phases so processors
+        get cleaned up before the thread terminates.
+        """
+        # Phase 1: Plan (with retry on empty output)
+        MAX_PLAN_ATTEMPTS = 3
+        plan_output = ""
+        plan_result = None
+
+        for plan_attempt in range(1, MAX_PLAN_ATTEMPTS + 1):
+            processor, orchestrator, store, _queue, db_path = setup_stabilize()
+            plan_wf = create_plan_only_workflow(request)
+
+            store.store(plan_wf)
+            orchestrator.start(plan_wf)
+            emit(M.WSTR, f"Plan started (attempt {plan_attempt}/{MAX_PLAN_ATTEMPTS}): {plan_wf.id}")
+            processor.start()
+
+            try:
+                plan_result = wait_for_completion(
+                    store,
+                    plan_wf.id,
+                    TIMEOUT_PLAN,
+                    stop_event=shutdown,
+                )
+            finally:
+                processor.request_stop()
+                processor.stop(wait=False)
+
+            # If the user quit during planning, exit early.
+            if shutdown is not None and shutdown.is_set():
+                return None
+
+            finalize_status(plan_result, store, prefix="Plan")
+
+            plan_output = extract_plan_output(plan_result)
+            if plan_output and plan_output.strip():
+                break  # Got usable output
+
+            if plan_attempt < MAX_PLAN_ATTEMPTS:
+                emit(
+                    M.SWRN,
+                    f"Plan phase produced no output (attempt {plan_attempt}/{MAX_PLAN_ATTEMPTS}) "
+                    f"— retrying in 10s",
+                )
+                time.sleep(10)
+            else:
+                emit(M.WFAL, "Plan phase produced no output after all attempts — cannot proceed.")
+                return None
+
+        modules = parse_modules(plan_result)
+        plan_config = parse_plan_output(plan_output)
+        emit(
+            M.SINF,
+            f"Planner produced {len(modules)} module(s), "
+            f"threshold={plan_config.quality_threshold}, "
+            f"setup_cmds={len(plan_config.setup_commands)}",
+        )
+
+        plan_config_dict = plan_config.to_dict()
+
+        # Phase 2: Implement (fresh processor/store to avoid stale state)
+        p2_processor, p2_orchestrator, p2_store, _q2, db2 = _setup_phase()
+
+        if len(modules) <= 1:
+            serial_wf = create_develop_workflow(request)
+            stripped = strip_plan_stage(serial_wf.stages, plan_output)
+            for stage in stripped:
+                if stage.ref_id == "setup":
+                    stage.context["setup_commands"] = list(plan_config.setup_commands)
+                if stage.ref_id in ("write_tests", "implement", "validate", "quality"):
+                    stage.context["plan_config"] = plan_config_dict
+            impl_wf = Workflow.create(
+                application="trust5",
+                name="Develop Pipeline",
+                stages=stripped,
+            )
+        else:
+            impl_wf = create_parallel_develop_workflow(
+                modules,
+                request,
+                plan_output,
+                setup_commands=list(plan_config.setup_commands),
+                plan_config_dict=plan_config_dict,
+            )
+
+        p2_store.store(impl_wf)
+        p2_orchestrator.start(impl_wf)
+        emit(M.WSTR, f"Implement started: {impl_wf.id}")
+        emit(M.SPRG, f"current=0 total={len(impl_wf.stages)} modules={len(modules)}")
+        p2_processor.start()
+
+        try:
+            impl_result = wait_for_completion(
+                p2_store,
+                impl_wf.id,
+                TIMEOUT_DEVELOP,
+                stop_event=shutdown,
+            )
+        finally:
+            p2_processor.request_stop()
+            p2_processor.stop(wait=False)
+
+        if shutdown is not None and shutdown.is_set():
+            return None
+
+        finalize_status(impl_result, p2_store, prefix="Status")
+        return impl_result
+
+    if _USE_TUI:
+        _run_tui_multi(_pipeline)
+    else:
+        _pipeline()
+
+def run(spec_id: str) -> None:
+    Tools.set_non_interactive(True)
+    processor, orchestrator, store, _queue, db_path = setup_stabilize()
+    workflow = create_run_workflow(spec_id)
+    _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_RUN, "Run", db_path)
