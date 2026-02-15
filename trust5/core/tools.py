@@ -33,3 +33,32 @@ _TEST_FILE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(^|/)spec/"),  # spec/ directory
     re.compile(r"(^|/)[^/]+_spec\.[^/]+$"),  # foo_spec.rb
 ]
+
+def _matches_test_pattern(path: str) -> bool:
+    """Check if a file path matches common test file patterns."""
+    for pattern in _TEST_FILE_PATTERNS:
+        if pattern.search(path):
+            return True
+    return False
+
+class Tools:
+    _non_interactive: bool = False
+    def __init__(
+        self,
+        owned_files: list[str] | None = None,
+        denied_files: list[str] | None = None,
+        deny_test_patterns: bool = False,
+    ) -> None:
+        self._owned_files: set[str] | None = None
+        if owned_files:
+            self._owned_files = {os.path.realpath(f) for f in owned_files}
+        self._denied_files: set[str] | None = None
+        if denied_files:
+            self._denied_files = {os.path.realpath(f) for f in denied_files}
+        self._deny_test_patterns = deny_test_patterns
+
+    def set_non_interactive(cls, value: bool = True) -> None:
+        cls._non_interactive = value
+
+    def is_non_interactive(cls) -> bool:
+        return cls._non_interactive
