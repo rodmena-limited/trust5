@@ -305,3 +305,65 @@ def _run_workflow_dispatch(
     if _USE_TUI:
         return _run_tui_mode(processor, orchestrator, store, workflow, timeout, label, db_path)
     return run_workflow(processor, orchestrator, store, workflow, timeout, label, db_path)
+
+def _build_task_registry() -> TaskRegistry:
+    registry = TaskRegistry()
+    registry.register("agent", AgentTask)
+    registry.register("implementer", ImplementerTask)
+    registry.register("loop", LoopTask)
+    registry.register("mutation", MutationTask)
+    registry.register("setup", SetupTask)
+    registry.register("validate", ValidateTask)
+    registry.register("repair", RepairTask)
+    registry.register("quality", QualityTask)
+    registry.register("shell", ShellTask)
+    return registry
+
+def _emit_provider_info() -> None:
+    from .core.auth.registry import get_active_token
+
+    active = get_active_token()
+    if active is not None:
+        provider, _token_data = active
+        emit(M.MPRF, f"provider={provider.config.name} backend={provider.config.backend}")
+    else:
+        emit(M.MPRF, "provider=ollama backend=ollama")
+
+def _configure_event_sourcing_once(conn_str: str) -> None:
+    global _event_sourcing_configured
+    if _event_sourcing_configured:
+        return
+    _event_sourcing_configured = True
+    event_store = SqliteEventStore(conn_str, create_tables=True)
+    configure_event_sourcing(event_store)
+
+def _setup_phase() -> tuple[QueueProcessor, Orchestrator, SqliteWorkflowStore, SqliteQueue, str]:
+    db_path = _resolve_db_path()
+    conn_str = f"sqlite:///{db_path}"
+
+    store = SqliteWorkflowStore(conn_str, create_tables=True)
+    queue = SqliteQueue(conn_str, table_name="queue_messages")
+    queue._create_table()
+
+    processor = QueueProcessor(queue, store=store, task_registry=_build_task_registry())
+    orchestrator = Orchestrator(queue)
+
+    return processor, orchestrator, store, queue, db_path
+
+def _shutdown_ipc(viewer: StdoutViewer) -> None:
+    viewer.stop()
+    shutdown_bus()
+
+def _init_viewer_once() -> None:
+    global _viewer_initialized
+    if _viewer_initialized:
+        return
+    _viewer_initialized = True
+    project_root = os.path.abspath(os.getcwd())
+    bus = init_bus(project_root)
+
+    # Only start StdoutViewer if TUI is NOT enabled (headless mode)
+    if not _USE_TUI:
+        viewer = StdoutViewer(bus)
+        viewer.start()
+        atexit.register(_shutdown_ipc, viewer)
