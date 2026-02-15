@@ -22,3 +22,10 @@ class StdoutViewer:
         self._queue: queue.Queue[Event | None] = bus.subscribe()
         self._thread: threading.Thread | None = None
         self._running = False
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._render_loop, name="stdout-viewer", daemon=True)
+        self._thread.start()
