@@ -171,3 +171,83 @@ class Tools:
             return f"Successfully wrote to {file_path}"
         except Exception as e:
             return f"Error writing file {file_path}: {str(e)}"
+
+    def read_files(file_paths: list[str]) -> str:
+        results: dict[str, str] = {}
+        for fp in file_paths:
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    results[fp] = f.read()
+            except Exception as e:
+                results[fp] = f"Error: {e}"
+        return json.dumps(results, ensure_ascii=False)
+
+    def edit_file(self, file_path: str, old_string: str, new_string: str) -> str:
+        real_path = os.path.realpath(file_path)
+        blocked = self._check_write_allowed(real_path)
+        if blocked:
+            return blocked
+        try:
+            with open(real_path, encoding="utf-8") as f:
+                content = f.read()
+        except FileNotFoundError:
+            return f"Error: file not found: {real_path}"
+        except Exception as e:
+            return f"Error reading {real_path}: {e}"
+
+        count = content.count(old_string)
+        if count == 0:
+            return f"Error: old_string not found in {file_path}"
+        if count > 1:
+            return f"Error: old_string found {count} times in {file_path}. Provide more context to make it unique."
+
+        new_content = content.replace(old_string, new_string, 1)
+        try:
+            with open(real_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as e:
+            return f"Error writing {real_path}: {e}"
+
+        diff = difflib.unified_diff(
+            content.splitlines(),
+            new_content.splitlines(),
+            fromfile=f"a/{file_path}",
+            tofile=f"b/{file_path}",
+            lineterm="",
+        )
+        emit_block(M.KDIF, f"EDIT {file_path}", "\n".join(diff), max_lines=60)
+        emit(M.FCHG, f"path={real_path} action=edited")
+        return f"Successfully edited {file_path}"
+
+    def run_bash(command: str, workdir: str = ".") -> str:
+        """Executes a bash command with destructive-pattern blocklist."""
+        is_safe_context = any(p.search(command) for p in _SAFE_COMMAND_PATTERNS)
+        if not is_safe_context:
+            for pattern in _BLOCKED_COMMAND_PATTERNS:
+                if pattern.search(command):
+                    emit(M.SWRN, f"BLOCKED dangerous command: {command[:200]}")
+                    return f"Error: command blocked by safety filter. Pattern matched: {pattern.pattern}"
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            return f"Stdout:\n{result.stdout}\nStderr:\n{result.stderr}\nExit Code: {result.returncode}"
+        except subprocess.TimeoutExpired:
+            return f"Error: command timed out after 120s: {command[:200]}"
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"Error running command '{command[:200]}': {e}"
+
+    def list_files(pattern: str, workdir: str = ".") -> list[str]:
+        """Lists files matching a glob pattern."""
+        try:
+            files = glob.glob(os.path.join(workdir, pattern), recursive=True)
+            return [os.path.relpath(f, workdir) for f in files]
+        except Exception as e:
+            return [f"Error listing files: {str(e)}"]
