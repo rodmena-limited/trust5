@@ -58,3 +58,66 @@ _USE_TUI = True
 TIMEOUT_PLAN = _TIMEOUT_PLAN
 TIMEOUT_DEVELOP = _TIMEOUT_DEVELOP
 TIMEOUT_RUN = _TIMEOUT_RUN
+TIMEOUT_LOOP = _TIMEOUT_LOOP
+_viewer_initialized = False
+_event_sourcing_configured = False
+
+def _silence_logging_for_tui() -> None:
+    """Redirect logging to a file when TUI mode is selected.
+
+    Textual owns the terminal (stdin/stdout/stderr). Any logging output
+    to stderr corrupts the TUI layout, causing raw text to bleed through.
+
+    NOTE: We redirect logging early, but keep emit() print fallback ON.
+    This allows pre-TUI messages (errors, warnings, early exits) to be
+    visible on stdout. Print fallback is disabled just before app.run()
+    via _suppress_print_fallback().
+    """
+    log_dir = os.path.join(os.path.abspath(os.getcwd()), ".trust5")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "trust5.log")
+
+    file_handler = logging.FileHandler(log_file, mode="a")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s", datefmt="%H:%M:%S")
+    )
+
+    root = logging.getLogger()
+    # Remove all stderr handlers
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+    root.addHandler(file_handler)
+
+def _suppress_print_fallback() -> None:
+    """Disable emit() print fallback just before TUI takes over the terminal."""
+    from .core.message import set_print_fallback
+
+    set_print_fallback(False)
+
+def _global_options(
+    provider: str = typer.Option(
+        "",
+        "--provider",
+        "-p",
+        help="Auth provider override (claude, google, ollama)",
+    ),
+    headless: bool = typer.Option(
+        False,
+        "--headless",
+        help="Run without TUI (stdout only)",
+    ),
+) -> None:
+    if provider:
+        from .core.auth.registry import set_provider_override
+
+        set_provider_override(provider)
+
+    global _USE_TUI
+    _USE_TUI = not headless
+
+    # Auto-disable TUI if output is piped (e.g. | tee)
+    if not sys.stdout.isatty():
+        _USE_TUI = False
+
+    if _USE_TUI:
+        _silence_logging_for_tui()
