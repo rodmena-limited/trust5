@@ -6,8 +6,12 @@ import re
 import shlex
 import subprocess
 from typing import Any
+
 from .init import ProjectInitializer
 from .message import M, emit, emit_block
+
+# Destructive command patterns blocked when executed by LLM agents.
+# These are regex patterns matched against the full command string.
 _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\brm\s+-[^\s]*r[^\s]*f", re.IGNORECASE),  # rm -rf, rm -fr, etc.
     re.compile(r"\brm\s+-[^\s]*f[^\s]*r", re.IGNORECASE),  # rm -fr variants
@@ -21,11 +25,20 @@ _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bwget\b.*\|\s*(?:bash|sh|zsh)\b"),  # wget | bash
     re.compile(r"\bsqlite3\s+.*\.trust5/"),  # Accessing trust5 internal DB crashes pipeline
 ]
+
+# Safe compound command patterns that override blocked checks.
+# These are standard, scoped operations that appear destructive at the regex
+# level but are safe in context (e.g., find -exec rm only deletes matched files,
+# find -delete only removes found entries).
 _SAFE_COMMAND_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bfind\b\s+.+-exec\s+rm\b"),  # find ... -exec rm ... is scoped
     re.compile(r"\bfind\b\s+.+-delete\b"),  # find ... -delete is scoped
 ]
+
+# Regex for validating Python package names (allows extras and version specifiers)
 _VALID_PACKAGE_RE = re.compile(r"^[a-zA-Z0-9._-]+[a-zA-Z0-9._\-\[\]>=<,! ]*$")
+
+
 _TEST_FILE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(^|/)test_[^/]+$"),  # test_foo.py
     re.compile(r"(^|/)[^/]+_test\.[^/]+$"),  # foo_test.py, foo_test.go
@@ -34,6 +47,7 @@ _TEST_FILE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(^|/)[^/]+_spec\.[^/]+$"),  # foo_spec.rb
 ]
 
+
 def _matches_test_pattern(path: str) -> bool:
     """Check if a file path matches common test file patterns."""
     for pattern in _TEST_FILE_PATTERNS:
@@ -41,8 +55,10 @@ def _matches_test_pattern(path: str) -> bool:
             return True
     return False
 
+
 class Tools:
     _non_interactive: bool = False
+
     def __init__(
         self,
         owned_files: list[str] | None = None,
@@ -57,9 +73,11 @@ class Tools:
             self._denied_files = {os.path.realpath(f) for f in denied_files}
         self._deny_test_patterns = deny_test_patterns
 
+    @classmethod
     def set_non_interactive(cls, value: bool = True) -> None:
         cls._non_interactive = value
 
+    @classmethod
     def is_non_interactive(cls) -> bool:
         return cls._non_interactive
 
@@ -90,6 +108,7 @@ class Tools:
             f"This module may only write to: {sorted(self._owned_files)}"
         )
 
+    @staticmethod
     def init_project(path: str = ".") -> str:
         """Initializes a new project."""
         try:
@@ -103,6 +122,7 @@ class Tools:
         except Exception as e:
             return f"Error initializing project: {str(e)}"
 
+    @staticmethod
     def read_file(
         file_path: str,
         offset: int | None = None,
@@ -172,6 +192,7 @@ class Tools:
         except Exception as e:
             return f"Error writing file {file_path}: {str(e)}"
 
+    @staticmethod
     def read_files(file_paths: list[str]) -> str:
         results: dict[str, str] = {}
         for fp in file_paths:
@@ -221,6 +242,7 @@ class Tools:
         emit(M.FCHG, f"path={real_path} action=edited")
         return f"Successfully edited {file_path}"
 
+    @staticmethod
     def run_bash(command: str, workdir: str = ".") -> str:
         """Executes a bash command with destructive-pattern blocklist."""
         is_safe_context = any(p.search(command) for p in _SAFE_COMMAND_PATTERNS)
@@ -244,6 +266,7 @@ class Tools:
         except (OSError, subprocess.SubprocessError) as e:
             return f"Error running command '{command[:200]}': {e}"
 
+    @staticmethod
     def list_files(pattern: str, workdir: str = ".") -> list[str]:
         """Lists files matching a glob pattern."""
         try:
@@ -251,3 +274,312 @@ class Tools:
             return [os.path.relpath(f, workdir) for f in files]
         except Exception as e:
             return [f"Error listing files: {str(e)}"]
+
+    @staticmethod
+    def grep_files(pattern: str, path: str = ".", include: str = "*") -> str:
+        """Search files using grep with safe argument passing (no shell interpolation)."""
+        try:
+            cmd = ["grep", "-r", pattern, path, f"--include={include}"]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            return f"Stdout:\n{result.stdout}\nStderr:\n{result.stderr}\nExit Code: {result.returncode}"
+        except subprocess.TimeoutExpired:
+            return "Error: grep timed out after 60s"
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"Error running grep: {e}"
+
+    @staticmethod
+    def install_package(package_name: str, install_prefix: str = "") -> str:
+        """Install a package using the project's package manager."""
+        if not _VALID_PACKAGE_RE.match(package_name):
+            return f"Error: invalid package name: {package_name!r}"
+        return Tools.run_bash(f"{shlex.quote(install_prefix)} {shlex.quote(package_name)}")
+
+    @classmethod
+    def get_definitions(
+        cls,
+        *,
+        non_interactive: bool = False,
+        allowed_tools: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Returns tool definitions for LLM.
+
+        When non_interactive=True, AskUserQuestion is excluded entirely
+        so the LLM never attempts to call it during autonomous pipelines.
+
+        When allowed_tools is provided, only tools whose names appear in
+        the list are returned.  This is used to sandbox agents (e.g. the
+        planner gets only read-only tools).
+        """
+        defs: list[dict[str, Any]] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "InstallPackage",
+                    "description": "Install a package using the project's package manager",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "package_name": {
+                                "type": "string",
+                                "description": "Name of package to install",
+                            }
+                        },
+                        "required": ["package_name"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "InitProject",
+                    "description": "Initialize a new project structure",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Project path (default .)",
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "description": (
+                        "Read file content. Tool results are capped at 8000 chars — "
+                        "for large files, use offset and limit to read specific "
+                        "line ranges instead of the whole file. "
+                        "Use Grep to find line numbers first, then Read with offset."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to file",
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "description": "Start reading from this line number (1-indexed). Optional.",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of lines to return. Optional.",
+                            },
+                        },
+                        "required": ["file_path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "Write",
+                    "description": "Write content to file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to file",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Content to write",
+                            },
+                        },
+                        "required": ["file_path", "content"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "ReadFiles",
+                    "description": "Read multiple files at once. Returns JSON dict of path->content.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_paths": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of file paths to read",
+                            }
+                        },
+                        "required": ["file_paths"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "Edit",
+                    "description": "Edit a file by replacing an exact string match. "
+                    "old_string must appear exactly once. Safer than Write for small changes.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to file",
+                            },
+                            "old_string": {
+                                "type": "string",
+                                "description": "Exact string to find and replace (must be unique in file)",
+                            },
+                            "new_string": {
+                                "type": "string",
+                                "description": "Replacement string",
+                            },
+                        },
+                        "required": ["file_path", "old_string", "new_string"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "Bash",
+                    "description": "Run bash command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "Command to run",
+                            },
+                            "workdir": {
+                                "type": "string",
+                                "description": "Working directory",
+                            },
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "Glob",
+                    "description": "List files matching pattern",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "description": "Glob pattern",
+                            },
+                            "workdir": {
+                                "type": "string",
+                                "description": "Working directory",
+                            },
+                        },
+                        "required": ["pattern"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "Grep",
+                    "description": "Search file contents for a regex pattern. Returns matching lines.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "description": "Regex pattern to search for",
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Directory to search in (default .)",
+                            },
+                            "include": {
+                                "type": "string",
+                                "description": "File glob filter (e.g. '*.py')",
+                            },
+                        },
+                        "required": ["pattern"],
+                    },
+                },
+            },
+        ]
+
+        # Only include AskUserQuestion when running interactively
+        if not non_interactive and not cls._non_interactive:
+            defs.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "AskUserQuestion",
+                        "description": "Ask user a question",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "question": {
+                                    "type": "string",
+                                    "description": "The question to ask",
+                                },
+                                "options": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Options",
+                                },
+                            },
+                            "required": ["question"],
+                        },
+                    },
+                }
+            )
+
+        if allowed_tools is not None:
+            allowed_set = set(allowed_tools)
+            defs = [d for d in defs if d.get("function", {}).get("name") in allowed_set]
+
+        return defs
+
+    @classmethod
+    def ask_user(cls, question: str, options: list[str] = []) -> str:
+        import sys
+
+        default = options[0] if options else "yes"
+
+        if cls._non_interactive:
+            emit(M.UAUT, f"Auto: {question} -> {default}")
+            return default
+
+        if not sys.stdin.isatty():
+            emit(M.UAUT, f"Auto (no tty): {question} -> {default}")
+            return default
+
+        emit(M.UASK, f"{question}")
+
+        if options:
+            for i, opt in enumerate(options):
+                print(f"{i + 1}. {opt}", flush=True)
+            try:
+                sys.stdout.flush()
+                choice = input("Enter choice number (default 1): ").strip()
+                if not choice:
+                    return options[0]
+                idx = int(choice) - 1
+                if 0 <= idx < len(options):
+                    return options[idx]
+                return options[0]
+            except (ValueError, EOFError):
+                return options[0]
+        else:
+            try:
+                sys.stdout.flush()
+                answer = input("Answer (default: yes): ").strip()
+                return answer if answer else "yes"
+            except EOFError:
+                return "yes"
