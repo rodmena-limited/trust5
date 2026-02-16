@@ -9,6 +9,15 @@ import threading
 import time
 from collections.abc import Callable
 from typing import Any
+
+# ── SQLite safety: disable mmap to prevent fork+mmap corruption on macOS ──
+# subprocess.run() forks the process; mmap'd SQLite pages in the child can
+# cause "attempt to write a readonly database" when the child exits.
+os.environ.setdefault("STABILIZE_SQLITE_MMAP_SIZE_MB", "0")
+# Use FULL synchronous mode for maximum safety (trust5 is I/O-bound on
+# LLM calls, so the extra fsync cost is negligible).
+os.environ.setdefault("STABILIZE_SQLITE_SYNCHRONOUS", "FULL")
+
 import typer
 from stabilize import (
     Orchestrator,
@@ -22,6 +31,7 @@ from stabilize import (
 from stabilize.events import SqliteEventStore, configure_event_sourcing
 from stabilize.models.status import WorkflowStatus
 from stabilize.recovery import recover_on_startup
+
 from .core.agent_task import AgentTask
 from .core.constants import TIMEOUT_DEVELOP as _TIMEOUT_DEVELOP
 from .core.constants import TIMEOUT_LOOP as _TIMEOUT_LOOP
@@ -52,15 +62,18 @@ from .workflows.parallel_pipeline import (
 from .workflows.pipeline import create_develop_workflow, create_plan_only_workflow, strip_plan_stage
 from .workflows.plan import create_plan_workflow
 from .workflows.run import create_run_workflow
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 logger = logging.getLogger(__name__)
+
 app = typer.Typer()
+
 _USE_TUI = True
-TIMEOUT_PLAN = _TIMEOUT_PLAN
-TIMEOUT_DEVELOP = _TIMEOUT_DEVELOP
-TIMEOUT_RUN = _TIMEOUT_RUN
-TIMEOUT_LOOP = _TIMEOUT_LOOP
-_viewer_initialized = False
-_event_sourcing_configured = False
+
 
 def _silence_logging_for_tui() -> None:
     """Redirect logging to a file when TUI mode is selected.
@@ -88,12 +101,15 @@ def _silence_logging_for_tui() -> None:
         root.removeHandler(handler)
     root.addHandler(file_handler)
 
+
 def _suppress_print_fallback() -> None:
     """Disable emit() print fallback just before TUI takes over the terminal."""
     from .core.message import set_print_fallback
 
     set_print_fallback(False)
 
+
+@app.callback()
 def _global_options(
     provider: str = typer.Option(
         "",
@@ -122,10 +138,12 @@ def _global_options(
     if _USE_TUI:
         _silence_logging_for_tui()
 
+
 def _resolve_db_path() -> str:
     db_dir = os.path.join(os.path.abspath(os.getcwd()), ".trust5")
     os.makedirs(db_dir, exist_ok=True)
     return os.path.join(db_dir, "trust5.db")
+
 
 def _restore_stdout_after_tui() -> None:
     """Re-enable print fallback after TUI exits.
@@ -137,6 +155,7 @@ def _restore_stdout_after_tui() -> None:
     from .core.message import set_print_fallback
 
     set_print_fallback(True)
+
 
 def _print_final_summary(result: Workflow, changed_files: set[str] | None = None) -> None:
     """Print a concise final status to stdout after the TUI exits.
@@ -201,6 +220,10 @@ def _print_final_summary(result: Workflow, changed_files: set[str] | None = None
             os._exit(0)
 
     threading.Thread(target=_watchdog, daemon=True).start()
+    # Caller should call watchdog_event.set() when no longer needed, but since
+    # this runs at the end of the process, the daemon thread will be killed
+    # naturally if the process exits cleanly before the timeout.
+
 
 def _wait_with_tui(
     processor: QueueProcessor,
@@ -256,6 +279,7 @@ def _wait_with_tui(
 
     return getattr(tui_app, "_changed_files", set())
 
+
 def _run_tui_mode(
     processor: QueueProcessor,
     orchestrator: Orchestrator,
@@ -292,6 +316,7 @@ def _run_tui_mode(
     _print_final_summary(result, changed_files=changed_files)
     return result
 
+
 def _run_workflow_dispatch(
     processor: QueueProcessor,
     orchestrator: Orchestrator,
@@ -306,53 +331,15 @@ def _run_workflow_dispatch(
         return _run_tui_mode(processor, orchestrator, store, workflow, timeout, label, db_path)
     return run_workflow(processor, orchestrator, store, workflow, timeout, label, db_path)
 
-def _build_task_registry() -> TaskRegistry:
-    registry = TaskRegistry()
-    registry.register("agent", AgentTask)
-    registry.register("implementer", ImplementerTask)
-    registry.register("loop", LoopTask)
-    registry.register("mutation", MutationTask)
-    registry.register("setup", SetupTask)
-    registry.register("validate", ValidateTask)
-    registry.register("repair", RepairTask)
-    registry.register("quality", QualityTask)
-    registry.register("shell", ShellTask)
-    return registry
 
-def _emit_provider_info() -> None:
-    from .core.auth.registry import get_active_token
+TIMEOUT_PLAN = _TIMEOUT_PLAN
+TIMEOUT_DEVELOP = _TIMEOUT_DEVELOP
+TIMEOUT_RUN = _TIMEOUT_RUN
+TIMEOUT_LOOP = _TIMEOUT_LOOP
 
-    active = get_active_token()
-    if active is not None:
-        provider, _token_data = active
-        emit(M.MPRF, f"provider={provider.config.name} backend={provider.config.backend}")
-    else:
-        emit(M.MPRF, "provider=ollama backend=ollama")
 
-def _configure_event_sourcing_once(conn_str: str) -> None:
-    global _event_sourcing_configured
-    if _event_sourcing_configured:
-        return
-    _event_sourcing_configured = True
-    event_store = SqliteEventStore(conn_str, create_tables=True)
-    configure_event_sourcing(event_store)
+_viewer_initialized = False
 
-def _setup_phase() -> tuple[QueueProcessor, Orchestrator, SqliteWorkflowStore, SqliteQueue, str]:
-    db_path = _resolve_db_path()
-    conn_str = f"sqlite:///{db_path}"
-
-    store = SqliteWorkflowStore(conn_str, create_tables=True)
-    queue = SqliteQueue(conn_str, table_name="queue_messages")
-    queue._create_table()
-
-    processor = QueueProcessor(queue, store=store, task_registry=_build_task_registry())
-    orchestrator = Orchestrator(queue)
-
-    return processor, orchestrator, store, queue, db_path
-
-def _shutdown_ipc(viewer: StdoutViewer) -> None:
-    viewer.stop()
-    shutdown_bus()
 
 def _init_viewer_once() -> None:
     global _viewer_initialized
@@ -367,6 +354,44 @@ def _init_viewer_once() -> None:
         viewer = StdoutViewer(bus)
         viewer.start()
         atexit.register(_shutdown_ipc, viewer)
+
+
+def _build_task_registry() -> TaskRegistry:
+    registry = TaskRegistry()
+    registry.register("agent", AgentTask)
+    registry.register("implementer", ImplementerTask)
+    registry.register("loop", LoopTask)
+    registry.register("mutation", MutationTask)
+    registry.register("setup", SetupTask)
+    registry.register("validate", ValidateTask)
+    registry.register("repair", RepairTask)
+    registry.register("quality", QualityTask)
+    registry.register("shell", ShellTask)
+    return registry
+
+
+def _emit_provider_info() -> None:
+    from .core.auth.registry import get_active_token
+
+    active = get_active_token()
+    if active is not None:
+        provider, _token_data = active
+        emit(M.MPRF, f"provider={provider.config.name} backend={provider.config.backend}")
+    else:
+        emit(M.MPRF, "provider=ollama backend=ollama")
+
+
+_event_sourcing_configured = False
+
+
+def _configure_event_sourcing_once(conn_str: str) -> None:
+    global _event_sourcing_configured
+    if _event_sourcing_configured:
+        return
+    _event_sourcing_configured = True
+    event_store = SqliteEventStore(conn_str, create_tables=True)
+    configure_event_sourcing(event_store)
+
 
 def setup_stabilize() -> tuple[QueueProcessor, Orchestrator, SqliteWorkflowStore, SqliteQueue, str]:
     db_path = _resolve_db_path()
@@ -395,11 +420,33 @@ def setup_stabilize() -> tuple[QueueProcessor, Orchestrator, SqliteWorkflowStore
 
     return processor, orchestrator, store, queue, db_path
 
+
+def _setup_phase() -> tuple[QueueProcessor, Orchestrator, SqliteWorkflowStore, SqliteQueue, str]:
+    db_path = _resolve_db_path()
+    conn_str = f"sqlite:///{db_path}"
+
+    store = SqliteWorkflowStore(conn_str, create_tables=True)
+    queue = SqliteQueue(conn_str, table_name="queue_messages")
+    queue._create_table()
+
+    processor = QueueProcessor(queue, store=store, task_registry=_build_task_registry())
+    orchestrator = Orchestrator(queue)
+
+    return processor, orchestrator, store, queue, db_path
+
+
+def _shutdown_ipc(viewer: StdoutViewer) -> None:
+    viewer.stop()
+    shutdown_bus()
+
+
+@app.command()
 def plan(request: str) -> None:
     Tools.set_non_interactive(True)
     processor, orchestrator, store, _queue, db_path = setup_stabilize()
     workflow = create_plan_workflow(request)
     _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_PLAN, "Plan", db_path)
+
 
 def _cancel_stale_workflows() -> None:
     """Mark any RUNNING trust5 workflows as CANCELED so 'resume' can find them."""
@@ -418,6 +465,7 @@ def _cancel_stale_workflows() -> None:
             store.update_status(wf)
     except Exception:
         pass  # best-effort — don't block exit
+
 
 def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Workflow | None:
     """Run run_fn in a background thread with a single TUI alive throughout.
@@ -482,6 +530,8 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
 
     return result
 
+
+@app.command()
 def develop(request: str) -> None:
     Tools.set_non_interactive(True)
     _init_viewer_once()
@@ -604,17 +654,23 @@ def develop(request: str) -> None:
     else:
         _pipeline()
 
+
+@app.command()
 def run(spec_id: str) -> None:
     Tools.set_non_interactive(True)
     processor, orchestrator, store, _queue, db_path = setup_stabilize()
     workflow = create_run_workflow(spec_id)
     _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_RUN, "Run", db_path)
 
+
+@app.command()
 def init(path: str = ".") -> None:
     initializer = ProjectInitializer(path)
     initializer.run_wizard()
     GitManager(path).init_repo()
 
+
+@app.command()
 def login(provider: str) -> None:
     from .core.auth.registry import do_login, list_providers
 
@@ -631,6 +687,8 @@ def login(provider: str) -> None:
         emit(M.SERR, f"Login failed: {e}")
         raise typer.Exit(1)
 
+
+@app.command()
 def logout(provider: str | None = None) -> None:
     from .core.auth.registry import do_logout
 
@@ -639,6 +697,8 @@ def logout(provider: str | None = None) -> None:
     else:
         emit(M.SWRN, "No active session to log out from.")
 
+
+@app.command(name="auth-status")
 def auth_status() -> None:
     from .core.auth.token_store import TokenStore
 
@@ -662,11 +722,14 @@ def auth_status() -> None:
         else:
             emit(M.WFAL, f"  {name}{marker}: no token")
 
+
+@app.command()
 def loop() -> None:
     Tools.set_non_interactive(True)
     processor, orchestrator, store, _queue, db_path = setup_stabilize()
     workflow = create_loop_workflow()
     _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_LOOP, "Ralph Loop", db_path)
+
 
 def _reset_stage_for_resume(stage: Any) -> None:
     """Clear stale counters so a resumed stage gets fresh attempts."""
@@ -682,3 +745,219 @@ def _reset_stage_for_resume(stage: Any) -> None:
     stage.outputs = {}
     stage.end_time = None
     stage.start_time = None
+
+
+@app.command()
+def resume() -> None:
+    """Resume the last TERMINAL pipeline from its failed stage.
+
+    Uses stabilize's public API exclusively:
+    - retrieve_by_application() to find TERMINAL workflows
+    - Workflow/StageExecution/TaskExecution model objects for status changes
+    - store.store() to persist modified workflow
+    - recover_on_startup() to re-queue recovery messages
+
+    Context preservation strategy:
+    - Failed stages (TERMINAL/CANCELED) -> RUNNING: recovery sends RunTask,
+      which reuses existing stage context (no amnesia).
+    - Downstream stages (SKIPPED/NOT_STARTED after a failure) -> NOT_STARTED:
+      DAG-triggered by upstream completion via StartStage.
+    """
+    from stabilize.persistence.store import WorkflowCriteria
+
+    Tools.set_non_interactive(True)
+    processor, _orchestrator, store, queue, db_path = setup_stabilize()
+
+    # ── Find latest resumable workflow via public API ──
+    # FAILED_CONTINUE at workflow level shouldn't happen (finalize_status
+    # overrides to TERMINAL), but include it defensively.
+    # RUNNING is included for hard-kill recovery (process killed, workflow
+    # left RUNNING in DB with no active processor).
+    resumable_wf = {
+        WorkflowStatus.TERMINAL,
+        WorkflowStatus.CANCELED,
+        WorkflowStatus.FAILED_CONTINUE,
+        WorkflowStatus.RUNNING,
+    }
+    criteria = WorkflowCriteria(statuses=resumable_wf, page_size=10)
+
+    target_wf = None
+    for wf in store.retrieve_by_application("trust5", criteria):
+        if target_wf is None or (wf.start_time or 0) > (target_wf.start_time or 0):
+            target_wf = wf
+    if target_wf is None:
+        emit(M.SWRN, "No resumable pipeline found. Nothing to resume.")
+        raise typer.Exit(1)
+
+    workflow = store.retrieve(target_wf.id)
+    old_status = workflow.status.name
+    emit(M.WRCV, f"Found {old_status} pipeline: {workflow.id}")
+
+    # ── Reset statuses through model objects ──
+    # Stage-level: TERMINAL/CANCELED/FAILED_CONTINUE/RUNNING all count as
+    # "needs resume" (RUNNING = stage was mid-execution when process died)
+    resumable_stages = {
+        WorkflowStatus.TERMINAL,
+        WorkflowStatus.CANCELED,
+        WorkflowStatus.FAILED_CONTINUE,
+        WorkflowStatus.RUNNING,
+    }
+    found_failed = False
+    failed_count = 0
+    downstream_count = 0
+
+    for stage in workflow.stages:
+        if stage.status in resumable_stages:
+            found_failed = True
+            failed_count += 1
+            emit(
+                M.WRCV,
+                f"  Resuming stage '{stage.ref_id}' ({stage.status.name} -> RUNNING, context preserved)",
+            )
+            _reset_stage_for_resume(stage)
+            stage.status = WorkflowStatus.RUNNING
+            for task in stage.tasks:
+                if task.status in resumable_stages:
+                    task.status = WorkflowStatus.RUNNING
+
+        elif found_failed and stage.status in (
+            WorkflowStatus.SKIPPED,
+            WorkflowStatus.NOT_STARTED,
+        ):
+            downstream_count += 1
+            emit(M.WRCV, f"  Resetting downstream '{stage.ref_id}' -> NOT_STARTED")
+            stage.status = WorkflowStatus.NOT_STARTED
+            stage.start_time = None
+            stage.end_time = None
+            for task in stage.tasks:
+                task.status = WorkflowStatus.NOT_STARTED
+                task.start_time = None
+                task.end_time = None
+
+    if failed_count == 0:
+        emit(M.SWRN, "No failed stages found in the pipeline. Nothing to resume.")
+        raise typer.Exit(1)
+
+    workflow.status = WorkflowStatus.RUNNING
+    workflow.end_time = None
+
+    # ── Persist via public API ──
+    store.update_status(workflow)
+    for stage in workflow.stages:
+        store.store_stage(stage)
+    emit(
+        M.WRCV,
+        f"Pipeline {workflow.id} reset to RUNNING "
+        f"({failed_count} failed, {downstream_count} downstream). "
+        "Starting recovery...",
+    )
+
+    # ── Let stabilize's recovery re-queue messages ──
+    recovered = recover_on_startup(store, queue, application="trust5")
+    if recovered:
+        emit(M.WRCV, f"Recovery queued {len(recovered)} workflow(s)")
+    else:
+        emit(
+            M.SWRN,
+            "Recovery found nothing to queue. The pipeline may need manual inspection.",
+        )
+        raise typer.Exit(1)
+
+    emit(M.WSTR, f"Resuming pipeline {workflow.id}")
+
+    def handle_signal(sig: int, frame: Any) -> None:
+        emit(
+            M.WINT,
+            f"Interrupted. Workflow {workflow.id} state preserved in {db_path}.",
+        )
+        processor.request_stop()
+        processor.stop(wait=False)
+        sys.exit(130)
+
+    original_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, handle_signal)
+
+    changed_files: set[str] = set()
+    try:
+        processor.start()
+        if _USE_TUI:
+            changed_files = _wait_with_tui(processor, store, workflow.id)
+            _restore_stdout_after_tui()
+            result = store.retrieve(workflow.id)
+        else:
+            result = wait_for_completion(store, workflow.id, TIMEOUT_DEVELOP)
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+        processor.request_stop()
+        processor.stop(wait=False)
+
+    finalize_status(result, store, prefix="Resumed pipeline")
+    _print_final_summary(result, changed_files=changed_files)
+
+
+@app.command()
+def watch(path: str = ".") -> None:
+    """Stream events from a running trust5 pipeline to stdout."""
+    sock_path = os.path.join(os.path.abspath(path), ".trust5", "events.sock")
+    if not os.path.exists(sock_path):
+        emit(M.SERR, f"No active pipeline found (socket not found: {sock_path})")
+        raise typer.Exit(1)
+
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        conn.connect(sock_path)
+    except (ConnectionRefusedError, OSError) as exc:
+        emit(M.SERR, f"Cannot connect to pipeline: {exc}")
+        raise typer.Exit(1)
+
+    emit(M.SINF, f"Connected to pipeline at {sock_path}. Press Ctrl+C to detach.")
+    buf = ""
+    try:
+        while True:
+            data = conn.recv(4096)
+            if not data:
+                emit(M.SINF, "Pipeline disconnected.")
+                break
+            buf += data.decode("utf-8", errors="replace")
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                if not line.strip():
+                    continue
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                _render_watch_event(evt)
+    except KeyboardInterrupt:
+        emit(M.SINF, "Detached from pipeline.")
+    finally:
+        conn.close()
+
+
+def _render_watch_event(evt: dict[str, str]) -> None:
+    kind = evt.get("k", "")
+    code = evt.get("c", "")
+    ts = evt.get("t", "")
+    msg = evt.get("m", "")
+    label = evt.get("l", "")
+    tag = f"{{{code}}}"
+
+    if kind == "msg":
+        print(f"{tag}{ts} {msg}", flush=True)
+    elif kind == "bs":
+        print(f"{tag}{ts} \u250c\u2500\u2500 {label}", flush=True)
+    elif kind == "bl":
+        print(f"{tag}{ts}  \u2502 {msg}", flush=True)
+    elif kind == "be":
+        print(f"{tag}{ts} \u2514\u2500\u2500", flush=True)
+    elif kind == "ss":
+        print(f"{tag}{ts} {label}", end="", flush=True)
+    elif kind == "st":
+        sys.stdout.write(msg)
+        sys.stdout.flush()
+    elif kind == "se":
+        print("", flush=True)
+
+
+if __name__ == "__main__":
+    app()
