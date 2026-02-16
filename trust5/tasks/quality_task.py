@@ -23,3 +23,6 @@ from ..core.quality_gates import (
 )
 logger = logging.getLogger(__name__)
 QUALITY_OUTPUT_LIMIT = 6000
+
+class QualityTask(Task):
+    """Runs TRUST 5 quality gate; jumps to repair on failure."""
