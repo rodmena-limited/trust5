@@ -327,3 +327,17 @@ class QualityTask(Task):
                 _tup(data.get("security_command")) if "security_command" in data else base.security_command
             ),
         )
+
+    def _emit_report(report: QualityReport, assessment: Assessment | None = None) -> None:
+        lines = [f"Score: {report.score:.3f} | Errors: {report.total_errors} | Warnings: {report.total_warnings}"]
+        if assessment:
+            lines.append(f"Overall: {assessment.overall_status().upper()}")
+        for name, pr in report.principles.items():
+            status_tag = "PASS" if pr.passed else "FAIL"
+            tier = ""
+            if assessment and name in assessment.pillars:
+                tier = f" ({assessment.pillars[name].status})"
+            lines.append(f"  [{status_tag}] {name}: {pr.score:.3f}{tier}")
+            for issue in pr.issues[:10]:
+                lines.append(f"       - [{issue.severity}] {issue.message}")
+        emit_block(M.QRPT, "TRUST 5 Quality Report", "\n".join(lines), max_lines=50)
