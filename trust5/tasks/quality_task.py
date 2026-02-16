@@ -284,3 +284,46 @@ class QualityTask(Task):
         except Exception as e:
             logger.warning("Failed to load quality config: %s — using defaults", e)
             return QualityConfig()
+
+    def _build_profile(data: dict[str, Any], project_root: str = ".") -> LanguageProfile:
+        if not data:
+            from ..core.lang import detect_language, get_profile
+
+            detected = detect_language(project_root)
+            return get_profile(detected)
+
+        def _tup(v: Any) -> tuple[str, ...] | None:
+            if v is None:
+                return None
+            if isinstance(v, (list, tuple)):
+                return tuple(v)
+            return (str(v),)
+
+        # Use detect_language as the base profile for missing fields
+        from ..core.lang import detect_language, get_profile
+
+        detected = detect_language(project_root)
+        base = get_profile(detected)
+
+        return LanguageProfile(
+            language=data.get("language", base.language),
+            extensions=tuple(data.get("extensions", base.extensions)),
+            test_command=tuple(data.get("test_command", base.test_command)),
+            test_verify_command=data.get("test_verify_command", base.test_verify_command),
+            lint_commands=tuple(data.get("lint_commands", base.lint_commands)),
+            lint_check_commands=tuple(data.get("lint_check_commands", base.lint_check_commands)),
+            syntax_check_command=(
+                _tup(data.get("syntax_check_command")) if "syntax_check_command" in data else base.syntax_check_command
+            ),
+            package_install_prefix=data.get("package_install_prefix", base.package_install_prefix),
+            lsp_language_id=data.get("lsp_language_id", base.lsp_language_id),
+            skip_dirs=tuple(data.get("skip_dirs", base.skip_dirs)),
+            manifest_files=tuple(data.get("manifest_files", base.manifest_files)),
+            prompt_hints=data.get("prompt_hints", base.prompt_hints),
+            coverage_command=(
+                _tup(data.get("coverage_command")) if "coverage_command" in data else base.coverage_command
+            ),
+            security_command=(
+                _tup(data.get("security_command")) if "security_command" in data else base.security_command
+            ),
+        )
