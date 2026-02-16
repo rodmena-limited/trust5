@@ -22,3 +22,4 @@ from ..core.quality_gates import (
     validate_phase,
 )
 logger = logging.getLogger(__name__)
+QUALITY_OUTPUT_LIMIT = 6000
