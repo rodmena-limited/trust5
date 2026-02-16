@@ -275,3 +275,12 @@ class QualityTask(Task):
         propagate_context(stage.context, jump_context)
         increment_jump_count(jump_context)
         return TaskResult.jump_to(jump_repair_ref, context=jump_context)
+
+    def _load_quality_config(project_root: str) -> QualityConfig:
+        try:
+            mgr = ConfigManager(project_root)
+            cfg = mgr.load_config()
+            return cfg.quality
+        except Exception as e:
+            logger.warning("Failed to load quality config: %s — using defaults", e)
+            return QualityConfig()
