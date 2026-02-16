@@ -1,7 +1,11 @@
+"""TRUST 5 quality gate task — runs validators and jumps to repair on failure."""
+
 import logging
 import os
 from typing import Any
+
 from stabilize import StageExecution, Task, TaskResult
+
 from ..core.config import ConfigManager, QualityConfig
 from ..core.context_keys import increment_jump_count, propagate_context
 from ..core.lang import LanguageProfile
@@ -21,8 +25,11 @@ from ..core.quality_gates import (
     validate_methodology,
     validate_phase,
 )
+
 logger = logging.getLogger(__name__)
+
 QUALITY_OUTPUT_LIMIT = 6000
+
 
 class QualityTask(Task):
     """Runs TRUST 5 quality gate; jumps to repair on failure."""
@@ -276,6 +283,9 @@ class QualityTask(Task):
         increment_jump_count(jump_context)
         return TaskResult.jump_to(jump_repair_ref, context=jump_context)
 
+    # ── helpers ──
+
+    @staticmethod
     def _load_quality_config(project_root: str) -> QualityConfig:
         try:
             mgr = ConfigManager(project_root)
@@ -285,6 +295,7 @@ class QualityTask(Task):
             logger.warning("Failed to load quality config: %s — using defaults", e)
             return QualityConfig()
 
+    @staticmethod
     def _build_profile(data: dict[str, Any], project_root: str = ".") -> LanguageProfile:
         if not data:
             from ..core.lang import detect_language, get_profile
@@ -328,6 +339,7 @@ class QualityTask(Task):
             ),
         )
 
+    @staticmethod
     def _emit_report(report: QualityReport, assessment: Assessment | None = None) -> None:
         lines = [f"Score: {report.score:.3f} | Errors: {report.total_errors} | Warnings: {report.total_warnings}"]
         if assessment:
@@ -341,3 +353,27 @@ class QualityTask(Task):
             for issue in pr.issues[:10]:
                 lines.append(f"       - [{issue.severity}] {issue.message}")
         emit_block(M.QRPT, "TRUST 5 Quality Report", "\n".join(lines), max_lines=50)
+
+    @staticmethod
+    def _format_quality_feedback(
+        report: QualityReport,
+        config: QualityConfig,
+        phase_issues: list[Any] | None = None,
+    ) -> str:
+        parts = [
+            f"TRUST 5 QUALITY GATE FAILED (score={report.score:.3f}, threshold={config.pass_score_threshold})\n",
+            "Fix the following quality issues:\n",
+        ]
+        for name, pr in report.principles.items():
+            if not pr.passed or pr.issues:
+                parts.append(f"\n## {name.upper()} (score={pr.score:.3f})")
+                for issue in pr.issues:
+                    if issue.severity in ("error", "warning"):
+                        loc = f" [{issue.file}:{issue.line}]" if issue.file else ""
+                        parts.append(f"  - [{issue.severity}]{loc} {issue.message}")
+        if phase_issues:
+            parts.append("\n## PHASE GATE VIOLATIONS")
+            for pi in phase_issues:
+                parts.append(f"  - [{pi.severity}] {pi.message}")
+        parts.append("\nFix these issues and ensure all tests still pass.")
+        return "\n".join(parts)
