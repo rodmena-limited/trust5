@@ -37,3 +37,235 @@ def _build_test_env(
 
 class RepairTask(Task):
     """Runs an LLM agent to fix code based on test failures, then jumps back to validate."""
+
+    def execute(self, stage: StageExecution) -> TaskResult:
+        project_root = stage.context.get("project_root", os.getcwd())
+        test_output = stage.context.get("test_output", "")
+        repair_attempt = stage.context.get("repair_attempt", 1)
+        spec_id = stage.context.get("spec_id")
+        previous_failures = stage.context.get("previous_failures", [])
+        profile_data = stage.context.get("language_profile", {})
+
+        # ── Jump-limit safety net ─────────────────────────────────────
+        if check_jump_limit(stage.context):
+            emit(
+                M.RFAL,
+                f"Global jump limit reached "
+                f"({stage.context.get('_jump_count', 0)}/{stage.context.get('_max_jumps', 50)}). "
+                f"Terminating to prevent infinite loop.",
+            )
+            return TaskResult.terminal(
+                error="Jump limit exceeded — validate/repair loop ran too long",
+            )
+
+        # Re-detect language at runtime when build-time detection was "unknown"
+        # (pipeline created before setup stage ran and created manifest files).
+        if profile_data.get("language") == "unknown":
+            detected = detect_language(project_root)
+            if detected != "unknown":
+                profile_data = get_profile(detected).to_dict()
+                stage.context["language_profile"] = profile_data
+
+        failure_type = stage.context.get("failure_type")
+        tests_passed = stage.context.get("tests_passed", False)
+        tests_partial = stage.context.get("tests_partial", False)
+        # Use get() instead of pop(): pop() is destructive and breaks crash
+        # recovery (Stabilize replays stages from events — if the key was
+        # already popped, the retry silently skips repair).
+        repair_requested = stage.context.get("_repair_requested", False)
+
+        if not repair_requested:
+            emit(
+                M.RSKP,
+                "Repair started via DAG (not jump). No active failure. Skipping.",
+            )
+            return TaskResult.success(outputs={"repair_skipped": True})
+
+        # Quality failures need repair even when tests pass — skip logic
+        # only applies to test-driven repairs.
+        # When repair_requested is True, validate used jump_to to reach us,
+        # so we must jump back to validate (not return success) to ensure
+        # validate's stage.completed event fires and resolves downstream.
+        if failure_type != "quality":
+            if not test_output or tests_passed or tests_partial:
+                emit(
+                    M.RSKP,
+                    "No failures to repair (tests_passed, tests_partial, or no test_output). Skipping.",
+                )
+                jump_target = stage.context.get("jump_validate_ref", "validate")
+                skip_context: dict[str, Any] = {
+                    "project_root": project_root,
+                    "language_profile": profile_data,
+                    "_repair_requested": False,
+                }
+                propagate_context(stage.context, skip_context)
+                increment_jump_count(skip_context)
+                return TaskResult.jump_to(
+                    jump_target,
+                    context=skip_context,
+                    outputs={"repair_skipped": True},
+                )
+
+        module_name = stage.context.get("module_name", "")
+        mod_tag = f" [{module_name}]" if module_name else ""
+
+        # ── Pre-flight check ────────────────────────────────────────
+        # Guard against the validate→repair→validate infinite loop.
+        # The _repair_requested flag persists in Stabilize's sticky stage
+        # context across re-executions, so even when validate SUCCEEDS
+        # (DAG continues to repair), the flag is still True from a
+        # previous jump. Running a quick test check catches this case.
+        #
+        # IMPORTANT: We must jump back to validate even when tests pass,
+        # never return TaskResult.success() directly. When validate used
+        # jump_to("repair"), its stage.completed event was never emitted.
+        # Only by jumping back to validate can it re-execute, succeed,
+        # and emit stage.completed — which is the ONLY path that resolves
+        # downstream dependencies in the DAG.
+        #
+        # Pre-flight ONLY for test failures.  For lint/syntax failures the
+        # repair LLM must run (tests passing says nothing about lint).
+        # Running a test-only pre-flight on lint failures causes an infinite
+        # skip loop: validate(lint fail) → repair(tests pass → skip) → repeat.
+        if failure_type in ("test", None):
+            pre_check = self._quick_test_check(project_root, profile_data, stage.context)
+            if pre_check:
+                emit(
+                    M.RSKP,
+                    f"Pre-flight check: tests already passing{mod_tag}. No repair needed.",
+                )
+                jump_target = stage.context.get("jump_validate_ref", "validate")
+                emit(M.RJMP, f"Jumping back to {jump_target} to resolve downstream stages.")
+                preflight_context: dict[str, Any] = {
+                    "project_root": project_root,
+                    "previous_failures": previous_failures,
+                    "spec_id": spec_id,
+                    "language_profile": profile_data,
+                    "_repair_requested": False,
+                }
+                propagate_context(stage.context, preflight_context)
+                increment_jump_count(preflight_context)
+                return TaskResult.jump_to(
+                    jump_target,
+                    context=preflight_context,
+                    outputs={"repair_skipped": True, "tests_already_pass": True},
+                )
+
+        emit(
+            M.RSTR,
+            f"RepairTask executing{mod_tag} (attempt {repair_attempt}) in {project_root}",
+            label=module_name,
+        )
+
+        summarized_output = summarize_errors(
+            test_output,
+            failure_type=failure_type or "test",
+        )
+
+        system_prompt = self._load_repairer_prompt(profile_data)
+
+        # Append the "Project Language" section that the repairer.md references
+        # (e.g., "run the test command from the Project Language section").
+        # AgentTask does this automatically, but RepairTask builds its own Agent.
+        if profile_data:
+            try:
+                lang_profile = LanguageProfile(**profile_data)
+                system_prompt += "\n\n" + build_language_context(lang_profile)
+            except (TypeError, KeyError):
+                pass
+
+        plan_config = stage.context.get("plan_config")
+        user_prompt = build_repair_prompt(
+            test_output=summarized_output,
+            project_root=project_root,
+            spec_id=spec_id,
+            attempt=repair_attempt,
+            previous_failures=previous_failures,
+            language_profile=profile_data,
+            plan_config=plan_config,
+        )
+
+        owned_files = stage.context.get("owned_files")
+        test_files = stage.context.get("test_files")
+
+        repair_thinking = "high" if repair_attempt >= 2 else "low"
+        llm = LLM.for_tier("best", stage_name="repairer", thinking_level=repair_thinking)
+
+        with mcp_clients() as mcp:
+            agent = Agent(
+                name="repairer",
+                prompt=system_prompt,
+                llm=llm,
+                non_interactive=True,
+                owned_files=owned_files,
+                denied_files=test_files,
+                deny_test_patterns=True,
+                mcp_clients=mcp,
+            )
+
+            try:
+                result = agent.run(user_prompt, max_turns=20, timeout_seconds=600)
+
+                # Always jump back to validate (or quality) — never short-circuit
+                # with TaskResult.success() from repair.  When repair returns
+                # success directly, the source stage (validate) that used jump_to
+                # to reach repair never completes through Stabilize's normal
+                # CompleteStageHandler.  That handler is the ONLY path that
+                # resolves downstream dependencies.  Returning success here
+                # leaves all downstream stages permanently NOT_STARTED.
+                # Validate re-runs in <1 s and handles the success path correctly.
+                if failure_type == "quality":
+                    jump_target = stage.context.get("jump_quality_ref", "quality")
+                else:
+                    jump_target = stage.context.get("jump_validate_ref", "validate")
+                emit(M.REND, f"Repair work done{mod_tag}.", label=module_name)
+                emit(M.RJMP, f"Repair completed. Jumping back to {jump_target}.")
+
+                jump_context: dict[str, Any] = {
+                    "project_root": project_root,
+                    "previous_failures": previous_failures,
+                    "spec_id": spec_id,
+                    "last_repair_summary": result[:500] if result else "",
+                    "language_profile": profile_data,
+                    # Preserve repair_attempt so validate sees the correct count
+                    "repair_attempt": repair_attempt,
+                    # Explicitly clear the repair flag so validate doesn't
+                    # see a stale True from sticky context after a successful repair.
+                    "_repair_requested": False,
+                }
+                if failure_type == "quality":
+                    jump_context["quality_attempt"] = stage.context.get("quality_attempt", 1)
+                    jump_context["max_quality_attempts"] = stage.context.get("max_quality_attempts", 3)
+                    jump_context["prev_quality_report"] = stage.context.get("prev_quality_report")
+                    jump_context["pipeline_phase"] = stage.context.get("pipeline_phase", "run")
+
+                propagate_context(stage.context, jump_context)
+                increment_jump_count(jump_context)
+
+                return TaskResult.jump_to(
+                    jump_target,
+                    context=jump_context,
+                    outputs={"repair_result": result[:2000] if result else ""},
+                )
+
+            except LLMError as e:
+                if e.retryable or e.is_network_error:
+                    retry_after = e.retry_after or (60 if e.is_network_error else 30)
+                    emit(
+                        M.RFAL,
+                        f"Repair LLM transient failure, retrying in {retry_after}s: {e}",
+                    )
+                    raise TransientError(
+                        f"LLM failed during repair: {e}",
+                        retry_after=retry_after,
+                        context_update={
+                            "previous_failures": previous_failures,
+                        },
+                    )
+                emit(M.RFAL, f"Repair LLM failed permanently: {e}")
+                return TaskResult.terminal(error=f"Repair LLM failed permanently: {e}")
+
+            except Exception as e:
+                emit(M.RFAL, f"RepairTask failed: {e}")
+                logger.exception("RepairTask failed")
+                return TaskResult.terminal(error=f"Repair failed: {e}")
