@@ -321,3 +321,22 @@ class RepairTask(Task):
         except Exception as e:
             logger.debug("Pre/post-flight test check failed: %s", e)
             return False
+
+    def _load_repairer_prompt(self, profile_data: dict[str, Any] | None = None) -> str:
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        prompt_path = os.path.join(base_path, "assets", "prompts", REPAIR_SYSTEM_PROMPT_FILE)
+
+        if not os.path.exists(prompt_path):
+            return self._default_repairer_prompt(profile_data)
+
+        try:
+            with open(prompt_path, encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            return self._default_repairer_prompt(profile_data)
+
+        if content.startswith("---\n"):
+            parts = content.split("---\n", 2)
+            if len(parts) >= 3:
+                return parts[2]
+        return content
