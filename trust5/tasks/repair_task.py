@@ -34,3 +34,6 @@ def _build_test_env(
             return env
 
     return None
+
+class RepairTask(Task):
+    """Runs an LLM agent to fix code based on test failures, then jumps back to validate."""
