@@ -269,3 +269,55 @@ class RepairTask(Task):
                 emit(M.RFAL, f"RepairTask failed: {e}")
                 logger.exception("RepairTask failed")
                 return TaskResult.terminal(error=f"Repair failed: {e}")
+
+    def _quick_test_check(
+        project_root: str,
+        profile_data: dict[str, Any],
+        stage_context: dict[str, Any],
+    ) -> bool:
+        """Run a quick test to see if tests are currently passing.
+
+        Returns True if all tests pass, False otherwise.
+        Used for pre-flight (skip repair if nothing is broken) and
+        post-flight (avoid jumping back to validate if repair succeeded).
+        """
+        # Use plan_config test_command if available (matches ValidateTask behavior).
+        # Import here to avoid circular dependency.
+        from ..tasks.validate_task import _parse_command
+
+        plan_config = stage_context.get("plan_config", {})
+        plan_test_cmd = plan_config.get("test_command") if plan_config else None
+        if plan_test_cmd:
+            test_cmd = _parse_command(plan_test_cmd)
+        else:
+            detected = detect_language(project_root)
+            if detected == "unknown" and not profile_data.get("test_command"):
+                # No real test command available (generic profile uses `echo`
+                # which always returns 0).  Can't do a meaningful pre-flight.
+                return False
+            base_profile = get_profile(detected)
+            test_cmd = tuple(profile_data.get("test_command", base_profile.test_command))
+
+        # Scope to module test files if available
+        scoped_test_files = stage_context.get("test_files")
+        if scoped_test_files:
+            existing = [f for f in scoped_test_files if os.path.exists(os.path.join(project_root, f))]
+            if existing:
+                test_cmd = (*test_cmd, *existing)
+
+        # Build env with source roots on path (matches ValidateTask behavior)
+        env = _build_test_env(project_root, profile_data)
+
+        try:
+            result = subprocess.run(
+                list(test_cmd),
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.debug("Pre/post-flight test check failed: %s", e)
+            return False
