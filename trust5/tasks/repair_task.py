@@ -13,3 +13,4 @@ from ..core.llm import LLM, LLMError
 from ..core.mcp_manager import mcp_clients
 from ..core.message import M, emit
 logger = logging.getLogger(__name__)
+REPAIR_SYSTEM_PROMPT_FILE = "repairer.md"
