@@ -39,3 +39,11 @@ _FILE_NOT_FOUND_RE = re.compile(
     r""".*?['"]([^'"]+?)['"]""",
     re.IGNORECASE,
 )
+_ENV_PREFIX_RE = re.compile(r"^[A-Za-z_]\w*=\S+\s")
+_SOURCE_EXTENSIONS = frozenset((
+    ".py", ".go", ".ts", ".js", ".tsx", ".jsx",
+    ".rs", ".java", ".rb", ".c", ".cpp", ".h", ".hpp",
+    ".cs", ".swift", ".kt", ".scala", ".lua", ".zig",
+))
+_PYTEST_RE = re.compile(r"(\d+)\s+passed")
+_PYTEST_FAIL_RE = re.compile(r"(\d+)\s+failed")
