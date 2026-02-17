@@ -5,7 +5,9 @@ import shlex
 import subprocess
 import time
 from typing import Any
+
 from stabilize import StageExecution, Task, TaskResult
+
 from ..core.constants import MAX_REIMPLEMENTATIONS as _MAX_REIMPL_DEFAULT
 from ..core.constants import MAX_REPAIR_ATTEMPTS as _MAX_REPAIR_DEFAULT
 from ..core.constants import (
@@ -15,9 +17,14 @@ from ..core.context_keys import check_jump_limit, increment_jump_count, propagat
 from ..core.lang import detect_language, get_profile
 from ..core.message import M, emit, emit_block
 from ..core.tools import _matches_test_pattern
+
 logger = logging.getLogger(__name__)
+
 MAX_REPAIR_ATTEMPTS = _MAX_REPAIR_DEFAULT
 MAX_REIMPLEMENTATIONS = _MAX_REIMPL_DEFAULT
+
+# Minimal fallbacks for _discover_test_files signature only.
+# The execute() method always resolves the real profile and passes explicit values.
 _FALLBACK_EXTENSIONS = (".py", ".go", ".ts", ".js", ".rs", ".java", ".rb")
 _FALLBACK_SKIP_DIRS = (
     ".moai",
@@ -32,24 +39,28 @@ _FALLBACK_SKIP_DIRS = (
     "dist",
     "build",
 )
+
+# Shell metacharacters that indicate a command must be run via sh -c.
 _SHELL_METACHAR_RE = re.compile(r"[&|;><`$]")
+
+# Matches a lint-output line that starts with a file path followed by :line
+# e.g. "tests/test_foo.py:12:1: F401 ..."
 _LINT_FILE_LINE_RE = re.compile(r"^(\S+?):\d+")
+
+# Matches FileNotFoundError / "can't open file" / "No such file" messages
+# that reference a missing source file.  Examples:
+#   FileNotFoundError: [Errno 2] No such file or directory: 'simulations.py'
+#   python: can't open file '/path/to/stats.py': [Errno 2] No such file or directory
+#   Error: Cannot find module 'utils.ts'
 _FILE_NOT_FOUND_RE = re.compile(
     r"""(?:FileNotFoundError|No\s+such\s+file|can't\s+open\s+file|Cannot\s+find\s+module)"""
     r""".*?['"]([^'"]+?)['"]""",
     re.IGNORECASE,
 )
+
+
 _ENV_PREFIX_RE = re.compile(r"^[A-Za-z_]\w*=\S+\s")
-_SOURCE_EXTENSIONS = frozenset((
-    ".py", ".go", ".ts", ".js", ".tsx", ".jsx",
-    ".rs", ".java", ".rb", ".c", ".cpp", ".h", ".hpp",
-    ".cs", ".swift", ".kt", ".scala", ".lua", ".zig",
-))
-_PYTEST_RE = re.compile(r"(\d+)\s+passed")
-_PYTEST_FAIL_RE = re.compile(r"(\d+)\s+failed")
-_GO_RE = re.compile(r"ok\s+\S+\s+[\d.]+s")
-_JEST_RE = re.compile(r"Tests:\s+.*?(\d+)\s+passed")
-_GENERIC_RE = re.compile(r"(\d+)\s+tests?\s+passed", re.IGNORECASE)
+
 
 def _parse_command(cmd_str: str) -> tuple[str, ...]:
     """Parse a command string into a subprocess-safe tuple.
@@ -69,6 +80,7 @@ def _parse_command(cmd_str: str) -> tuple[str, ...]:
         return tuple(shlex.split(cmd_str))
     except ValueError:
         return tuple(cmd_str.split())
+
 
 def _filter_test_file_lint(raw_output: str, owned_files: list[str] | None = None) -> str:
     """Remove lint-error lines that the repairer cannot fix.
@@ -151,6 +163,15 @@ def _filter_test_file_lint(raw_output: str, owned_files: list[str] | None = None
         return ""
     return result
 
+
+# Source-file extensions recognized by _scope_lint_command.
+_SOURCE_EXTENSIONS = frozenset((
+    ".py", ".go", ".ts", ".js", ".tsx", ".jsx",
+    ".rs", ".java", ".rb", ".c", ".cpp", ".h", ".hpp",
+    ".cs", ".swift", ".kt", ".scala", ".lua", ".zig",
+))
+
+
 def _scope_lint_command(cmd: str, owned_files: list[str]) -> str:
     """Rewrite a lint command to only reference the current module's owned files.
 
@@ -222,6 +243,7 @@ def _scope_lint_command(cmd: str, owned_files: list[str]) -> str:
         result_segments.append(f"{leading}{' '.join(kept_tokens)}{trailing}")
 
     return "&&".join(result_segments)
+
 
 def _strip_nonexistent_files(cmd: str, project_root: str) -> str:
     """Remove file tokens from a lint command when the files don't exist on disk.
@@ -302,6 +324,7 @@ def _strip_nonexistent_files(cmd: str, project_root: str) -> str:
 
     return "&&".join(result_segments)
 
+
 def _build_test_env(
     project_root: str,
     profile_data: dict[str, Any],
@@ -329,6 +352,7 @@ def _build_test_env(
 
     return None
 
+
 def _discover_test_files(
     project_root: str,
     extensions: tuple[str, ...] = _FALLBACK_EXTENSIONS,
@@ -346,6 +370,7 @@ def _discover_test_files(
             if _matches_test_pattern(rel):
                 test_files.append(rel)
     return sorted(test_files)
+
 
 def _derive_module_test_files(
     all_test_files: list[str],
@@ -381,6 +406,377 @@ def _derive_module_test_files(
 
     return matched
 
+
+class ValidateTask(Task):
+    """Runs syntax checks and tests, routing failures to repair via jump_to."""
+
+    def execute(self, stage: StageExecution) -> TaskResult:
+        start_time = time.monotonic()
+        project_root = stage.context.get("project_root", os.getcwd())
+        repair_attempt = stage.context.get("repair_attempt", 0)
+        max_attempts = stage.context.get("max_repair_attempts", MAX_REPAIR_ATTEMPTS)
+        profile_data = stage.context.get("language_profile", {})
+        plan_config = stage.context.get("plan_config", {})
+
+        # ── Jump-limit safety net ─────────────────────────────────────
+        if check_jump_limit(stage.context):
+            emit(
+                M.VFAL,
+                f"Global jump limit reached "
+                f"({stage.context.get('_jump_count', 0)}/{stage.context.get('_max_jumps', 50)}). "
+                f"Terminating to prevent infinite loop.",
+            )
+            return TaskResult.terminal(
+                error="Jump limit exceeded — validate/repair loop ran too long",
+            )
+
+        # Resolve language profile: use context data, fall back to auto-detection.
+        # When the build-time profile says "unknown" (pipeline was created before
+        # setup ran and created manifest files), re-detect at runtime and update
+        # the context so downstream stages (repair, reimplementation) also benefit.
+        detected = detect_language(project_root)
+        base_profile = get_profile(detected)
+        if profile_data.get("language") == "unknown" and detected != "unknown":
+            profile_data = base_profile.to_dict()
+            stage.context["language_profile"] = profile_data
+            logger.debug("Re-detected language as %s (was unknown)", detected)
+
+        # Auto-detect test files when not provided.
+        # In parallel pipelines (owned_files is set), derive module-scoped
+        # test files from owned source files to avoid cross-module interference.
+        # In serial pipelines, discover all test files for the deny list.
+        if not stage.context.get("test_files"):
+            extensions = tuple(profile_data.get("extensions", base_profile.extensions))
+            skip_dirs = tuple(profile_data.get("skip_dirs", base_profile.skip_dirs))
+            discovered = _discover_test_files(project_root, extensions, skip_dirs)
+            if discovered:
+                owned_files = stage.context.get("owned_files")
+                if owned_files:
+                    # Parallel pipeline: scope to module's test files only
+                    scoped = _derive_module_test_files(discovered, owned_files)
+                    if scoped:
+                        stage.context["test_files"] = scoped
+                        logger.debug(
+                            "Derived %d module-scoped test files from %d owned files",
+                            len(scoped),
+                            len(owned_files),
+                        )
+                    else:
+                        logger.warning(
+                            "Could not derive test files for module (owned=%s). Running without test scoping.",
+                            owned_files,
+                        )
+                else:
+                    # Serial pipeline: use all test files
+                    stage.context["test_files"] = discovered
+                    logger.debug("Auto-detected %d test files", len(discovered))
+
+        def _emit_elapsed() -> None:
+            elapsed = time.monotonic() - start_time
+            emit(M.SELP, f"{elapsed:.1f}s")
+
+        # Prefer planner-decided test command over profile default
+        plan_test_cmd = plan_config.get("test_command") if plan_config else None
+        if plan_test_cmd:
+            test_cmd = _parse_command(plan_test_cmd)
+        else:
+            test_cmd = tuple(profile_data.get("test_command", base_profile.test_command))
+        syntax_cmd_raw = profile_data.get("syntax_check_command")
+        syntax_cmd = tuple(syntax_cmd_raw) if syntax_cmd_raw is not None else base_profile.syntax_check_command
+        lang_name = profile_data.get("language", base_profile.language)
+        module_name = stage.context.get("module_name", "")
+        scoped_test_files = stage.context.get("test_files")
+        if scoped_test_files:
+            existing = [f for f in scoped_test_files if os.path.exists(os.path.join(project_root, f))]
+            if existing:
+                test_cmd = (*test_cmd, *existing)
+
+        emit(
+            M.VRUN,
+            f"ValidateTask running [{lang_name}] (attempt {repair_attempt}/{max_attempts}) in {project_root}",
+            label=module_name,
+        )
+
+        # Resolve lint-check commands: prefer planner-provided lint_command
+        # (which may activate a venv), fall back to profile defaults.
+        # Two layers of protection against stale file references:
+        # 1. Parallel pipelines: scope to owned files only
+        # 2. All pipelines: strip file tokens that don't exist on disk
+        plan_lint_cmd = plan_config.get("lint_command") if plan_config else None
+        if plan_lint_cmd:
+            owned = stage.context.get("owned_files")
+            if owned:
+                plan_lint_cmd = _scope_lint_command(plan_lint_cmd, owned)
+            plan_lint_cmd = _strip_nonexistent_files(plan_lint_cmd, project_root)
+            lint_cmds = [_parse_command(plan_lint_cmd)]
+        else:
+            lint_check_raw = profile_data.get("lint_check_commands", ())
+            if not lint_check_raw:
+                lint_check_raw = base_profile.lint_check_commands
+            lint_cmds = [_parse_command(c) for c in lint_check_raw] if lint_check_raw else []
+
+        # Detect source root layout and build env for subprocess calls.
+        test_env = _build_test_env(project_root, profile_data)
+
+        syntax_result = self._check_syntax(project_root, syntax_cmd, env=test_env)
+        if syntax_result is not None:
+            return self._handle_failure(
+                stage,
+                syntax_result,
+                repair_attempt,
+                max_attempts,
+                "syntax",
+                profile_data,
+            )
+
+        owned_files = stage.context.get("owned_files")
+        lint_result = self._check_lint(project_root, lint_cmds, env=test_env, owned_files=owned_files)
+        if lint_result is not None:
+            return self._handle_failure(
+                stage,
+                lint_result,
+                repair_attempt,
+                max_attempts,
+                "lint",
+                profile_data,
+            )
+
+        test_result = self._run_tests(project_root, test_cmd, env=test_env)
+        if test_result["passed"]:
+            mod_label = f" ({module_name})" if module_name else ""
+            emit(M.VPAS, f"All tests passed!{mod_label} ({test_result.get('total', 0)} tests)", label=module_name or "")
+            return TaskResult.success(
+                outputs={
+                    "tests_passed": True,
+                    "test_output": test_result["output"][:TEST_OUTPUT_LIMIT],
+                    "total_tests": test_result.get("total", 0),
+                    "repair_attempts_used": repair_attempt,
+                }
+            )
+
+        return self._handle_failure(
+            stage,
+            test_result["output"],
+            repair_attempt,
+            max_attempts,
+            "test",
+            profile_data,
+        )
+
+    def _handle_failure(
+        self,
+        stage: StageExecution,
+        output: str,
+        attempt: int,
+        max_attempts: int,
+        failure_type: str,
+        profile_data: dict[str, Any],
+    ) -> TaskResult:
+        previous = stage.context.get("previous_failures", [])
+        summary = output[:500]
+        updated_failures = previous + [summary]
+        module_name = stage.context.get("module_name", "")
+        mod_tag = f" [{module_name}]" if module_name else ""
+
+        if attempt >= max_attempts:
+            reimpl_count = stage.context.get("reimplementation_count", 0)
+            max_reimpl = stage.context.get("max_reimplementations", MAX_REIMPLEMENTATIONS)
+
+            if reimpl_count < max_reimpl:
+                emit(
+                    M.VFAL,
+                    f"Repair exhausted ({max_attempts} attempts).{mod_tag} "
+                    f"Re-implementing from scratch "
+                    f"(reimplementation {reimpl_count + 1}/{max_reimpl})",
+                )
+                repair_history = previous[-max_attempts:]
+                reimpl_context: dict[str, Any] = {
+                    "previous_test_failures": output[:TEST_OUTPUT_LIMIT],
+                    "repair_history": repair_history,
+                    "failure_summary": (
+                        f"After {max_attempts} repair attempts, "
+                        f"these tests still fail:\n{output[:2000]}\n\n"
+                        f"Repair attempts tried:\n"
+                        + "\n---\n".join(f"Attempt {i + 1}: {f}" for i, f in enumerate(repair_history))
+                    ),
+                    "project_root": stage.context.get("project_root", os.getcwd()),
+                    "language_profile": profile_data,
+                }
+                propagate_context(stage.context, reimpl_context)
+                # Set after propagate to prevent stale values from overwriting.
+                reimpl_context["repair_attempt"] = 0
+                reimpl_context["reimplementation_count"] = reimpl_count + 1
+                increment_jump_count(reimpl_context)
+                return TaskResult.jump_to(
+                    stage.context.get("jump_implement_ref", "implement"),
+                    context=reimpl_context,
+                )
+
+            emit(
+                M.VFAL,
+                f"All reimplementation attempts exhausted{mod_tag} "
+                f"({max_reimpl} reimplementations × {max_attempts} repairs). "
+                f"Pipeline FAILED.",
+            )
+            return TaskResult.terminal(
+                error=(
+                    f"Tests still failing after {max_reimpl} reimplementations "
+                    f"× {max_attempts} repairs = "
+                    f"{max_reimpl * max_attempts} total attempts"
+                ),
+            )
+
+        emit(
+            M.VFAL,
+            f"{failure_type} failure detected.{mod_tag} Jumping to repair (attempt {attempt + 1}/{max_attempts})",
+        )
+        emit_block(M.VTST, f"Failure output ({failure_type})", output[:2000], max_lines=40)
+
+        repair_context: dict[str, Any] = {
+            "_repair_requested": True,
+            "test_output": output[:TEST_OUTPUT_LIMIT],
+            "tests_passed": False,
+            "tests_partial": False,
+            "previous_failures": updated_failures[-5:],
+            "failure_type": failure_type,
+            "project_root": stage.context.get("project_root", os.getcwd()),
+            "spec_id": stage.context.get("spec_id"),
+            "language_profile": profile_data,
+        }
+        propagate_context(stage.context, repair_context)
+        # Set repair_attempt AFTER propagate_context to prevent stale
+        # stage.context["repair_attempt"] from overwriting the increment.
+        repair_context["repair_attempt"] = attempt + 1
+        increment_jump_count(repair_context)
+        return TaskResult.jump_to(
+            stage.context.get("jump_repair_ref", "repair"),
+            context=repair_context,
+        )
+
+    @staticmethod
+    def _check_syntax(
+        project_root: str,
+        syntax_cmd: tuple[str, ...] | None,
+        env: dict[str, str] | None = None,
+    ) -> str | None:
+        """Run syntax check using the profile's syntax_check_command."""
+        if syntax_cmd is None:
+            return None
+
+        try:
+            result = subprocess.run(
+                list(syntax_cmd),
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+            if result.returncode != 0:
+                return f"Syntax check failed:\n{result.stdout}\n{result.stderr}"
+        except subprocess.TimeoutExpired:
+            return "Syntax check timed out after 120s"
+        except FileNotFoundError:
+            logger.warning("Syntax check tool not found: %s", syntax_cmd[0])
+            return None
+        except Exception as e:
+            return f"Syntax check error: {e}"
+
+        return None
+
+    @staticmethod
+    def _check_lint(
+        project_root: str,
+        lint_cmds: list[tuple[str, ...]],
+        env: dict[str, str] | None = None,
+        owned_files: list[str] | None = None,
+    ) -> str | None:
+        """Run lint-check commands from the language profile.
+
+        Returns combined lint error output on failure, or None if all pass.
+        Skips gracefully when the lint tool is not installed.
+        """
+        if not lint_cmds:
+            return None
+
+        errors: list[str] = []
+        for cmd in lint_cmds:
+            try:
+                result = subprocess.run(
+                    list(cmd),
+                    cwd=project_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=env,
+                )
+                if result.returncode != 0:
+                    output = (result.stdout + "\n" + result.stderr).strip()
+                    # Treat "No module named X" as tool-not-installed, not lint error.
+                    # This prevents false lint failures when e.g. ruff is not installed.
+                    if "No module named" in output:
+                        logger.warning("Lint module not installed: %s", " ".join(cmd[:3]))
+                        continue
+                    # Strip errors in test files and unowned files — the repairer
+                    # cannot modify them, creating an unwinnable repair cycle.
+                    output = _filter_test_file_lint(output, owned_files=owned_files)
+                    if not output:
+                        logger.info("All lint errors are in test files — treating as clean.")
+                        continue
+                    errors.append(f"Lint check failed ({' '.join(cmd[:2])}):\n{output}")
+            except subprocess.TimeoutExpired:
+                errors.append(f"Lint check timed out after 120s ({' '.join(cmd[:2])})")
+            except FileNotFoundError:
+                logger.warning("Lint tool not found: %s", cmd[0])
+                continue
+            except Exception as e:
+                errors.append(f"Lint check error ({' '.join(cmd[:2])}): {e}")
+
+        return "\n\n".join(errors) if errors else None
+
+    @staticmethod
+    def _run_tests(
+        project_root: str,
+        test_cmd: tuple[str, ...],
+        env: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = subprocess.run(
+                list(test_cmd),
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "passed": False,
+                "output": f"Tests timed out after 120s (cmd: {' '.join(test_cmd)})",
+                "total": 0,
+            }
+        except FileNotFoundError:
+            return {
+                "passed": False,
+                "output": f"Test runner not found: {test_cmd[0]}",
+                "total": 0,
+            }
+        except Exception as e:
+            return {"passed": False, "output": f"Test execution error: {e}", "total": 0}
+
+        output = result.stdout + "\n" + result.stderr
+        passed = result.returncode == 0
+        total = _count_tests(output)
+        return {"passed": passed, "output": output, "total": total}
+
+
+_PYTEST_RE = re.compile(r"(\d+)\s+passed")
+_PYTEST_FAIL_RE = re.compile(r"(\d+)\s+failed")
+_GO_RE = re.compile(r"ok\s+\S+\s+[\d.]+s")
+_JEST_RE = re.compile(r"Tests:\s+.*?(\d+)\s+passed")
+_GENERIC_RE = re.compile(r"(\d+)\s+tests?\s+passed", re.IGNORECASE)
+
+
 def _count_tests(output: str) -> int:
     total = 0
     for line in output.splitlines():
@@ -402,6 +798,3 @@ def _count_tests(output: str) -> int:
         if m:
             total += int(m.group(1))
     return total
-
-class ValidateTask(Task):
-    """Runs syntax checks and tests, routing failures to repair via jump_to."""
