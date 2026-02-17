@@ -47,3 +47,25 @@ _SOURCE_EXTENSIONS = frozenset((
 ))
 _PYTEST_RE = re.compile(r"(\d+)\s+passed")
 _PYTEST_FAIL_RE = re.compile(r"(\d+)\s+failed")
+_GO_RE = re.compile(r"ok\s+\S+\s+[\d.]+s")
+_JEST_RE = re.compile(r"Tests:\s+.*?(\d+)\s+passed")
+_GENERIC_RE = re.compile(r"(\d+)\s+tests?\s+passed", re.IGNORECASE)
+
+def _parse_command(cmd_str: str) -> tuple[str, ...]:
+    """Parse a command string into a subprocess-safe tuple.
+
+    If the command contains shell metacharacters (&&, |, ;, etc.), starts
+    with '.' (bash source), or begins with a ``VAR=value`` environment
+    variable prefix, it's wrapped in ``sh -c`` to be run through a shell.
+    Otherwise it's split with shlex for proper quoting.
+    """
+    if (
+        _SHELL_METACHAR_RE.search(cmd_str)
+        or cmd_str.lstrip().startswith(". ")
+        or _ENV_PREFIX_RE.match(cmd_str.lstrip())
+    ):
+        return ("sh", "-c", cmd_str)
+    try:
+        return tuple(shlex.split(cmd_str))
+    except ValueError:
+        return tuple(cmd_str.split())
