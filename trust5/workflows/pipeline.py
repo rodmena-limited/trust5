@@ -58,3 +58,22 @@ def create_plan_only_workflow(user_request: str) -> Workflow:
         name="Plan Only",
         stages=[plan],
     )
+
+def strip_plan_stage(
+    stages: list[StageExecution],
+    plan_output: str,
+) -> list[StageExecution]:
+    """Remove the plan stage and inject plan_output into the next stage's context.
+
+    Used when plan was already executed in phase 1 and we're now running
+    the implementation stages in phase 2 (serial fallback for N<=1 modules).
+    """
+    result: list[StageExecution] = []
+    for stage in stages:
+        if stage.ref_id == "plan":
+            continue
+        stage.requisite_stage_ref_ids = stage.requisite_stage_ref_ids - {"plan"}
+        if plan_output:
+            stage.context["ancestor_outputs"] = {"plan": plan_output}
+        result.append(stage)
+    return result
