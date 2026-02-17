@@ -43,3 +43,18 @@ def _create_plan_stage(
             ),
         ],
     )
+
+def create_plan_only_workflow(user_request: str) -> Workflow:
+    """Create a workflow that only runs the plan stage."""
+    project_root = os.getcwd()
+    language = detect_language(project_root)
+    profile = get_profile(language)
+    profile_dict = profile.to_dict()
+    dev_mode = _load_development_mode(project_root)
+
+    plan = _create_plan_stage(user_request, profile_dict, dev_mode)
+    return Workflow.create(
+        application="trust5",
+        name="Plan Only",
+        stages=[plan],
+    )
