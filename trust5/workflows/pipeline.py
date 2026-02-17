@@ -77,3 +77,12 @@ def strip_plan_stage(
             stage.context["ancestor_outputs"] = {"plan": plan_output}
         result.append(stage)
     return result
+
+def _load_mutation_enabled(project_root: str) -> bool:
+    """Check if mutation testing is enabled in config."""
+    try:
+        mgr = ConfigManager(project_root)
+        cfg = mgr.load_config()
+        return cfg.quality.tdd.mutation_testing_enabled or cfg.quality.test_quality.mutation_testing_enabled
+    except Exception:
+        return False
