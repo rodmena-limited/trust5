@@ -328,3 +328,80 @@ def _build_test_env(
             return env
 
     return None
+
+def _discover_test_files(
+    project_root: str,
+    extensions: tuple[str, ...] = _FALLBACK_EXTENSIONS,
+    skip_dirs: tuple[str, ...] = _FALLBACK_SKIP_DIRS,
+) -> list[str]:
+    """Walk project_root and return relative paths matching test file patterns."""
+    test_files: list[str] = []
+    skip = set(skip_dirs)
+    for dirpath, dirnames, filenames in os.walk(project_root):
+        dirnames[:] = [d for d in dirnames if d not in skip and not d.startswith(".")]
+        for fname in filenames:
+            if not any(fname.endswith(ext) for ext in extensions):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fname), project_root)
+            if _matches_test_pattern(rel):
+                test_files.append(rel)
+    return sorted(test_files)
+
+def _derive_module_test_files(
+    all_test_files: list[str],
+    owned_files: list[str],
+) -> list[str]:
+    """Filter discovered test files to those related to a module's owned source files.
+
+    Uses base-name matching: for owned file ``src/engine.py``, matches test files
+    whose core name (after stripping test_ prefix / _test suffix) contains ``engine``.
+    Returns the filtered list, or empty if no matches found.
+    """
+    base_names: set[str] = set()
+    for f in owned_files:
+        stem = os.path.splitext(os.path.basename(f))[0].lower()
+        if stem and stem != "__init__":
+            base_names.add(stem)
+
+    if not base_names:
+        return []
+
+    matched: list[str] = []
+    for tf in all_test_files:
+        tf_stem = os.path.splitext(os.path.basename(tf))[0].lower()
+        # Strip test_ prefix and _test suffix to get the core name
+        core = tf_stem
+        if core.startswith("test_"):
+            core = core[5:]
+        if core.endswith("_test"):
+            core = core[:-5]
+        # Match if any owned base name appears in the core test name
+        if any(bn in core for bn in base_names):
+            matched.append(tf)
+
+    return matched
+
+def _count_tests(output: str) -> int:
+    total = 0
+    for line in output.splitlines():
+        m = _PYTEST_RE.search(line)
+        if m:
+            total += int(m.group(1))
+            mf = _PYTEST_FAIL_RE.search(line)
+            if mf:
+                total += int(mf.group(1))
+            continue
+        if _GO_RE.search(line):
+            total += 1
+            continue
+        m = _JEST_RE.search(line)
+        if m:
+            total += int(m.group(1))
+            continue
+        m = _GENERIC_RE.search(line)
+        if m:
+            total += int(m.group(1))
+    return total
+
+class ValidateTask(Task):
+    """Runs syntax checks and tests, routing failures to repair via jump_to."""
