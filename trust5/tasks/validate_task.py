@@ -600,6 +600,9 @@ class ValidateTask(Task):
                         "Skipping test run for this module.",
                         owned_files_for_tests, scoped_test_files,
                     )
+                    # Replace test command with a no-op so we don't run
+                    # the global test suite for this module.
+                    test_cmd = ("true",)
 
         emit(
             M.VRUN,
