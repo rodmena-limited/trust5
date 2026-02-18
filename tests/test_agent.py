@@ -6,6 +6,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests.exceptions
 
 from trust5.core.agent import MAX_HISTORY_MESSAGES, MAX_TOOL_RESULT_LENGTH, Agent, _truncate
 from trust5.core.llm import LLM, LLMError
@@ -792,3 +793,75 @@ def test_empty_response_accepted_after_retries_no_last_content(_emit, _emit_bloc
     # All retries exhausted and no last_content — returns empty.
     assert result == ""
     assert llm.chat.call_count == _MAX_EMPTY_RESPONSE_RETRIES + 1
+
+
+# ---------------------------------------------------------------------------
+# Mid-stream timeout → retryable LLMError (not TERMINAL)
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingIterLines:
+    """Simulates a response that starts streaming then dies with a network error."""
+
+    def __init__(self, lines: list[str], error: Exception):
+        self._lines = lines
+        self._error = error
+
+    def iter_lines(self, decode_unicode=True):
+        yield from self._lines
+        raise self._error
+
+    def close(self):
+        pass
+
+
+def _make_bare_llm() -> LLM:
+    """Create an LLM instance without making real network calls."""
+    with patch.object(LLM, "__init__", lambda self, **kw: None):
+        llm = LLM.__new__(LLM)
+        llm.model = "test"
+        llm.thinking_level = None
+        llm._abort = __import__("threading").Event()
+        return llm
+
+
+def test_consume_stream_connection_error_becomes_retryable_llm_error():
+    """Mid-stream ConnectionError should raise retryable LLMError, not crash."""
+    llm = _make_bare_llm()
+    fake_response = _ExplodingIterLines(
+        lines=['{"message":{"content":"partial"},"done":false}'],
+        error=requests.exceptions.ConnectionError("Read timed out."),
+    )
+    with pytest.raises(LLMError) as exc_info:
+        llm._consume_stream(fake_response, "test-model")
+
+    assert exc_info.value.retryable is True
+    assert exc_info.value.error_class == "server"
+
+
+def test_consume_stream_read_timeout_becomes_retryable_llm_error():
+    """Mid-stream ReadTimeout should raise retryable LLMError."""
+    llm = _make_bare_llm()
+    fake_response = _ExplodingIterLines(
+        lines=[],
+        error=requests.exceptions.ReadTimeout("Read timed out."),
+    )
+    with pytest.raises(LLMError) as exc_info:
+        llm._consume_stream(fake_response, "test-model")
+
+    assert exc_info.value.retryable is True
+    assert exc_info.value.error_class == "server"
+
+
+def test_consume_stream_os_error_becomes_retryable_llm_error():
+    """Mid-stream OSError (broken pipe, etc.) should raise retryable LLMError."""
+    llm = _make_bare_llm()
+    fake_response = _ExplodingIterLines(
+        lines=[],
+        error=OSError("Broken pipe"),
+    )
+    with pytest.raises(LLMError) as exc_info:
+        llm._consume_stream(fake_response, "test-model")
+
+    assert exc_info.value.retryable is True
+    assert exc_info.value.error_class == "connection"

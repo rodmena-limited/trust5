@@ -984,6 +984,20 @@ class LLM:
                 if chunk.get("done", False):
                     final_data = chunk
                     break
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            raise LLMError(
+                f"Stream interrupted for {model}: {e}",
+                retryable=True,
+                retry_after=RETRY_DELAY_SERVER,
+                error_class="server",
+            ) from e
+        except (requests.exceptions.Timeout, OSError) as e:
+            raise LLMError(
+                f"Stream timeout for {model}: {e}",
+                retryable=True,
+                retry_after=RETRY_DELAY_CONNECT,
+                error_class="connection",
+            ) from e
         finally:
             if thinking_started:
                 emit_stream_end()
