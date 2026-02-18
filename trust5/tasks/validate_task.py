@@ -245,7 +245,11 @@ def _scope_lint_command(cmd: str, owned_files: list[str]) -> str:
     return "&&".join(result_segments)
 
 
-def _strip_nonexistent_files(cmd: str, project_root: str) -> str:
+def _strip_nonexistent_files(
+    cmd: str,
+    project_root: str,
+    owned_files: list[str] | None = None,
+) -> str:
     """Remove file tokens from a lint command when the files don't exist on disk.
 
     The planner generates lint commands referencing files from its *plan*, but the
@@ -255,6 +259,10 @@ def _strip_nonexistent_files(cmd: str, project_root: str) -> str:
 
     This function checks each source-file token against the filesystem and removes
     tokens whose files don't exist.  Works for both serial and parallel pipelines.
+
+    When *owned_files* is provided (parallel pipeline), the fallback discovery
+    is restricted to owned files only — prevents linting other modules' files
+    that the repair agent cannot modify.
     """
     segments = cmd.split("&&")
     result_segments: list[str] = []
@@ -291,19 +299,27 @@ def _strip_nonexistent_files(cmd: str, project_root: str) -> str:
                     logger.debug("Lint command references non-existent file: %s", clean)
 
         if removed_count > 0 and removed_count == len(file_indices):
-            # All file tokens were non-existent.  Try to find actual source files
-            # in the project and substitute them so the lint tool has something to check.
-            actual_files: list[str] = []
-            for dirpath, dirnames, filenames in os.walk(project_root):
-                dirnames[:] = [
-                    d for d in dirnames
-                    if d not in _FALLBACK_SKIP_DIRS and not d.startswith(".")
+            # All file tokens were non-existent.  Find replacement files.
+            if owned_files:
+                # Parallel pipeline: only lint the module's own files.
+                actual_files = [
+                    f for f in owned_files
+                    if os.path.exists(os.path.join(project_root, f))
+                    and not _matches_test_pattern(f)
                 ]
-                for fname in filenames:
-                    _, ext = os.path.splitext(fname)
-                    if ext.lower() in _SOURCE_EXTENSIONS and not _matches_test_pattern(fname):
-                        rel = os.path.relpath(os.path.join(dirpath, fname), project_root)
-                        actual_files.append(rel)
+            else:
+                # Serial pipeline: discover all source files in the project.
+                actual_files = []
+                for dirpath, dirnames, filenames in os.walk(project_root):
+                    dirnames[:] = [
+                        d for d in dirnames
+                        if d not in _FALLBACK_SKIP_DIRS and not d.startswith(".")
+                    ]
+                    for fname in filenames:
+                        _, ext = os.path.splitext(fname)
+                        if ext.lower() in _SOURCE_EXTENSIONS and not _matches_test_pattern(fname):
+                            rel = os.path.relpath(os.path.join(dirpath, fname), project_root)
+                            actual_files.append(rel)
             if actual_files:
                 non_file_tokens = [t for i, t in enumerate(tokens) if i not in file_indices]
                 non_file_tokens.extend(sorted(actual_files))
@@ -507,7 +523,7 @@ class ValidateTask(Task):
             owned = stage.context.get("owned_files")
             if owned:
                 plan_lint_cmd = _scope_lint_command(plan_lint_cmd, owned)
-            plan_lint_cmd = _strip_nonexistent_files(plan_lint_cmd, project_root)
+            plan_lint_cmd = _strip_nonexistent_files(plan_lint_cmd, project_root, owned_files=owned)
             lint_cmds = [_parse_command(plan_lint_cmd)]
         else:
             lint_check_raw = profile_data.get("lint_check_commands", ())

@@ -1352,6 +1352,27 @@ def test_strip_nonexistent_files_path_prefixed(tmp_path):
     assert "src/other.py" not in result
 
 
+def test_strip_nonexistent_files_parallel_fallback_uses_owned(tmp_path):
+    """In parallel pipeline, fallback discovery uses owned_files, not all project files."""
+    pkg = tmp_path / "monte_carlo"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "distributions.py").write_text("pass")  # owned
+    (pkg / "statistics.py").write_text("pass")      # NOT owned
+    (pkg / "simulator.py").write_text("pass")       # NOT owned
+
+    # Stale lint command — all files missing
+    cmd = "python -m py_compile monte_carlo.py"
+    owned = ["monte_carlo/distributions.py"]
+
+    result = _strip_nonexistent_files(cmd, str(tmp_path), owned_files=owned)
+
+    # Should only substitute the owned file, not statistics.py or simulator.py
+    assert "distributions.py" in result
+    assert "statistics.py" not in result
+    assert "simulator.py" not in result
+
+
 # ── FileNotFoundError safety net — serial pipeline (no owned_files) ───────
 
 
