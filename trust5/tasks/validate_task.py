@@ -341,6 +341,64 @@ def _strip_nonexistent_files(
     return "&&".join(result_segments)
 
 
+_TEST_DIR_TOKENS = frozenset({"tests/", "tests", "test/", "test", "spec/", "spec"})
+
+
+def _scope_test_command(
+    cmd: str,
+    test_files: list[str],
+) -> str:
+    """Rewrite a test command to run only specific test files instead of a directory.
+
+    The planner generates a global test command like:
+        source venv/bin/activate && python -m pytest tests/ -v
+
+    In parallel pipelines, each module must run only its own test files.
+    This replaces directory tokens (``tests/``, ``test/``) with the concrete
+    test file paths, preserving shell prefixes and flags.
+
+    Returns the original command unchanged if no directory tokens are found
+    or if *test_files* is empty.
+    """
+    if not test_files:
+        return cmd
+
+    segments = cmd.split("&&")
+    result_segments: list[str] = []
+
+    for segment in segments:
+        tokens = segment.split()
+        if not tokens:
+            result_segments.append(segment)
+            continue
+
+        dir_indices: list[int] = []
+        for i, token in enumerate(tokens):
+            clean = token.strip("'\"").rstrip("/")
+            if clean.lower() in {t.rstrip("/") for t in _TEST_DIR_TOKENS}:
+                dir_indices.append(i)
+
+        if not dir_indices:
+            result_segments.append(segment)
+            continue
+
+        # Replace directory tokens with specific test files
+        new_tokens: list[str] = []
+        for i, token in enumerate(tokens):
+            if i in dir_indices:
+                # Replace only the first directory token; drop subsequent ones
+                if i == dir_indices[0]:
+                    new_tokens.extend(test_files)
+            else:
+                new_tokens.append(token)
+
+        leading = " " if segment.startswith(" ") else ""
+        trailing = " " if segment.endswith(" ") else ""
+        result_segments.append(f"{leading}{' '.join(new_tokens)}{trailing}")
+
+    return "&&".join(result_segments)
+
+
 def _build_test_env(
     project_root: str,
     profile_data: dict[str, Any],
@@ -491,7 +549,9 @@ class ValidateTask(Task):
             elapsed = time.monotonic() - start_time
             emit(M.SELP, f"{elapsed:.1f}s")
 
-        # Prefer planner-decided test command over profile default
+        # Prefer planner-decided test command over profile default.
+        # In parallel pipelines, scope test commands to module-specific test files
+        # to prevent cross-module test interference.
         plan_test_cmd = plan_config.get("test_command") if plan_config else None
         if plan_test_cmd:
             test_cmd = _parse_command(plan_test_cmd)
@@ -501,11 +561,45 @@ class ValidateTask(Task):
         syntax_cmd = tuple(syntax_cmd_raw) if syntax_cmd_raw is not None else base_profile.syntax_check_command
         lang_name = profile_data.get("language", base_profile.language)
         module_name = stage.context.get("module_name", "")
+
+        # Resolve module-scoped test files.  The planner may specify test_files
+        # that don't actually exist (the test writer may create different names).
+        # When that happens in parallel mode, auto-derive from actual test files.
         scoped_test_files = stage.context.get("test_files")
+        owned_files_for_tests = stage.context.get("owned_files")
         if scoped_test_files:
             existing = [f for f in scoped_test_files if os.path.exists(os.path.join(project_root, f))]
             if existing:
-                test_cmd = (*test_cmd, *existing)
+                # Planner's test files exist — use them
+                if plan_test_cmd and owned_files_for_tests:
+                    # Parallel mode: scope test command to specific files
+                    plan_test_cmd_scoped = _scope_test_command(plan_test_cmd, existing)
+                    test_cmd = _parse_command(plan_test_cmd_scoped)
+                else:
+                    test_cmd = (*test_cmd, *existing)
+            elif owned_files_for_tests:
+                # Parallel mode: planner's test files don't exist.
+                # Auto-derive from actually existing test files.
+                extensions = tuple(profile_data.get("extensions", base_profile.extensions))
+                skip_dirs = tuple(profile_data.get("skip_dirs", base_profile.skip_dirs))
+                discovered = _discover_test_files(project_root, extensions, skip_dirs)
+                derived = _derive_module_test_files(discovered, owned_files_for_tests)
+                if derived:
+                    logger.info(
+                        "Planner test files missing (%s); auto-derived %d test file(s) for module",
+                        scoped_test_files, len(derived),
+                    )
+                    if plan_test_cmd:
+                        plan_test_cmd_scoped = _scope_test_command(plan_test_cmd, derived)
+                        test_cmd = _parse_command(plan_test_cmd_scoped)
+                    else:
+                        test_cmd = (*test_cmd, *derived)
+                else:
+                    logger.warning(
+                        "No test files found for module (owned=%s, planned=%s). "
+                        "Skipping test run for this module.",
+                        owned_files_for_tests, scoped_test_files,
+                    )
 
         emit(
             M.VRUN,

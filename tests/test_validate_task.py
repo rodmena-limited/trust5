@@ -16,6 +16,7 @@ from trust5.tasks.validate_task import (
     _filter_test_file_lint,
     _parse_command,
     _scope_lint_command,
+    _scope_test_command,
     _strip_nonexistent_files,
 )
 
@@ -1453,3 +1454,165 @@ def test_validate_strips_nonexistent_files_in_serial_pipeline(
     # The stale files should be gone, replaced with actual files
     assert "monte_carlo.py" not in lint_cmd_str or "monte_carlo/" in lint_cmd_str
     assert "examples/pi_estimation.py" not in lint_cmd_str
+
+
+# ---------------------------------------------------------------------------
+# _scope_test_command — scope test commands for parallel pipelines
+# ---------------------------------------------------------------------------
+
+
+def test_scope_test_command_replaces_directory_with_files():
+    """Test directory is replaced with specific test files."""
+    cmd = "source venv/bin/activate && python -m pytest tests/ -v"
+    result = _scope_test_command(cmd, ["tests/test_distributions.py"])
+    assert "tests/" not in result or "tests/test_distributions.py" in result
+    assert "tests/test_distributions.py" in result
+    assert "-v" in result
+    assert "source venv/bin/activate" in result
+
+
+def test_scope_test_command_multiple_files():
+    """Multiple test files replace directory token."""
+    cmd = "python -m pytest tests/ -v"
+    result = _scope_test_command(cmd, ["tests/test_a.py", "tests/test_b.py"])
+    assert "tests/test_a.py" in result
+    assert "tests/test_b.py" in result
+
+
+def test_scope_test_command_no_directory_token():
+    """Commands without directory tokens pass through unchanged."""
+    cmd = "python -m pytest tests/test_specific.py -v"
+    result = _scope_test_command(cmd, ["tests/test_other.py"])
+    assert result == cmd
+
+
+def test_scope_test_command_empty_files():
+    """Empty test files list returns command unchanged."""
+    cmd = "python -m pytest tests/ -v"
+    result = _scope_test_command(cmd, [])
+    assert result == cmd
+
+
+def test_scope_test_command_shell_chain():
+    """Shell chains with venv activation are preserved."""
+    cmd = "source venv/bin/activate && python -m pytest tests -v --tb=short"
+    result = _scope_test_command(cmd, ["tests/test_stats.py"])
+    assert "source venv/bin/activate" in result
+    assert "tests/test_stats.py" in result
+    assert "--tb=short" in result
+
+
+def test_scope_test_command_test_without_slash():
+    """Bare 'tests' (without trailing slash) is also recognized."""
+    cmd = "pytest tests -v"
+    result = _scope_test_command(cmd, ["tests/test_foo.py"])
+    assert "tests/test_foo.py" in result
+    assert result != "pytest tests -v"
+
+
+# ---------------------------------------------------------------------------
+# Parallel pipeline: test command scoping integration
+# ---------------------------------------------------------------------------
+
+
+def test_validate_scopes_test_command_in_parallel_pipeline(tmp_path):
+    """In parallel mode, plan_config test command is scoped to module test files."""
+    # Create module source file and its test file
+    src = tmp_path / "distributions.py"
+    src.write_text("class Dist: pass")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    test_file = tests_dir / "test_distributions.py"
+    test_file.write_text("def test_dist(): pass")
+    # Also create another module's test (should NOT be run)
+    other_test = tests_dir / "test_statistics.py"
+    other_test.write_text("def test_stats(): pass")
+
+    plan_config = {
+        "test_command": "python -m pytest tests/ -v",
+        "lint_command": "python -m py_compile distributions.py",
+    }
+
+    stage = MagicMock()
+    stage.context = {
+        "project_root": str(tmp_path),
+        "plan_config": plan_config,
+        "max_repair_attempts": 3,
+        "jump_repair_ref": "repair_dist",
+        "jump_validate_ref": "validate_dist",
+        "jump_implement_ref": "implement_dist",
+        "repair_attempt": 1,
+        "reimplementation_count": 0,
+        "language_profile": _PYTHON_PROFILE,
+        "module_name": "Distributions",
+        "owned_files": ["distributions.py"],
+        "test_files": ["tests/test_distributions.py"],
+    }
+    stage.outputs = {}
+
+    with patch("trust5.tasks.validate_task.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="1 passed", stderr="")
+        task = ValidateTask()
+        task.execute(stage)
+
+    # Find the test subprocess call (pytest)
+    test_calls = [
+        call for call in mock_run.call_args_list
+        if call.args and "pytest" in " ".join(str(a) for a in call.args[0])
+    ]
+    assert test_calls, f"Expected pytest call in: {mock_run.call_args_list}"
+
+    test_cmd_str = " ".join(str(a) for a in test_calls[0].args[0])
+    # Should run specific test file, not the entire tests/ directory
+    assert "test_distributions.py" in test_cmd_str
+    # Should NOT run the other module's test file
+    assert "test_statistics.py" not in test_cmd_str
+
+
+def test_validate_auto_derives_test_files_when_planned_missing(tmp_path):
+    """When planner's test_files don't exist, auto-derive from discovered tests."""
+    src = tmp_path / "distributions.py"
+    src.write_text("class Dist: pass")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    # Planner said test_distributions.py but test writer created test_dist.py
+    actual_test = tests_dir / "test_distributions.py"
+    actual_test.write_text("def test_dist(): pass")
+
+    plan_config = {
+        "test_command": "python -m pytest tests/ -v",
+        "lint_command": "python -m py_compile distributions.py",
+    }
+
+    stage = MagicMock()
+    stage.context = {
+        "project_root": str(tmp_path),
+        "plan_config": plan_config,
+        "max_repair_attempts": 3,
+        "jump_repair_ref": "repair_dist",
+        "jump_validate_ref": "validate_dist",
+        "jump_implement_ref": "implement_dist",
+        "repair_attempt": 1,
+        "reimplementation_count": 0,
+        "language_profile": _PYTHON_PROFILE,
+        "module_name": "Distributions",
+        "owned_files": ["distributions.py"],
+        # Planner specified a test file that doesn't exist
+        "test_files": ["tests/test_dist_module.py"],
+    }
+    stage.outputs = {}
+
+    with patch("trust5.tasks.validate_task.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="1 passed", stderr="")
+        task = ValidateTask()
+        task.execute(stage)
+
+    test_calls = [
+        call for call in mock_run.call_args_list
+        if call.args and "pytest" in " ".join(str(a) for a in call.args[0])
+    ]
+    assert test_calls, f"Expected pytest call in: {mock_run.call_args_list}"
+
+    test_cmd_str = " ".join(str(a) for a in test_calls[0].args[0])
+    # Should auto-derive and find test_distributions.py
+    assert "test_distributions.py" in test_cmd_str
