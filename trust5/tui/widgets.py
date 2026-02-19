@@ -105,6 +105,11 @@ THEME: dict[str, dict[str, Any]] = {
     M.QJMP: {"marker": " JMP", "color": C_AMBER, "title": "Quality Jump", "pill": True},
     M.QVAL: {"marker": "  QA", "color": C_DIM_LAVENDER, "title": "Validation", "pill": False},
     M.QRPT: {"marker": " QA ", "color": C_AMBER, "title": "Quality Report", "pill": False},
+    # Code Review
+    M.RVST: {"marker": " REV", "color": C_LAVENDER, "title": "Review", "pill": True},
+    M.RVPS: {"marker": " REV", "color": C_GREEN, "title": "Review OK", "pill": True},
+    M.RVFL: {"marker": " REV", "color": C_RED, "title": "Review Failed", "pill": True},
+    M.RVRP: {"marker": " RV ", "color": C_AMBER, "title": "Review Report", "pill": False},
     # System
     M.SINF: {"marker": "  i ", "color": C_BLUE, "title": "Info", "pill": True},
     M.SWRN: {"marker": "  ! ", "color": C_AMBER, "title": "Warning", "pill": True},
@@ -362,7 +367,7 @@ class Trust5Log(RichLog):
                 border_style=C_DIM,
                 box=ROUNDED,
             )
-        elif code in (M.QRPT, M.PPLN, M.ARSP, M.ASUM):
+        elif code in (M.QRPT, M.RVRP, M.PPLN, M.ARSP, M.ASUM):
             inner: Any
             try:
                 inner = Markdown(content)
@@ -561,6 +566,7 @@ class HeaderWidget(Static):
         ("implement", "CODE"),
         ("validate", "VERIFY"),
         ("repair", "FIX"),
+        ("review", "REVIEW"),
         ("quality", "GATE"),
     ]
 
@@ -663,6 +669,8 @@ class HeaderWidget(Static):
             return "validate"
         if "repair" in ref or "fix failure" in ref:
             return "repair"
+        if "review" in ref:
+            return "review"
         if "quality" in ref or "trust 5" in ref:
             return "quality"
         if "plan" in ref or "planner" in ref:

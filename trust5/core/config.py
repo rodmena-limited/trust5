@@ -88,6 +88,11 @@ class QualityConfig(BaseModel):
     enforce_quality: bool = True
     spec_compliance_threshold: float = 0.7
     spec_compliance_enabled: bool = True
+    # LLM-based code review (semantic analysis between repair and quality gate)
+    code_review_enabled: bool = True
+    code_review_jump_to_repair: bool = False
+    review_model_tier: str = "good"
+    review_max_turns: int = 15
     # LLM-driven overrides (set from planner output, not YAML config)
     plan_lint_command: str | None = None
     plan_test_command: str | None = None

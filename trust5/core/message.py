@@ -86,6 +86,12 @@ class M(StrEnum):
     QRPT = "QRPT"  # quality report summary
     QJMP = "QJMP"  # quality jumping to repair
 
+    # ── Code Review ──
+    RVST = "RVST"  # review started
+    RVPS = "RVPS"  # review passed
+    RVFL = "RVFL"  # review failed (advisory)
+    RVRP = "RVRP"  # review report summary
+
     # ── Loop (Ralph) ──
     LSTR = "LSTR"  # loop started
     LITR = "LITR"  # loop iteration

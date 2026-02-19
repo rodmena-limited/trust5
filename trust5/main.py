@@ -51,6 +51,7 @@ from .core.viewer import StdoutViewer
 from .tasks.mutation_task import MutationTask
 from .tasks.quality_task import QualityTask
 from .tasks.repair_task import RepairTask
+from .tasks.review_task import ReviewTask
 from .tasks.setup_task import SetupTask
 from .tasks.validate_task import ValidateTask
 from .workflows.loop_workflow import create_loop_workflow
@@ -366,6 +367,7 @@ def _build_task_registry() -> TaskRegistry:
     registry.register("validate", ValidateTask)
     registry.register("repair", RepairTask)
     registry.register("quality", QualityTask)
+    registry.register("review", ReviewTask)
     registry.register("shell", ShellTask)
     return registry
 
@@ -610,7 +612,7 @@ def develop(request: str) -> None:
             for stage in stripped:
                 if stage.ref_id == "setup":
                     stage.context["setup_commands"] = list(plan_config.setup_commands)
-                if stage.ref_id in ("write_tests", "implement", "validate", "quality"):
+                if stage.ref_id in ("write_tests", "implement", "validate", "quality", "review"):
                     stage.context["plan_config"] = plan_config_dict
             impl_wf = Workflow.create(
                 application="trust5",

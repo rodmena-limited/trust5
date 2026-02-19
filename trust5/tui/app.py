@@ -336,6 +336,15 @@ class Trust5App(App[None]):
             self._header.update_stage("quality", "success")
             self._header.count_stage_done("quality")
 
+        # Code review events.
+        elif code == M.RVST:
+            self._header.update_stage("review", "running")
+        elif code == M.RVFL:
+            self._header.update_stage("review", "failed")
+        elif code == M.RVPS:
+            self._header.update_stage("review", "success")
+            self._header.count_stage_done("review")
+
         # Loop workflow events (trust5 loop command).
         elif code == M.LSTR:
             self._sb1.stage_name = "loop"

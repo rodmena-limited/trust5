@@ -12,7 +12,7 @@ from stabilize import StageExecution, TaskExecution, Workflow
 
 from ..core.config import ConfigManager
 from ..core.lang import detect_language, get_profile
-from .pipeline import MAX_REPAIR_JUMPS, _load_mutation_enabled
+from .pipeline import MAX_REPAIR_JUMPS, _load_code_review_enabled, _load_mutation_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -413,7 +413,7 @@ def create_parallel_develop_workflow(
     stages.append(int_rep)
 
     # Optional mutation testing stage (Oracle Problem mitigation)
-    quality_deps: set[str] = {"integration_repair"}
+    review_deps: set[str] = {"integration_repair"}
     if use_mutation:
         mutation = StageExecution(
             ref_id="mutation",
@@ -435,7 +435,39 @@ def create_parallel_develop_workflow(
             ],
         )
         stages.append(mutation)
-        quality_deps = {"mutation"}
+        review_deps = {"mutation"}
+
+    # Optional LLM-based code review (single stage for all modules)
+    use_review = _load_code_review_enabled(project_root)
+    quality_deps: set[str] = review_deps.copy()
+    if use_review:
+        review_ctx: dict[str, object] = {
+            "project_root": project_root,
+            "language_profile": profile_dict,
+            # Disable jump-to-repair in parallel pipelines (cross-module jump too complex)
+            "code_review_jump_to_repair": False,
+        }
+        if plan_config_dict:
+            review_ctx["plan_config"] = plan_config_dict
+        review_ctx["ancestor_outputs"] = {"plan": plan_output}
+
+        review = StageExecution(
+            ref_id="review",
+            type="review",
+            name="Review (Code Analysis)",
+            context=review_ctx,
+            requisite_stage_ref_ids=review_deps,
+            tasks=[
+                TaskExecution.create(
+                    name="Code Review",
+                    implementing_class="review",
+                    stage_start=True,
+                    stage_end=True,
+                )
+            ],
+        )
+        stages.append(review)
+        quality_deps = {"review"}
 
     quality_ctx: dict[str, object] = {
         "project_root": project_root,

@@ -79,6 +79,11 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, list[str
             has_quality_failure = True
             score = outputs.get("quality_score", "?")
             details.append(f"  - Stage '{stage.ref_id}': quality gate failed (score: {score})")
+        if outputs.get("review_passed") is False:
+            # Review failures are advisory (same as quality) — warn but don't override to TERMINAL
+            has_quality_failure = True
+            r_score = outputs.get("review_score", "?")
+            details.append(f"  - Stage '{stage.ref_id}': code review failed (score: {r_score})")
 
     return has_test_failures, has_quality_failure, has_compliance_failure, details
 

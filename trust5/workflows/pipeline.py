@@ -97,6 +97,16 @@ def _load_mutation_enabled(project_root: str) -> bool:
         return False
 
 
+def _load_code_review_enabled(project_root: str) -> bool:
+    """Check if LLM-based code review is enabled in config."""
+    try:
+        mgr = ConfigManager(project_root)
+        cfg = mgr.load_config()
+        return cfg.quality.code_review_enabled
+    except Exception:
+        return True  # enabled by default
+
+
 def create_develop_workflow(user_request: str) -> Workflow:
     project_root = os.getcwd()
 
@@ -232,7 +242,7 @@ def create_develop_workflow(user_request: str) -> Workflow:
     )
 
     # Optional mutation testing stage (Oracle Problem mitigation)
-    quality_deps: set[str] = {"repair"}
+    review_deps: set[str] = {"repair"}
     if use_mutation:
         mutation = StageExecution(
             ref_id="mutation",
@@ -253,7 +263,31 @@ def create_develop_workflow(user_request: str) -> Workflow:
                 ),
             ],
         )
-        quality_deps = {"mutation"}
+        review_deps = {"mutation"}
+
+    # Optional LLM-based code review (semantic analysis)
+    use_review = _load_code_review_enabled(project_root)
+    quality_deps: set[str] = review_deps.copy()
+    if use_review:
+        review = StageExecution(
+            ref_id="review",
+            type="review",
+            name="Review (Code Analysis)",
+            context={
+                "project_root": project_root,
+                "language_profile": profile_dict,
+            },
+            requisite_stage_ref_ids=review_deps,
+            tasks=[
+                TaskExecution.create(
+                    name="Code Review",
+                    implementing_class="review",
+                    stage_start=True,
+                    stage_end=True,
+                ),
+            ],
+        )
+        quality_deps = {"review"}
 
     quality = StageExecution(
         ref_id="quality",
@@ -286,6 +320,8 @@ def create_develop_workflow(user_request: str) -> Workflow:
     stages.extend([implement, validate, repair])
     if use_mutation:
         stages.append(mutation)
+    if use_review:
+        stages.append(review)
     stages.append(quality)
 
     return Workflow.create(
