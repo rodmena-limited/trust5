@@ -283,3 +283,43 @@ def test_get_config_returns_current_state(tmp_path):
     mgr.load_config()
     cfg_after = mgr.get_config()
     assert cfg_after.quality.coverage_threshold == 80.0
+
+
+# ---------------------------------------------------------------------------
+# Config validation tests
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_development_mode():
+    """Invalid development_mode raises ValueError."""
+    with pytest.raises(ValueError, match="development_mode must be one of"):
+        QualityConfig(development_mode="waterfall")
+
+
+def test_coverage_threshold_out_of_range():
+    """coverage_threshold must be 0-100."""
+    with pytest.raises(ValueError, match="coverage_threshold must be 0-100"):
+        QualityConfig(coverage_threshold=150.0)
+
+
+def test_pass_score_out_of_range():
+    """pass_score_threshold must be 0-1."""
+    with pytest.raises(ValueError, match="pass_score_threshold must be 0-1"):
+        QualityConfig(pass_score_threshold=1.5)
+
+
+def test_invalid_config_falls_back_to_defaults(tmp_path, config_dir):
+    """Invalid quality YAML falls back to default config without crashing."""
+    quality_yaml = {
+        "quality": {
+            "development_mode": "invalid_mode",
+            "coverage_threshold": 80.0,
+        }
+    }
+    (config_dir / "quality.yaml").write_text(yaml.dump(quality_yaml), encoding="utf-8")
+
+    mgr = ConfigManager(project_root=str(tmp_path))
+    cfg = mgr.load_config()
+    # Should fall back to default rather than crash
+    assert cfg.quality.development_mode == "hybrid"
+    assert cfg.quality.coverage_threshold == 80.0

@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 from stabilize.models.status import WorkflowStatus
 
 from trust5.tasks.mutation_task import (
-    MutationTask,
     Mutant,
+    MutationTask,
     _apply_mutant,
     _restore_file,
     generate_mutants,
@@ -313,7 +313,7 @@ def test_oracle_assertion_density_not_measured():
 
 def test_oracle_mutation_score_error():
     """Low mutation score with mutation enabled triggers error."""
-    from trust5.core.config import QualityConfig, TDDConfig, TestQuality
+    from trust5.core.config import QualityConfig, TDDConfig
     from trust5.core.quality_gates import MethodologyContext, _validate_oracle_mitigations
 
     ctx = MethodologyContext(mutation_score=0.5)

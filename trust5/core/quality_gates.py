@@ -76,7 +76,24 @@ def is_conventional_commit(msg: str) -> bool:
 
 
 def validate_plan_phase(snapshot: DiagnosticSnapshot) -> list[Issue]:
-    return []
+    issues: list[Issue] = []
+    if snapshot.errors > 0:
+        issues.append(
+            Issue(
+                severity="warning",
+                message=f"plan phase baseline: {snapshot.errors} pre-existing errors detected",
+                rule="phase-plan-baseline",
+            )
+        )
+    if snapshot.type_errors > 0:
+        issues.append(
+            Issue(
+                severity="warning",
+                message=f"plan phase baseline: {snapshot.type_errors} pre-existing type errors detected",
+                rule="phase-plan-type-baseline",
+            )
+        )
+    return issues
 
 
 def validate_run_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> list[Issue]:
@@ -344,8 +361,7 @@ def _validate_oracle_mitigations(ctx: MethodologyContext, config: QualityConfig)
         issues.append(
             Issue(
                 severity="warning",
-                message=f"mutation score {ctx.mutation_score:.0%} — "
-                "some mutations survived the test suite",
+                message=f"mutation score {ctx.mutation_score:.0%} — some mutations survived the test suite",
                 rule="oracle-mutation-score",
             )
         )

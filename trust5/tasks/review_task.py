@@ -132,9 +132,7 @@ class ReviewTask(Task):
 
         if not config.code_review_enabled:
             emit(M.RVST, "Code review disabled — skipping")
-            return TaskResult.success(
-                outputs={"review_passed": True, "review_skipped": True}
-            )
+            return TaskResult.success(outputs={"review_passed": True, "review_skipped": True})
 
         profile = self._build_profile(profile_data, project_root)
         emit(M.RVST, f"Code review started [{profile.language}]")
@@ -335,9 +333,7 @@ class ReviewTask(Task):
             lint_commands=tuple(data.get("lint_commands", base.lint_commands)),
             lint_check_commands=tuple(data.get("lint_check_commands", base.lint_check_commands)),
             syntax_check_command=(
-                _tup(data.get("syntax_check_command"))
-                if "syntax_check_command" in data
-                else base.syntax_check_command
+                _tup(data.get("syntax_check_command")) if "syntax_check_command" in data else base.syntax_check_command
             ),
             package_install_prefix=data.get("package_install_prefix", base.package_install_prefix),
             lsp_language_id=data.get("lsp_language_id", base.lsp_language_id),
@@ -345,14 +341,10 @@ class ReviewTask(Task):
             manifest_files=tuple(data.get("manifest_files", base.manifest_files)),
             prompt_hints=data.get("prompt_hints", base.prompt_hints),
             coverage_command=(
-                _tup(data.get("coverage_command"))
-                if "coverage_command" in data
-                else base.coverage_command
+                _tup(data.get("coverage_command")) if "coverage_command" in data else base.coverage_command
             ),
             security_command=(
-                _tup(data.get("security_command"))
-                if "security_command" in data
-                else base.security_command
+                _tup(data.get("security_command")) if "security_command" in data else base.security_command
             ),
         )
 
@@ -391,9 +383,6 @@ class ReviewTask(Task):
         for finding in report.findings:
             if finding.severity == "error":
                 loc = f" [{finding.file}:{finding.line}]" if finding.file else ""
-                parts.append(
-                    f"  - [{finding.severity.upper()}][{finding.category}]{loc} "
-                    f"{finding.description}"
-                )
+                parts.append(f"  - [{finding.severity.upper()}][{finding.category}]{loc} {finding.description}")
         parts.append("\nFix these issues and ensure all tests still pass.")
         return "\n".join(parts)

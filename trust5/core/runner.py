@@ -51,10 +51,7 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, list[str
                     met = outputs.get("spec_criteria_met", "?")
                     total = outputs.get("spec_criteria_total", "?")
                     unmet = outputs.get("spec_unmet_criteria", [])
-                    details.append(
-                        f"  - Stage '{stage.ref_id}': SPEC compliance {met}/{total} "
-                        f"(ratio: {ratio:.2f})"
-                    )
+                    details.append(f"  - Stage '{stage.ref_id}': SPEC compliance {met}/{total} (ratio: {ratio:.2f})")
                     for uc in unmet[:5]:
                         details.append(f"      {uc}")
                     if ratio < 0.7:

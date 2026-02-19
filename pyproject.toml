@@ -11,6 +11,7 @@ dependencies = [
     "stabilize>=0.17.3",
     "cryptography>=41,<44",
     "pydantic>=2.0,<3",
+    "bandit>=1.7,<2",
     "ruff>=0.0.241,<1",
     "mypy>=1.0,<2",
     "basedpyright>=0.1.0,<1",

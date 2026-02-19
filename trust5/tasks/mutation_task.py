@@ -204,8 +204,7 @@ class MutationTask(Task):
             details = "; ".join(survived_details[:5])
             emit(
                 M.QFAL,
-                f"Mutation testing: {survived}/{total} mutants survived "
-                f"(score {score:.0%}). Surviving: {details}",
+                f"Mutation testing: {survived}/{total} mutants survived (score {score:.0%}). Surviving: {details}",
             )
             return TaskResult.failed_continue(
                 error=f"Mutation score {score:.0%} — {survived} mutant(s) survived the test suite",

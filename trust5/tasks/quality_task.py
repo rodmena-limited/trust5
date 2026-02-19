@@ -152,8 +152,7 @@ class QualityTask(Task):
                             emit(M.QVAL, f"    Missing: {', '.join(sorted(missing))}")
 
         compliance_passed = (
-            compliance_report is None
-            or compliance_report.compliance_ratio >= config.spec_compliance_threshold
+            compliance_report is None or compliance_report.compliance_ratio >= config.spec_compliance_threshold
         )
         compliance_outputs: dict[str, object] = {}
         if compliance_report is not None:

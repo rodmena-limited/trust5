@@ -3,7 +3,7 @@ import os
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PlanGateConfig(BaseModel):
@@ -78,6 +78,36 @@ class QualityConfig(BaseModel):
     development_mode: str = "hybrid"
     coverage_threshold: float = 80.0
     pass_score_threshold: float = 0.70
+
+    @field_validator("development_mode")
+    @classmethod
+    def _validate_development_mode(cls, v: str) -> str:
+        allowed = ("tdd", "ddd", "hybrid")
+        if v not in allowed:
+            raise ValueError(f"development_mode must be one of {allowed}, got {v!r}")
+        return v
+
+    @field_validator("coverage_threshold")
+    @classmethod
+    def _validate_coverage_threshold(cls, v: float) -> float:
+        if not 0 <= v <= 100:
+            raise ValueError(f"coverage_threshold must be 0-100, got {v}")
+        return v
+
+    @field_validator("pass_score_threshold")
+    @classmethod
+    def _validate_pass_score_threshold(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError(f"pass_score_threshold must be 0-1, got {v}")
+        return v
+
+    @field_validator("max_quality_repairs")
+    @classmethod
+    def _validate_max_quality_repairs(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"max_quality_repairs must be >= 0, got {v}")
+        return v
+
     max_errors: int = 0
     max_type_errors: int = 0
     max_lint_errors: int = 0
@@ -124,6 +154,13 @@ class LanguageConfig(BaseModel):
     test_framework: str = "auto"
     lsp_command: list[str] = Field(default_factory=list)
 
+    @field_validator("conversation_language")
+    @classmethod
+    def _validate_conversation_language(cls, v: str) -> str:
+        if not 2 <= len(v) <= 5:
+            raise ValueError(f"conversation_language must be 2-5 chars, got {v!r}")
+        return v
+
 
 class WorkflowConfig(BaseModel):
     team: dict[str, Any] = Field(default_factory=lambda: {"enabled": False})
@@ -154,15 +191,29 @@ class ConfigManager:
         lang_data = self._unwrap(self._load_yaml(lang_path), "language")
         workflow_data = self._unwrap(self._load_yaml(workflow_path), "workflow")
 
+        _log = logging.getLogger(__name__)
         if quality_data:
             quality_data = self._flatten_lsp_gates(quality_data)
-            self.config.quality = QualityConfig(**quality_data)
+            try:
+                self.config.quality = QualityConfig(**quality_data)
+            except (ValueError, TypeError) as e:
+                _log.warning("Invalid quality config, using defaults: %s", e)
+                self.config.quality = QualityConfig()
         if git_data:
-            self.config.git = GitStrategyConfig(**git_data)
+            try:
+                self.config.git = GitStrategyConfig(**git_data)
+            except (ValueError, TypeError) as e:
+                _log.warning("Invalid git config, using defaults: %s", e)
         if lang_data:
-            self.config.language = LanguageConfig(**lang_data)
+            try:
+                self.config.language = LanguageConfig(**lang_data)
+            except (ValueError, TypeError) as e:
+                _log.warning("Invalid language config, using defaults: %s", e)
         if workflow_data:
-            self.config.workflow = WorkflowConfig(**workflow_data)
+            try:
+                self.config.workflow = WorkflowConfig(**workflow_data)
+            except (ValueError, TypeError) as e:
+                _log.warning("Invalid workflow config, using defaults: %s", e)
 
         return self.config
 

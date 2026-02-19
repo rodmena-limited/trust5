@@ -20,11 +20,23 @@ _BACKTICK_RE = re.compile(r"`([^`]+)`")
 _QUOTED_RE = re.compile(r'"([^"]+)"')
 _SNAKE_CASE_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
 
-_DEFAULT_SKIP_DIRS = frozenset({
-    "__pycache__", ".venv", "venv", "node_modules", ".git",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
-    ".tox", ".eggs", "*.egg-info",
-})
+_DEFAULT_SKIP_DIRS = frozenset(
+    {
+        "__pycache__",
+        ".venv",
+        "venv",
+        "node_modules",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        ".tox",
+        ".eggs",
+        "*.egg-info",
+    }
+)
 
 _TEST_PATTERNS = re.compile(
     r"(^|/)tests?/|test_[^/]*\.py$|_test\.(py|ts|js|go|rs)$|\.spec\.(ts|js)$",
@@ -158,12 +170,14 @@ def check_compliance(
 
         if not identifiers:
             # No extractable identifiers — can't verify, assume met
-            results.append(CriterionResult(
-                criterion=criterion,
-                status="met",
-                matched_identifiers=(),
-                searched_identifiers=(),
-            ))
+            results.append(
+                CriterionResult(
+                    criterion=criterion,
+                    status="met",
+                    matched_identifiers=(),
+                    searched_identifiers=(),
+                )
+            )
             met_count += 1
             continue
 
@@ -185,12 +199,14 @@ def check_compliance(
             not_met_count += 1
             unmet.append(criterion)
 
-        results.append(CriterionResult(
-            criterion=criterion,
-            status=status,
-            matched_identifiers=tuple(matched),
-            searched_identifiers=tuple(identifiers),
-        ))
+        results.append(
+            CriterionResult(
+                criterion=criterion,
+                status=status,
+                matched_identifiers=tuple(matched),
+                searched_identifiers=tuple(identifiers),
+            )
+        )
 
     total = len(acceptance_criteria)
     compliance_ratio = met_count / total if total > 0 else 1.0

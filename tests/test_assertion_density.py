@@ -232,9 +232,7 @@ def test_check_assertion_density_python(tmp_path):
         """,
     )
     _write_file(os.path.join(tmp_path), "main.py", "x = 1\n")
-    density, issues = check_assertion_density(
-        str(tmp_path), (".py",), ("__pycache__", ".venv"), "python"
-    )
+    density, issues = check_assertion_density(str(tmp_path), (".py",), ("__pycache__", ".venv"), "python")
     assert density == 0.5
     assert len(issues) == 1
 
@@ -242,8 +240,6 @@ def test_check_assertion_density_python(tmp_path):
 def test_check_assertion_density_no_test_files(tmp_path):
     """Project with no test files returns 1.0."""
     _write_file(str(tmp_path), "main.py", "x = 1\n")
-    density, issues = check_assertion_density(
-        str(tmp_path), (".py",), ("__pycache__",), "python"
-    )
+    density, issues = check_assertion_density(str(tmp_path), (".py",), ("__pycache__",), "python")
     assert density == 1.0
     assert len(issues) == 0

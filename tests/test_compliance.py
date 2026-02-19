@@ -38,9 +38,7 @@ class TestExtractIdentifiers:
         assert ids == []
 
     def test_multiple_types(self) -> None:
-        ids = extract_identifiers(
-            "[UBIQ] The GeometricBrownianMotion with `random_seed` and confidence_interval."
-        )
+        ids = extract_identifiers("[UBIQ] The GeometricBrownianMotion with `random_seed` and confidence_interval.")
         id_lower = [i.lower() for i in ids]
         assert "geometricbrownianmotion" in id_lower
         assert "random_seed" in id_lower
@@ -50,11 +48,7 @@ class TestExtractIdentifiers:
 class TestCheckCompliance:
     def test_all_criteria_met(self, tmp_path: os.PathLike[str]) -> None:
         src = tmp_path / "simulator.py"
-        src.write_text(
-            "class MonteCarloSimulator:\n"
-            "    def run(self, random_seed=None):\n"
-            "        pass\n"
-        )
+        src.write_text("class MonteCarloSimulator:\n    def run(self, random_seed=None):\n        pass\n")
         criteria = [
             "[UBIQ] The MonteCarloSimulator shall run simulations.",
             "[EVENT] When `random_seed` is set, results shall be reproducible.",
@@ -81,10 +75,7 @@ class TestCheckCompliance:
 
     def test_partial_match(self, tmp_path: os.PathLike[str]) -> None:
         src = tmp_path / "sim.py"
-        src.write_text(
-            "class MonteCarloSimulator:\n"
-            "    pass\n"
-        )
+        src.write_text("class MonteCarloSimulator:\n    pass\n")
         criteria = [
             "[UBIQ] The MonteCarloSimulator shall run simulations.",
             "[UBIQ] The GeometricBrownianMotion model shall compute paths.",

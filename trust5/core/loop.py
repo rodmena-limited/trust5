@@ -1,6 +1,7 @@
 import os
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 from stabilize import StageExecution, Task, TaskResult
@@ -75,7 +76,7 @@ class RalphLoop:
                         "uri": uri,
                         "languageId": self.profile.lsp_language_id,
                         "version": 1,
-                        "text": open(file_path).read(),
+                        "text": Path(file_path).read_text(),
                     }
                 },
             )

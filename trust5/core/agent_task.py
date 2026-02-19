@@ -114,7 +114,7 @@ class AgentTask(Task):
         if acceptance_criteria and agent_name:
             name_lower = agent_name.lower()
             if any(k in name_lower for k in ("implementer", "test-writer", "test_writer")):
-                numbered = "\n".join(f"  AC-{i+1}. {c}" for i, c in enumerate(acceptance_criteria))
+                numbered = "\n".join(f"  AC-{i + 1}. {c}" for i, c in enumerate(acceptance_criteria))
                 criteria_header = (
                     "## MANDATORY ACCEPTANCE CRITERIA (from SPEC)\n\n"
                     "You MUST address ALL of the following criteria. "
@@ -128,8 +128,7 @@ class AgentTask(Task):
                     )
                 elif "test" in name_lower:
                     criteria_header += (
-                        "Write at least one test per criterion. "
-                        "Name tests test_ac{N}_description for traceability.\n\n"
+                        "Write at least one test per criterion. Name tests test_ac{N}_description for traceability.\n\n"
                     )
                 user_input = criteria_header + user_input
 
@@ -330,6 +329,7 @@ class AgentTask(Task):
                 return TaskResult.terminal(error=f"Agent execution failed: {e}")
             finally:
                 _elapsed_stop_event.set()
+                _elapsed_thread.join(timeout=2.0)
                 _emit_elapsed()
 
     def _load_system_prompt(self, prompt_file: str) -> str | None:

@@ -434,9 +434,7 @@ def test_validate_uses_plan_lint_command(mock_run, mock_emit_block, mock_emit):
 
     # Check that subprocess.run was called with the plan lint command (wrapped in sh -c)
     calls = mock_run.call_args_list
-    found_lint_cmd = any(
-        "ruff check" in str(call.args[0]) for call in calls if call.args
-    )
+    found_lint_cmd = any("ruff check" in str(call.args[0]) for call in calls if call.args)
     assert found_lint_cmd, f"Expected plan_config lint_command in subprocess calls: {calls}"
 
 
@@ -1244,8 +1242,7 @@ def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_b
             "owned_files": ["monte_carlo.py"],
             "plan_config": {
                 "lint_command": (
-                    "source venv/bin/activate && python -m py_compile"
-                    " monte_carlo.py simulations.py stats.py"
+                    "source venv/bin/activate && python -m py_compile monte_carlo.py simulations.py stats.py"
                 ),
             },
         }
@@ -1258,8 +1255,7 @@ def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_b
 
     # Find the lint subprocess call (sh -c "...")
     lint_calls = [
-        call for call in mock_run.call_args_list
-        if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
+        call for call in mock_run.call_args_list if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
     ]
     assert lint_calls, f"Expected a py_compile call in: {mock_run.call_args_list}"
 
@@ -1359,8 +1355,8 @@ def test_strip_nonexistent_files_parallel_fallback_uses_owned(tmp_path):
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
     (pkg / "distributions.py").write_text("pass")  # owned
-    (pkg / "statistics.py").write_text("pass")      # NOT owned
-    (pkg / "simulator.py").write_text("pass")       # NOT owned
+    (pkg / "statistics.py").write_text("pass")  # NOT owned
+    (pkg / "simulator.py").write_text("pass")  # NOT owned
 
     # Stale lint command — all files missing
     cmd = "python -m py_compile monte_carlo.py"
@@ -1418,7 +1414,10 @@ def test_filter_lint_cant_open_file_serial():
 @patch("trust5.tasks.validate_task.emit_block")
 @patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
 def test_validate_strips_nonexistent_files_in_serial_pipeline(
-    mock_run, mock_emit_block, mock_emit, tmp_path,
+    mock_run,
+    mock_emit_block,
+    mock_emit,
+    tmp_path,
 ):
     """In serial pipeline, plan lint command with non-existent files gets cleaned."""
     # Create actual project files (different from planner's expectations)
@@ -1434,8 +1433,7 @@ def test_validate_strips_nonexistent_files_in_serial_pipeline(
             # No owned_files — serial pipeline
             "plan_config": {
                 "lint_command": (
-                    "source venv/bin/activate && python -m py_compile"
-                    " monte_carlo.py examples/pi_estimation.py"
+                    "source venv/bin/activate && python -m py_compile monte_carlo.py examples/pi_estimation.py"
                 ),
             },
         }
@@ -1445,8 +1443,7 @@ def test_validate_strips_nonexistent_files_in_serial_pipeline(
 
     # Find the lint subprocess call
     lint_calls = [
-        call for call in mock_run.call_args_list
-        if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
+        call for call in mock_run.call_args_list if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
     ]
     assert lint_calls, f"Expected py_compile call in: {mock_run.call_args_list}"
 
@@ -1557,8 +1554,7 @@ def test_validate_scopes_test_command_in_parallel_pipeline(tmp_path):
 
     # Find the test subprocess call (pytest)
     test_calls = [
-        call for call in mock_run.call_args_list
-        if call.args and "pytest" in " ".join(str(a) for a in call.args[0])
+        call for call in mock_run.call_args_list if call.args and "pytest" in " ".join(str(a) for a in call.args[0])
     ]
     assert test_calls, f"Expected pytest call in: {mock_run.call_args_list}"
 
@@ -1608,8 +1604,7 @@ def test_validate_auto_derives_test_files_when_planned_missing(tmp_path):
         task.execute(stage)
 
     test_calls = [
-        call for call in mock_run.call_args_list
-        if call.args and "pytest" in " ".join(str(a) for a in call.args[0])
+        call for call in mock_run.call_args_list if call.args and "pytest" in " ".join(str(a) for a in call.args[0])
     ]
     assert test_calls, f"Expected pytest call in: {mock_run.call_args_list}"
 

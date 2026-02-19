@@ -631,3 +631,28 @@ def test_matches_test_pattern_positive(path: str):
 )
 def test_matches_test_pattern_negative(path: str):
     assert not _matches_test_pattern(path), f"Expected {path!r} to NOT match test pattern"
+
+
+# ---------------------------------------------------------------------------
+# New test patterns: conftest, JUnit, Jest, __tests__
+# ---------------------------------------------------------------------------
+
+
+def test_matches_conftest():
+    assert _matches_test_pattern("conftest.py")
+    assert _matches_test_pattern("tests/conftest.py")
+    assert _matches_test_pattern("src/conftest.py")
+
+
+def test_matches_junit_pattern():
+    assert _matches_test_pattern("TestUserService.java")
+    assert _matches_test_pattern("src/test/TestFoo.java")
+    # Not a JUnit test (lowercase)
+    assert not _matches_test_pattern("testutil.java")
+
+
+def test_matches_jest_and_nested_test_dir():
+    assert _matches_test_pattern("src/__tests__/App.test.tsx")
+    assert _matches_test_pattern("utils.test.ts")
+    assert _matches_test_pattern("api.test.js")
+    assert _matches_test_pattern("test/integration/foo.go")
