@@ -91,7 +91,8 @@ class LLMError(Exception):
       "connection"  — network unreachable, DNS failure, TCP connect timeout
       "server"      — 5xx, read timeout (server alive but struggling)
       "rate_limit"  — 429 (use retry_after from server header)
-      "permanent"   — 4xx, auth failure, bad request (no retry)
+      "auth"        — 401/403, expired or invalid credentials
+      "permanent"   — 4xx (non-auth), bad request (no retry)
     """
 
     def __init__(
@@ -110,6 +111,11 @@ class LLMError(Exception):
     def is_network_error(self) -> bool:
         """True when the failure is infrastructure-related (not a logic error)."""
         return self.error_class in ("connection", "server", "rate_limit")
+
+    @property
+    def is_auth_error(self) -> bool:
+        """True when the failure is an authentication/authorization error."""
+        return self.error_class == "auth"
 
 
 def _resolve_thinking_level(
@@ -148,6 +154,7 @@ class LLM:
         self._auth_header = auth_header
         self._provider_name = provider_name
         self._abort = threading.Event()
+        self._token_lock = threading.Lock()
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
         if auth_header and auth_token:
@@ -231,9 +238,9 @@ class LLM:
                 return self._chat_with_retry(messages, tools, try_model, effective_timeout)
             except LLMError as e:
                 last_error = e
-                # Connection errors affect ALL models (same network) — don't
-                # waste time trying fallbacks that will also fail.
-                if e.error_class == "connection":
+                # Connection and auth errors affect ALL models (same network /
+                # same credentials) — don't waste time trying fallbacks.
+                if e.error_class in ("connection", "auth"):
                     break
                 emit(M.AFBK, f"Model {try_model} failed: {e}. Trying fallback.")
                 continue
@@ -858,14 +865,16 @@ class LLM:
                 if response.status_code == 401:
                     raise LLMError(
                         f"Authentication failed for {model} even after token refresh",
-                        retryable=False,
-                        error_class="permanent",
+                        retryable=True,
+                        retry_after=120,
+                        error_class="auth",
                     )
             else:
                 raise LLMError(
                     f"Authentication failed for {model} (401) and token refresh failed",
-                    retryable=False,
-                    error_class="permanent",
+                    retryable=True,
+                    retry_after=120,
+                    error_class="auth",
                 )
 
         if response.status_code != 200:
@@ -880,45 +889,75 @@ class LLM:
     def _ensure_token_fresh(self) -> None:
         if not self._provider_name or not self._auth_header:
             return
-        try:
-            from .auth.token_store import TokenStore
+        with self._token_lock:
+            try:
+                from .auth.token_store import TokenStore
 
-            store = TokenStore()
-            token_data = store.load(self._provider_name)
-            if token_data is None or token_data.expires_at is None:
-                return
-            remaining = token_data.expires_at - time.time()
-            if remaining > TOKEN_REFRESH_MARGIN:
-                return
-            emit(M.ARTY, f"Token expires in {remaining:.0f}s, refreshing proactively")
-            self._try_refresh_token()
-        except Exception:
-            logger.debug("Proactive token refresh check failed", exc_info=True)
+                store = TokenStore()
+                token_data = store.load(self._provider_name)
+                if token_data is None or token_data.expires_at is None:
+                    return
+                remaining = token_data.expires_at - time.time()
+                if remaining > TOKEN_REFRESH_MARGIN:
+                    return
+                emit(M.ARTY, f"Token expires in {remaining:.0f}s, refreshing proactively")
+                self._try_refresh_token_locked()
+            except Exception:
+                logger.debug("Proactive token refresh check failed", exc_info=True)
 
     def _try_refresh_token(self) -> bool:
+        with self._token_lock:
+            return self._try_refresh_token_locked()
+
+    def _try_refresh_token_locked(self) -> bool:
+        """Refresh token with retry. Must be called with _token_lock held."""
         if not self._provider_name or not self._auth_header:
             return False
-        try:
-            from .auth.registry import get_provider
-            from .auth.token_store import TokenStore
 
-            provider = get_provider(self._provider_name)
-            store = TokenStore()
-            token_data = store.load(self._provider_name)
-            if token_data is None:
+        from .auth.registry import get_provider
+        from .auth.token_store import TokenStore
+
+        provider = get_provider(self._provider_name)
+        store = TokenStore()
+        token_data = store.load(self._provider_name)
+        if token_data is None:
+            return False
+
+        delays = (2, 4, 8)
+        last_exc: Exception | None = None
+        for attempt, delay in enumerate(delays):
+            try:
+                new_token = provider.refresh(token_data)
+                store.save(self._provider_name, new_token)
+                if self._auth_header == "Authorization":
+                    self._session.headers[self._auth_header] = f"Bearer {new_token.access_token}"
+                else:
+                    self._session.headers[self._auth_header] = new_token.access_token
+                logger.info("Token refreshed mid-pipeline for %s (attempt %d)", self._provider_name, attempt + 1)
+                return True
+            except requests.exceptions.ConnectionError as e:
+                last_exc = e
+                logger.debug("Transient refresh error (attempt %d): %s", attempt + 1, e)
+                time.sleep(delay)
+            except requests.exceptions.Timeout as e:
+                last_exc = e
+                logger.debug("Transient refresh error (attempt %d): %s", attempt + 1, e)
+                time.sleep(delay)
+            except requests.exceptions.HTTPError as e:
+                # Permanent errors (invalid_grant, bad client credentials) — stop immediately
+                logger.warning("Permanent refresh error for %s: %s", self._provider_name, e)
+                return False
+            except Exception as e:
+                # Unknown errors — treat as permanent to avoid infinite loops
+                logger.warning("Token refresh failed for %s: %s", self._provider_name, e, exc_info=True)
                 return False
 
-            new_token = provider.refresh(token_data)
-            store.save(self._provider_name, new_token)
-            if self._auth_header == "Authorization":
-                self._session.headers[self._auth_header] = f"Bearer {new_token.access_token}"
-            else:
-                self._session.headers[self._auth_header] = new_token.access_token
-            logger.info("Token refreshed mid-pipeline for %s", self._provider_name)
-            return True
-        except Exception:
-            logger.warning("Token refresh failed for %s", self._provider_name, exc_info=True)
-            return False
+        logger.warning(
+            "Token refresh exhausted retries for %s: %s",
+            self._provider_name,
+            last_exc,
+        )
+        return False
 
     def _consume_stream(
         self,

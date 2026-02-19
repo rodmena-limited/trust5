@@ -183,7 +183,7 @@ class GoogleProvider(AuthProvider):
 
         return TokenData(
             access_token=data["access_token"],
-            refresh_token=token_data.refresh_token,
+            refresh_token=data.get("refresh_token", token_data.refresh_token),
             expires_at=time.time() + data.get("expires_in", _TOKEN_EXPIRY),
             token_type=data.get("token_type", "Bearer"),
             scopes=token_data.scopes,

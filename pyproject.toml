@@ -8,18 +8,25 @@ dependencies = [
     "typer>=0.9,<1",
     "requests>=2.28,<3",
     "pyyaml>=6.0,<7",
-    "stabilize>=0.5,<1",
+    "stabilize>=0.17.3",
     "cryptography>=41,<44",
     "pydantic>=2.0,<3",
+    "ruff>=0.0.241,<1",
+    "mypy>=1.0,<2",
+    "basedpyright>=0.1.0,<1",
     "textual>=1.0.0,<2",
+    "pytest>=7.0,<8",
+    "pytest-xdist>=2.0,<3",
+    "pytest-timeout>=2.0,<3",
+    "pytest-cov>=3.0,<4",
+    "pytest-mock>=3.0,<4",
+    "pytest-asyncio>=0.20,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-timeout",
-    "ruff",
-    "mypy",
+    "issuedb",
+    "scriptplan"
 ]
 
 [project.scripts]

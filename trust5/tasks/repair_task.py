@@ -234,8 +234,8 @@ class RepairTask(Task):
                 )
 
             except LLMError as e:
-                if e.retryable or e.is_network_error:
-                    retry_after = e.retry_after or (60 if e.is_network_error else 30)
+                if e.is_auth_error or e.retryable or e.is_network_error:
+                    retry_after = 120.0 if e.is_auth_error else (e.retry_after or (60 if e.is_network_error else 30))
                     emit(
                         M.RFAL,
                         f"Repair LLM transient failure, retrying in {retry_after}s: {e}",

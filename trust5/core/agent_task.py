@@ -303,6 +303,11 @@ class AgentTask(Task):
                 return TaskResult.success(outputs={"result": result, output_key: result})
             except LLMError as e:
                 emit(M.AERR, f"[{agent_name}] LLM error (retryable={e.retryable}, class={e.error_class}): {e}")
+                if e.is_auth_error:
+                    raise TransientError(
+                        f"Auth failed for {agent_name}: {e}",
+                        retry_after=120.0,
+                    )
                 if e.retryable or e.is_network_error:
                     # Inner retry already spent its budget (5 min for connection,
                     # 3 min for server). Pick a Stabilize-level wait that lets

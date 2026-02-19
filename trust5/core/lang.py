@@ -693,8 +693,36 @@ def build_language_context(profile: LanguageProfile) -> str:
     manifests = ", ".join(profile.manifest_files) if profile.manifest_files else "(none)"
     path_var = profile.path_env_var or "(none)"
 
+    lang_upper = profile.language.upper()
+
+    # Package markers: only mention them for languages that have them.
+    pkg_markers = ""
+    if profile.language == "python":
+        pkg_markers = "- Package markers: `__init__.py` in every package directory\n"
+    elif profile.language == "go":
+        pkg_markers = "- Package markers: none (Go uses directory-based packages)\n"
+    elif profile.language in ("java", "kotlin", "scala"):
+        pkg_markers = "- Package markers: none (uses directory structure matching package declaration)\n"
+    else:
+        pkg_markers = "- Package markers: none required\n"
+
+    # Unknown language guidance
+    if profile.language == "unknown":
+        unknown_hint = (
+            "\n**The project language could not be auto-detected.** "
+            "Infer the language from the user's request. "
+            "If the request mentions a specific language (e.g., 'C compiler', 'Go server'), use that language. "
+            "Do NOT default to Python.\n\n"
+        )
+    else:
+        unknown_hint = ""
+
     return (
         f"## Project Language\n\n"
+        f"**IMPORTANT: This project uses {lang_upper}. "
+        f"ALL code, file extensions, build tools, and test frameworks "
+        f"MUST be for {lang_upper}. Do NOT use conventions from other languages.**\n\n"
+        f"{unknown_hint}"
         f"{profile.prompt_hints}\n\n"
         f"- Test verification command: {profile.test_verify_command}\n"
         f"- Full test command: {test_cmd}\n"
@@ -706,6 +734,7 @@ def build_language_context(profile: LanguageProfile) -> str:
         f"- Source roots: {src_roots}\n"
         f"- Path env var: {path_var}\n"
         f"- Manifest files: {manifests}\n"
+        f"{pkg_markers}"
         f"{fw_line}"
         f"\nIMPORTANT: The working directory is the project root. "
         f"Do NOT cd to /testbed or other paths. "
