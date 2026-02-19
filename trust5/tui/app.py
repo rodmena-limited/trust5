@@ -92,6 +92,7 @@ class Trust5App(App[None]):
         if self._workflow_start_time is not None and not self._workflow_ended:
             elapsed = time.monotonic() - self._workflow_start_time
             self._sb1.elapsed = self._format_elapsed(elapsed)
+            self._sb1.refresh()
 
     @staticmethod
     def _format_elapsed(seconds: float) -> str:
@@ -203,7 +204,15 @@ class Trust5App(App[None]):
     # ─── Event routing ───────────────────────────────────────────────────────
 
     def _route_batch(self, events: list[Event | None]) -> None:
-        """Route a batch of events. One bad event won't kill the TUI."""
+        """Route a batch of events. One bad event won't kill the TUI.
+
+        After processing the batch we explicitly refresh the header and
+        status-bar widgets.  Their reactive properties (stage_name, elapsed,
+        model_name, etc.) are set during routing but most lack ``watch_*``
+        methods, so Textual won't schedule a repaint on its own.  A single
+        refresh per batch is cheap and prevents the "frozen status bar" bug
+        where a resize / screenshot was required to force a full redraw.
+        """
         for event in events:
             if event is None:
                 continue
@@ -211,6 +220,11 @@ class Trust5App(App[None]):
                 self._route_event(event)
             except Exception as exc:
                 logger.debug("TUI event routing error: %s", exc)
+
+        # Coalesced repaint — one refresh per batch, not per property change.
+        self._header.refresh()
+        self._sb1.refresh()
+        self._sb0.refresh()
 
     def _route_event(self, event: Event) -> None:
         """Dispatch a single event to the appropriate widget."""

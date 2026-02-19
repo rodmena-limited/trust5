@@ -105,6 +105,7 @@ class HeaderWidget(Static):
         if stage_id not in self._counted_stages:
             self._counted_stages.add(stage_id)
             self.stages_done = len(self._counted_stages)
+            self.refresh()
 
     def update_stage(
         self,
@@ -144,6 +145,8 @@ class HeaderWidget(Static):
         allow_cycle = self.current_stage == "repair" and key == "validate"
         if new_idx >= cur_idx or allow_cycle:
             self.current_stage = key
+
+        self.refresh()
 
     @staticmethod
     def _match_stage_key(ref: str) -> str | None:
