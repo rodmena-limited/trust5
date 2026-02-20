@@ -1,5 +1,6 @@
 """Helper functions for ValidateTask: command parsing, lint/test scoping, file discovery."""
 
+import glob as _glob_module
 import logging
 import os
 import re
@@ -180,18 +181,8 @@ _SOURCE_EXTENSIONS = frozenset(
 def _scope_lint_command(cmd: str, owned_files: list[str]) -> str:
     """Rewrite a lint command to only reference the current module's owned files.
 
-    In parallel pipelines, the planner generates a global lint command that lists
-    ALL project files.  When a module validates before other modules have been
-    implemented, the missing files cause ``FileNotFoundError`` / compile failures.
-
-    Strategy:
-    - Split on ``&&`` to preserve shell prefixes (``source venv/bin/activate``).
-    - Within each segment, identify tokens ending with a known source-file extension.
-    - Drop tokens whose ``os.path.basename`` is NOT in the owned set.
-    - If all file tokens were removed, substitute owned file basenames as a fallback
-      so the lint tool still has something to check.
-    - Directory-style commands (``ruff check .``) pass through unchanged because
-      they contain no file-extension tokens.
+    Splits on ``&&``, identifies source-file tokens, drops those not in *owned_files*.
+    Directory-style commands (``ruff check .``) pass through unchanged.
     """
     if not owned_files:
         return cmd
@@ -255,19 +246,10 @@ def _strip_nonexistent_files(
     project_root: str,
     owned_files: list[str] | None = None,
 ) -> str:
-    """Remove file tokens from a lint command when the files don't exist on disk.
+    """Remove or glob-expand file tokens that don't exist on disk.
 
-    The planner generates lint commands referencing files from its *plan*, but the
-    implementer may create a different file structure.  Running ``py_compile`` on
-    non-existent files produces ``FileNotFoundError``, which the repair agent
-    cannot fix -- causing an infinite validate/repair loop.
-
-    This function checks each source-file token against the filesystem and removes
-    tokens whose files don't exist.  Works for both serial and parallel pipelines.
-
-    When *owned_files* is provided (parallel pipeline), the fallback discovery
-    is restricted to owned files only -- prevents linting other modules' files
-    that the repair agent cannot modify.
+    Handles shell globs (e.g. ``src/*.py``) by expanding them.  In parallel
+    pipelines, fallback discovery is restricted to *owned_files*.
     """
     segments = cmd.split("&&")
     result_segments: list[str] = []
@@ -291,6 +273,7 @@ def _strip_nonexistent_files(
 
         kept_tokens: list[str] = []
         removed_count = 0
+        glob_expanded = False
         for i, token in enumerate(tokens):
             if i not in file_indices:
                 kept_tokens.append(token)
@@ -300,10 +283,19 @@ def _strip_nonexistent_files(
                 if os.path.exists(full_path):
                     kept_tokens.append(token)
                 else:
-                    removed_count += 1
-                    logger.debug("Lint command references non-existent file: %s", clean)
+                    # Try glob expansion for patterns like "src/*.py"
+                    expanded = sorted(_glob_module.glob(full_path))
+                    if expanded:
+                        glob_expanded = True
+                        for ep in expanded:
+                            rel = os.path.relpath(ep, project_root)
+                            if not _matches_test_pattern(rel):
+                                kept_tokens.append(rel)
+                    else:
+                        removed_count += 1
+                        logger.debug("Lint command references non-existent file: %s", clean)
 
-        if removed_count > 0 and removed_count == len(file_indices):
+        if removed_count > 0 and removed_count == len(file_indices) and not glob_expanded:
             # All file tokens were non-existent.  Find replacement files.
             if owned_files:
                 # Parallel pipeline: only lint the module's own files.
@@ -350,17 +342,10 @@ def _scope_test_command(
     cmd: str,
     test_files: list[str],
 ) -> str:
-    """Rewrite a test command to run only specific test files instead of a directory.
+    """Rewrite a test command to run specific files instead of a directory.
 
-    The planner generates a global test command like:
-        source venv/bin/activate && python -m pytest tests/ -v
-
-    In parallel pipelines, each module must run only its own test files.
-    This replaces directory tokens (``tests/``, ``test/``) with the concrete
-    test file paths, preserving shell prefixes and flags.
-
-    Returns the original command unchanged if no directory tokens are found
-    or if *test_files* is empty.
+    Replaces directory tokens (``tests/``, ``test/``) with concrete file paths.
+    Returns the original command unchanged if no directory tokens are found.
     """
     if not test_files:
         return cmd

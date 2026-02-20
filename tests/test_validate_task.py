@@ -778,8 +778,9 @@ def test_reimpl_resets_repair_attempt_to_zero(mock_run, mock_emit_block, mock_em
 
 @patch("trust5.tasks.validate_task.emit")
 @patch("trust5.tasks.validate_task.emit_block")
-def test_jump_limit_terminates_pipeline(mock_emit_block, mock_emit):
-    """When _jump_count >= _max_jumps, validate returns TERMINAL instead of jumping."""
+def test_jump_limit_returns_failed_continue(mock_emit_block, mock_emit):
+    """When _jump_count >= _max_jumps, validate returns FAILED_CONTINUE (not TERMINAL)
+    so other modules and downstream stages can still proceed."""
     task = ValidateTask()
     stage = make_stage(
         {
@@ -792,7 +793,8 @@ def test_jump_limit_terminates_pipeline(mock_emit_block, mock_emit):
 
     result = task.execute(stage)
 
-    assert result.status == WorkflowStatus.TERMINAL
+    assert result.status == WorkflowStatus.FAILED_CONTINUE
+    assert result.outputs["jump_limit_reached"] is True
 
 
 # ── _derive_module_test_files ─────────────────────────────────────────────

@@ -81,6 +81,12 @@ def create_parallel_develop_workflow(
     module_ids = {m.id for m in modules}
     validate_ref_ids: set[str] = set()
 
+    # Give each module the full jump budget.  With FAILED_CONTINUE at the
+    # jump limit (not TERMINAL), a stuck module no longer blocks other modules.
+    # Protection comes from: per-module cap + TIMEOUT_DEVELOP + max_repair ×
+    # max_reimplementations.  Integration and quality stages also get full budget.
+    per_module_jumps = MAX_REPAIR_JUMPS
+
     for mod in modules:
         mid = mod.id
         dep_refs: set[str] = {"setup"}
@@ -175,7 +181,7 @@ def create_parallel_develop_workflow(
             "project_root": project_root,
             "max_repair_attempts": 5,
             "max_reimplementations": 3,
-            "_max_jumps": MAX_REPAIR_JUMPS,
+            "_max_jumps": per_module_jumps,
             "language_profile": profile_dict,
             "pipeline_phase": "run",
             "development_mode": dev_mode,
@@ -209,7 +215,7 @@ def create_parallel_develop_workflow(
             name=f"Repair ({mod.name})",
             context={
                 "project_root": project_root,
-                "_max_jumps": MAX_REPAIR_JUMPS,
+                "_max_jumps": per_module_jumps,
                 "language_profile": profile_dict,
                 "development_mode": dev_mode,
                 **module_context,

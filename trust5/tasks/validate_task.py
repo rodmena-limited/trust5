@@ -6,11 +6,13 @@ from typing import Any
 
 from stabilize import StageExecution, Task, TaskResult
 
-from ..core.constants import MAX_REIMPLEMENTATIONS as _MAX_REIMPL_DEFAULT
-from ..core.constants import MAX_REPAIR_ATTEMPTS as _MAX_REPAIR_DEFAULT
 from ..core.constants import (
+    CONSECUTIVE_FAILURE_LIMIT,
+    PYTEST_PER_TEST_TIMEOUT,
     TEST_OUTPUT_LIMIT,
 )
+from ..core.constants import MAX_REIMPLEMENTATIONS as _MAX_REIMPL_DEFAULT
+from ..core.constants import MAX_REPAIR_ATTEMPTS as _MAX_REPAIR_DEFAULT
 from ..core.context_keys import check_jump_limit, increment_jump_count, propagate_context
 from ..core.lang import detect_language, get_profile
 from ..core.message import M, emit, emit_block
@@ -67,12 +69,13 @@ class ValidateTask(Task):
         if check_jump_limit(stage.context):
             emit(
                 M.VFAL,
-                f"Global jump limit reached "
+                f"Jump limit reached "
                 f"({stage.context.get('_jump_count', 0)}/{stage.context.get('_max_jumps', 50)}). "
-                f"Terminating to prevent infinite loop.",
+                f"Marking as failed — pipeline continues with other modules.",
             )
-            return TaskResult.terminal(
+            return TaskResult.failed_continue(
                 error="Jump limit exceeded — validate/repair loop ran too long",
+                outputs={"tests_passed": False, "jump_limit_reached": True},
             )
 
         # Resolve language profile: use context data, fall back to auto-detection.
@@ -176,6 +179,12 @@ class ValidateTask(Task):
                     # the global test suite for this module.
                     test_cmd = ("true",)
 
+        # Inject per-test timeout for pytest to prevent a single blocking test
+        # from consuming the entire subprocess timeout budget (120s).
+        if lang_name == "python" and any("pytest" in str(t) for t in test_cmd):
+            if not any("--timeout" in str(t) for t in test_cmd):
+                test_cmd = (*test_cmd, f"--timeout={PYTEST_PER_TEST_TIMEOUT}")
+
         emit(
             M.VRUN,
             f"ValidateTask running [{lang_name}] (attempt {repair_attempt}/{max_attempts}) in {project_root}",
@@ -262,6 +271,27 @@ class ValidateTask(Task):
         updated_failures = previous + [summary]
         module_name = stage.context.get("module_name", "")
         mod_tag = f" [{module_name}]" if module_name else ""
+
+        # Detect repeated identical failures (timeout, unrecognized args, etc.).
+        # When the same failure repeats N times in a row, repair cannot fix it.
+        # Escalate to failed_continue so the pipeline can move on to other modules.
+        n = CONSECUTIVE_FAILURE_LIMIT
+        if len(updated_failures) >= n:
+            recent = updated_failures[-n:]
+            if all(f == recent[0] for f in recent):
+                emit(
+                    M.VFAL,
+                    f"Same failure repeated {n} times{mod_tag}. "
+                    f"Marking as failed and continuing pipeline.",
+                )
+                return TaskResult.failed_continue(
+                    error=f"Repeated failure ({n}x): {recent[0][:200]}",
+                    outputs={
+                        "tests_passed": False,
+                        "failure_type": failure_type,
+                        "repeated_failure": True,
+                    },
+                )
 
         if attempt >= max_attempts:
             reimpl_count = stage.context.get("reimplementation_count", 0)
@@ -376,11 +406,7 @@ class ValidateTask(Task):
         env: dict[str, str] | None = None,
         owned_files: list[str] | None = None,
     ) -> str | None:
-        """Run lint-check commands from the language profile.
-
-        Returns combined lint error output on failure, or None if all pass.
-        Skips gracefully when the lint tool is not installed.
-        """
+        """Run lint-check commands; returns error output or None if all pass."""
         if not lint_cmds:
             return None
 
@@ -434,6 +460,24 @@ class ValidateTask(Task):
                 timeout=120,
                 env=env,
             )
+            # Self-heal: if --timeout flag isn't recognized (pytest-timeout
+            # not installed in the target env), retry without it so we get
+            # real test output instead of a useless argument error.
+            if (
+                result.returncode != 0
+                and "unrecognized arguments: --timeout" in (result.stderr or "")
+            ):
+                cleaned = [t for t in test_cmd if not t.startswith("--timeout")]
+                if len(cleaned) < len(list(test_cmd)):
+                    logger.info("pytest-timeout not available, retrying without --timeout")
+                    result = subprocess.run(
+                        cleaned,
+                        cwd=project_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        env=env,
+                    )
         except subprocess.TimeoutExpired:
             return {
                 "passed": False,

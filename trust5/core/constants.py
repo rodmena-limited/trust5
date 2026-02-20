@@ -16,10 +16,12 @@ AGENT_IDLE_MAX_TURNS = 10  # abort agent after N consecutive read-only turns
 
 # ── Repair / validate loop ───────────────────────────────────────────────────
 MAX_REPAIR_ATTEMPTS = 5
+CONSECUTIVE_FAILURE_LIMIT = 3  # escalate to failed_continue after N identical failures
 MAX_REIMPLEMENTATIONS = 3
 TEST_OUTPUT_LIMIT = 4000
 REPAIR_AGENT_TIMEOUT = 600  # 10 min per repair attempt
 QUICK_TEST_TIMEOUT = 60  # pre/post-flight check
+PYTEST_PER_TEST_TIMEOUT = 30  # per-test timeout via pytest-timeout plugin
 
 # ── Quality gate ─────────────────────────────────────────────────────────────
 MAX_QUALITY_ATTEMPTS = 3

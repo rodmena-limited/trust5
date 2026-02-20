@@ -561,7 +561,7 @@ def test_repair_preflight_uses_plan_config_test_command(mock_run, mock_emit):
     assert result.target_stage_ref_id == "validate"
     # Verify subprocess was called with sh -c wrapping (plan_config has &&)
     call_args = mock_run.call_args
-    assert call_args[0][0] == ["sh", "-c", ". venv/bin/activate && pytest"]
+    assert call_args[0][0] == ["sh", "-c", ". venv/bin/activate && pytest", "--timeout=30"]
 
 
 # ── Regression: pre-flight must NOT run for lint/syntax failures ──────────

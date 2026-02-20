@@ -35,12 +35,13 @@ class RepairTask(Task):
         if check_jump_limit(stage.context):
             emit(
                 M.RFAL,
-                f"Global jump limit reached "
+                f"Jump limit reached "
                 f"({stage.context.get('_jump_count', 0)}/{stage.context.get('_max_jumps', 50)}). "
-                f"Terminating to prevent infinite loop.",
+                f"Marking as failed — pipeline continues with other modules.",
             )
-            return TaskResult.terminal(
+            return TaskResult.failed_continue(
                 error="Jump limit exceeded — validate/repair loop ran too long",
+                outputs={"tests_passed": False, "jump_limit_reached": True},
             )
 
         # Re-detect language at runtime when build-time detection was "unknown"
@@ -291,6 +292,14 @@ class RepairTask(Task):
             if existing:
                 test_cmd = (*test_cmd, *existing)
 
+        # Inject per-test timeout for pytest (matches ValidateTask behavior)
+        from ..core.constants import PYTEST_PER_TEST_TIMEOUT
+
+        lang_name = profile_data.get("language", "")
+        if lang_name == "python" and any("pytest" in str(t) for t in test_cmd):
+            if not any("--timeout" in str(t) for t in test_cmd):
+                test_cmd = (*test_cmd, f"--timeout={PYTEST_PER_TEST_TIMEOUT}")
+
         # Build env with source roots on path (matches ValidateTask behavior)
         env = _build_test_env(project_root, profile_data)
 
@@ -303,6 +312,21 @@ class RepairTask(Task):
                 timeout=60,
                 env=env,
             )
+            # Self-heal: if --timeout isn't recognized, retry without it.
+            if (
+                result.returncode != 0
+                and "unrecognized arguments: --timeout" in (result.stderr or "")
+            ):
+                cleaned = [t for t in test_cmd if not t.startswith("--timeout")]
+                if len(cleaned) < len(list(test_cmd)):
+                    result = subprocess.run(
+                        cleaned,
+                        cwd=project_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        env=env,
+                    )
             return result.returncode == 0
         except Exception as e:
             logger.debug("Pre/post-flight test check failed: %s", e)
