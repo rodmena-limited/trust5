@@ -35,6 +35,25 @@ from .validate_helpers import (
 
 logger = logging.getLogger(__name__)
 
+
+def _test_path_has_content(full_path: str) -> bool:
+    """Return True if *full_path* is a file or a directory with source files inside.
+
+    Empty directories (created by a confused test-writer agent that
+    interpreted an extensionless path as a directory name) return False
+    so that the validate stage falls through to auto-derivation instead
+    of running ``pytest <empty_dir>/`` and getting 0 tests forever.
+    """
+    if os.path.isfile(full_path):
+        return True
+    if os.path.isdir(full_path):
+        # Check for any files inside (recursively, one level is enough)
+        for entry in os.listdir(full_path):
+            if os.path.isfile(os.path.join(full_path, entry)):
+                return True
+    return False
+
+
 MAX_REPAIR_ATTEMPTS = _MAX_REPAIR_DEFAULT
 MAX_REIMPLEMENTATIONS = _MAX_REIMPL_DEFAULT
 
@@ -160,7 +179,11 @@ class ValidateTask(Task):
         scoped_test_files = stage.context.get("test_files")
         owned_files_for_tests = stage.context.get("owned_files")
         if scoped_test_files:
-            existing = [f for f in scoped_test_files if os.path.exists(os.path.join(project_root, f))]
+            existing = [
+                f
+                for f in scoped_test_files
+                if _test_path_has_content(os.path.join(project_root, f))
+            ]
             if existing:
                 # Planner's test files exist — use them
                 if plan_test_cmd and owned_files_for_tests:

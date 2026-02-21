@@ -196,8 +196,21 @@ def _normalize_owned_files(
             normalized.append(f)
             continue
         full = os.path.join(project_root, f)
-        # Already exists as-is (directory or extensionless file)
-        if os.path.exists(full):
+        # If the path is a directory, check if it has source files inside.
+        # Empty directories (created by a confused test-writer) should fall
+        # through to the extension-append logic below.
+        if os.path.isdir(full):
+            has_source = any(
+                os.path.splitext(child)[1].lower() in _SOURCE_EXTENSIONS
+                for child in os.listdir(full)
+                if os.path.isfile(os.path.join(full, child))
+            )
+            if has_source:
+                normalized.append(f)
+                continue
+            # Empty directory — fall through to try .py extension
+        elif os.path.exists(full):
+            # Extensionless file — keep as-is
             normalized.append(f)
             continue
         # Try appending common source extensions

@@ -6,7 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trust5.core.tools import _BLOCKED_COMMAND_PATTERNS, _VALID_PACKAGE_RE, Tools, _matches_test_pattern
+from trust5.core.tools import (
+    _BLOCKED_COMMAND_PATTERNS,
+    _VALID_PACKAGE_RE,
+    Tools,
+    _is_project_scoped_rm,
+    _matches_test_pattern,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -415,6 +421,107 @@ def test_blocked_patterns_are_compiled_regexes():
 
 def test_blocked_pattern_dev_sda_redirect(tools: Tools):
     result = tools.run_bash("echo pwned > /dev/sda")
+    assert "blocked" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# _is_project_scoped_rm — project-directory-scoped rm -rf
+# ---------------------------------------------------------------------------
+
+
+def test_project_scoped_rm_allows_relative_subdir(tmp_path):
+    """rm -rf of a relative subdirectory within the project should be allowed."""
+    (tmp_path / "old_module").mkdir()
+    assert _is_project_scoped_rm("rm -rf old_module", str(tmp_path)) is True
+
+
+def test_project_scoped_rm_allows_relative_file(tmp_path):
+    """rm -rf of a relative file within the project should be allowed."""
+    (tmp_path / "stale.pyc").touch()
+    assert _is_project_scoped_rm("rm -rf stale.pyc", str(tmp_path)) is True
+
+
+def test_project_scoped_rm_allows_nested_path(tmp_path):
+    """rm -rf of a nested relative path should be allowed."""
+    (tmp_path / "src" / "old").mkdir(parents=True)
+    assert _is_project_scoped_rm("rm -rf src/old", str(tmp_path)) is True
+
+
+def test_project_scoped_rm_blocks_root(tmp_path):
+    """rm -rf / must always be blocked."""
+    assert _is_project_scoped_rm("rm -rf /", str(tmp_path)) is False
+
+
+def test_project_scoped_rm_blocks_absolute_outside(tmp_path):
+    """rm -rf of an absolute path outside the project must be blocked."""
+    assert _is_project_scoped_rm("rm -rf /etc/important", str(tmp_path)) is False
+
+
+def test_project_scoped_rm_blocks_parent_escape(tmp_path):
+    """rm -rf .. must be blocked (escapes project directory)."""
+    assert _is_project_scoped_rm("rm -rf ..", str(tmp_path)) is False
+
+
+def test_project_scoped_rm_blocks_dotdot_path(tmp_path):
+    """rm -rf ../sibling must be blocked."""
+    assert _is_project_scoped_rm("rm -rf ../sibling", str(tmp_path)) is False
+
+
+def test_project_scoped_rm_blocks_tilde(tmp_path):
+    """rm -rf ~ must be blocked (home directory)."""
+    assert _is_project_scoped_rm("rm -rf ~", str(tmp_path)) is False
+    assert _is_project_scoped_rm("rm -rf ~/Documents", str(tmp_path)) is False
+
+
+def test_project_scoped_rm_blocks_env_var(tmp_path):
+    """rm -rf $HOME must be blocked (shell variable expansion)."""
+    assert _is_project_scoped_rm("rm -rf $HOME", str(tmp_path)) is False
+
+
+def test_project_scoped_rm_blocks_dot(tmp_path):
+    """rm -rf . must be blocked (deleting workdir itself)."""
+    assert _is_project_scoped_rm("rm -rf .", str(tmp_path)) is False
+
+
+def test_project_scoped_rm_blocks_bare_rm_rf(tmp_path):
+    """Bare rm -rf with no targets must be blocked."""
+    assert _is_project_scoped_rm("rm -rf", str(tmp_path)) is False
+
+
+def test_project_scoped_rm_handles_fr_variant(tmp_path):
+    """rm -fr variant should also be checked."""
+    (tmp_path / "old").mkdir()
+    assert _is_project_scoped_rm("rm -fr old", str(tmp_path)) is True
+
+
+def test_project_scoped_rm_multiple_targets_all_inside(tmp_path):
+    """When all rm targets are inside the project, allow."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    assert _is_project_scoped_rm("rm -rf a b", str(tmp_path)) is True
+
+
+def test_project_scoped_rm_multiple_targets_one_outside(tmp_path):
+    """If any target is outside, block the whole command."""
+    (tmp_path / "a").mkdir()
+    assert _is_project_scoped_rm("rm -rf a /etc/bad", str(tmp_path)) is False
+
+
+@patch("trust5.core.tools.subprocess.run")
+def test_run_bash_allows_project_scoped_rm(mock_run: MagicMock, tmp_path):
+    """Integration: run_bash should allow rm -rf within the project directory."""
+    mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+    (tmp_path / "old_module").mkdir()
+    tools = Tools()
+    result = tools.run_bash("rm -rf old_module", workdir=str(tmp_path))
+    assert "blocked" not in result.lower()
+    mock_run.assert_called_once()
+
+
+def test_run_bash_still_blocks_rm_rf_outside(tmp_path):
+    """Integration: run_bash must still block rm -rf outside the project."""
+    tools = Tools()
+    result = tools.run_bash("rm -rf /etc/important", workdir=str(tmp_path))
     assert "blocked" in result.lower()
 
 

@@ -40,6 +40,62 @@ _SAFE_COMMAND_PATTERNS: list[re.Pattern[str]] = [
 _VALID_PACKAGE_RE = re.compile(r"^[a-zA-Z0-9._-]+[a-zA-Z0-9._\-\[\]>=<,! ]*$")
 
 
+def _is_project_scoped_rm(command: str, workdir: str) -> bool:
+    """Allow ``rm -rf`` when ALL targets resolve within the project directory.
+
+    Agents legitimately need to remove directories during reimplementation
+    (e.g. ``rm -rf celery_core/``).  This function parses the rm targets and
+    verifies every one resolves strictly *inside* ``workdir``.
+
+    Returns False (unsafe) for:
+    - Bare ``rm -rf`` with no targets
+    - Targets that resolve outside workdir (``..``, ``/``, ``~``, env vars)
+    - Targets that resolve to workdir itself (``rm -rf .``)
+    - Unparseable commands
+    """
+    if not re.search(r"\brm\s+-[^\s]*r", command):
+        return False
+
+    abs_workdir = os.path.realpath(workdir)
+
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+
+    # Find the 'rm' token
+    rm_idx = None
+    for i, part in enumerate(parts):
+        if part == "rm" or part.endswith("/rm"):
+            rm_idx = i
+            break
+    if rm_idx is None:
+        return False
+
+    # Collect non-flag arguments until a shell operator
+    targets: list[str] = []
+    for part in parts[rm_idx + 1:]:
+        if part.startswith("-"):
+            continue
+        if part in ("&&", "||", ";", "|"):
+            break
+        targets.append(part)
+
+    if not targets:
+        return False
+
+    for target in targets:
+        # Reject shell expansions we can't resolve statically
+        if target.startswith("~") or target.startswith("$"):
+            return False
+        resolved = os.path.realpath(os.path.join(abs_workdir, target))
+        # Must be strictly inside workdir (not workdir itself)
+        if not resolved.startswith(abs_workdir + os.sep):
+            return False
+
+    return True
+
+
 _TEST_FILE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(^|/)test_[^/]+$"),  # test_foo.py
     re.compile(r"(^|/)[^/]+_test\.[^/]+$"),  # foo_test.py, foo_test.go
@@ -252,6 +308,8 @@ class Tools:
     def run_bash(command: str, workdir: str = ".") -> str:
         """Executes a bash command with destructive-pattern blocklist."""
         is_safe_context = any(p.search(command) for p in _SAFE_COMMAND_PATTERNS)
+        if not is_safe_context:
+            is_safe_context = _is_project_scoped_rm(command, workdir)
         if not is_safe_context:
             for pattern in _BLOCKED_COMMAND_PATTERNS:
                 if pattern.search(command):

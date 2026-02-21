@@ -8,6 +8,7 @@ from stabilize import StageExecution, TaskExecution, Workflow
 
 from ..core.config import ConfigManager
 from ..core.lang import detect_language, get_profile
+from ..tasks.validate_helpers import _SOURCE_EXTENSIONS
 from .module_spec import (
     ModuleSpec,
     _detect_dependency_cycle,
@@ -25,6 +26,46 @@ __all__ = [
     "extract_plan_output",
     "parse_modules",
 ]
+
+
+# Primary extension per language — used to normalize extensionless paths from the planner.
+_LANG_EXT: dict[str, str] = {
+    "python": ".py",
+    "go": ".go",
+    "typescript": ".ts",
+    "javascript": ".js",
+    "rust": ".rs",
+    "java": ".java",
+    "ruby": ".rb",
+}
+
+
+def _normalize_module_paths(modules: list[ModuleSpec], profile_dict: dict[str, object]) -> None:
+    """Add file extensions to module paths the planner emitted without them.
+
+    The planner often outputs ``tests/test_task`` instead of ``tests/test_task.py``.
+    Without normalization the test-writer agent interprets the bare path as a
+    directory and creates an empty folder — resulting in 0 tests collected and
+    an un-fixable validate/repair loop.
+
+    Mutates *modules* in-place.
+    """
+    lang = str(profile_dict.get("language", "unknown"))
+    default_ext = _LANG_EXT.get(lang, "")
+    if not default_ext:
+        return
+
+    for mod in modules:
+        mod.files = [_ensure_ext(f, default_ext) for f in (mod.files or [])]
+        mod.test_files = [_ensure_ext(f, default_ext) for f in (mod.test_files or [])]
+
+
+def _ensure_ext(path: str, default_ext: str) -> str:
+    """Append *default_ext* to *path* if it lacks a recognized source extension."""
+    _, ext = os.path.splitext(path)
+    if ext.lower() in _SOURCE_EXTENSIONS:
+        return path
+    return path + default_ext
 
 
 def _load_development_mode(project_root: str) -> str:
@@ -52,6 +93,11 @@ def create_parallel_develop_workflow(
     language = detect_language(project_root)
     profile = get_profile(language)
     profile_dict = profile.to_dict()
+
+    # Normalize paths BEFORE building stages so the test-writer receives
+    # proper file paths (e.g. "tests/test_task.py" not "tests/test_task").
+    _normalize_module_paths(modules, profile_dict)
+
     dev_mode = _load_development_mode(project_root)
     use_tdd = dev_mode in ("tdd", "hybrid")
     use_mutation = _load_mutation_enabled(project_root)

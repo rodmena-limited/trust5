@@ -9,6 +9,7 @@ from stabilize.models.status import WorkflowStatus
 
 from trust5.workflows.parallel_pipeline import (
     ModuleSpec,
+    _normalize_module_paths,
     create_parallel_develop_workflow,
     extract_plan_output,
     parse_modules,
