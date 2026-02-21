@@ -196,7 +196,11 @@ class TestCreateParallelDevelopWorkflow:
         assert "integration_repair" in ref_ids
         assert "quality" in ref_ids
 
-    def test_two_modules_with_dependency(self) -> None:
+    def test_two_modules_with_dependency_run_parallel(self) -> None:
+        """Even with declared deps, modules run in parallel after setup.
+
+        Cross-module issues are caught later in integration_validate.
+        """
         modules = [
             ModuleSpec(id="auth", name="Auth", files=["src/auth.py"]),
             ModuleSpec(id="api", name="API", files=["src/api.py"], deps=["auth"]),
@@ -209,7 +213,10 @@ class TestCreateParallelDevelopWorkflow:
             MagicMock(requisite_stage_ref_ids=set()),
         ).requisite_stage_ref_ids
         impl_deps = stage_map["implement_api"].requisite_stage_ref_ids
-        assert "validate_auth" in impl_deps or "validate_auth" in wt_deps
+        # Modules no longer chain on each other — all start after setup
+        assert "validate_auth" not in impl_deps
+        assert "validate_auth" not in wt_deps
+        assert "setup" in wt_deps
 
     def test_integration_validate_depends_on_all_module_validates(self) -> None:
         modules = [

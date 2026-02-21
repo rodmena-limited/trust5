@@ -13,6 +13,10 @@ os.environ.setdefault("STABILIZE_SQLITE_MMAP_SIZE_MB", "0")
 # Use FULL synchronous mode for maximum safety (trust5 is I/O-bound on
 # LLM calls, so the extra fsync cost is negligible).
 os.environ.setdefault("STABILIZE_SQLITE_SYNCHRONOUS", "FULL")
+# ── Stabilize watchdog: raise the CompleteWorkflow poll limit ──────────
+# Default is 240 retries × 15 s = 1 hour, which is too short for a
+# multi-module LLM pipeline (TIMEOUT_DEVELOP = 2 h).  480 × 15 s = 2 h.
+os.environ.setdefault("STABILIZE_MAX_STAGE_WAIT_RETRIES", "480")
 
 import typer
 from stabilize import Workflow

@@ -178,6 +178,42 @@ _SOURCE_EXTENSIONS = frozenset(
 )
 
 
+def _normalize_owned_files(
+    owned_files: list[str],
+    project_root: str,
+) -> list[str]:
+    """Resolve owned_files entries that lack source extensions.
+
+    The planner often uses module paths without extensions
+    (``taskqueue/worker`` instead of ``taskqueue/worker.py``).  This checks
+    the filesystem and appends the correct extension when possible.
+    Works for all supported languages (Python, Go, TypeScript, etc.).
+    """
+    normalized: list[str] = []
+    for f in owned_files:
+        _, ext = os.path.splitext(f)
+        if ext.lower() in _SOURCE_EXTENSIONS:
+            normalized.append(f)
+            continue
+        full = os.path.join(project_root, f)
+        # Already exists as-is (directory or extensionless file)
+        if os.path.exists(full):
+            normalized.append(f)
+            continue
+        # Try appending common source extensions
+        resolved = False
+        for src_ext in (".py", ".go", ".ts", ".js", ".rs", ".java", ".rb"):
+            if os.path.exists(full + src_ext):
+                normalized.append(f + src_ext)
+                resolved = True
+                break
+        if not resolved:
+            normalized.append(f)
+    if normalized != owned_files:
+        logger.info("Normalized owned_files: %s -> %s", owned_files, normalized)
+    return normalized
+
+
 def _scope_lint_command(cmd: str, owned_files: list[str]) -> str:
     """Rewrite a lint command to only reference the current module's owned files.
 
@@ -390,28 +426,45 @@ def _build_test_env(
     project_root: str,
     profile_data: dict[str, Any],
 ) -> dict[str, str] | None:
-    """Build subprocess environment with source roots added to the language path var.
+    """Build subprocess environment with venv activation and source roots.
 
-    For projects using a non-flat layout (e.g. Python ``src/`` layout), the test
-    runner can't find importable modules unless the source root is on the path.
-    This reads ``source_roots`` and ``path_env_var`` from the language profile and
-    returns a modified env dict -- or None if no adjustment is needed.
+    Two adjustments are applied when relevant:
+
+    1. **Virtualenv activation** — if ``.venv/bin`` or ``venv/bin`` exists in the
+       project root, its path is prepended to ``PATH`` so that tools installed
+       in the venv (ruff, pytest-timeout, etc.) are found by subprocess calls.
+    2. **Source root injection** — for projects using a non-flat layout (e.g.
+       Python ``src/`` layout), the source root is added to the language path var
+       (``PYTHONPATH``, ``GOPATH``, …) so the test runner can find importable modules.
     """
+    env: dict[str, str] | None = None
+
+    # Activate project virtualenv if present
+    for venv_dir in (".venv", "venv"):
+        venv_bin = os.path.join(project_root, venv_dir, "bin")
+        if os.path.isdir(venv_bin):
+            env = os.environ.copy()
+            env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
+            env["VIRTUAL_ENV"] = os.path.join(project_root, venv_dir)
+            env.pop("PYTHONHOME", None)
+            logger.debug("Activated venv at %s for subprocess", venv_bin)
+            break
+
+    # Add source roots to language path var
     source_roots = profile_data.get("source_roots", ())
     path_var = profile_data.get("path_env_var", "")
-    if not source_roots or not path_var:
-        return None
+    if source_roots and path_var:
+        for root in source_roots:
+            src_dir = os.path.join(project_root, root)
+            if os.path.isdir(src_dir):
+                if env is None:
+                    env = os.environ.copy()
+                existing = env.get(path_var, "")
+                env[path_var] = f"{src_dir}:{existing}" if existing else src_dir
+                logger.debug("Added %s to %s for test subprocess", src_dir, path_var)
+                break
 
-    for root in source_roots:
-        src_dir = os.path.join(project_root, root)
-        if os.path.isdir(src_dir):
-            env = os.environ.copy()
-            existing = env.get(path_var, "")
-            env[path_var] = f"{src_dir}:{existing}" if existing else src_dir
-            logger.debug("Added %s to %s for test subprocess", src_dir, path_var)
-            return env
-
-    return None
+    return env
 
 
 def _discover_test_files(

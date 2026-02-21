@@ -27,6 +27,8 @@ class LanguageProfile:
     frameworks: tuple[str, ...] = ()
     source_roots: tuple[str, ...] = ()  # directories to check as source roots
     path_env_var: str = ""  # env var for test runner (e.g. PYTHONPATH=src)
+    syntax_check_tool_names: tuple[str, ...] = ()  # tool names that are syntax-only (for lint dedup)
+    dev_dependencies: tuple[str, ...] = ()  # packages auto-installed before lint/test if missing
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -50,6 +52,8 @@ def _p(
     lint_check: tuple[str, ...] = (),
     src_roots: tuple[str, ...] = (),
     path_var: str = "",
+    syntax_tool_names: tuple[str, ...] = (),
+    dev_deps: tuple[str, ...] = (),
 ) -> LanguageProfile:
     return LanguageProfile(
         language=lang,
@@ -69,6 +73,8 @@ def _p(
         frameworks=fw,
         source_roots=src_roots,
         path_env_var=path_var,
+        syntax_check_tool_names=syntax_tool_names,
+        dev_dependencies=dev_deps,
     )
 
 
@@ -103,6 +109,8 @@ PROFILES: dict[str, LanguageProfile] = {
         lint_check=("python3 -m ruff check --output-format=concise .",),
         src_roots=("src", "lib"),
         path_var="PYTHONPATH",
+        syntax_tool_names=("py_compile", "compileall"),
+        dev_deps=("ruff", "pytest-timeout"),
     ),
     "go": _p(
         "go",

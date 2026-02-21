@@ -78,7 +78,6 @@ def create_parallel_develop_workflow(
     )
     stages.append(setup)
 
-    module_ids = {m.id for m in modules}
     validate_ref_ids: set[str] = set()
 
     # Give each module the full jump budget.  With FAILED_CONTINUE at the
@@ -89,10 +88,10 @@ def create_parallel_develop_workflow(
 
     for mod in modules:
         mid = mod.id
+        # All modules start in parallel after setup.  Per-module tests are
+        # scoped to owned_files, so no cross-module interference.  Cross-module
+        # issues are caught later in integration_validate.
         dep_refs: set[str] = {"setup"}
-        for dep in mod.deps:
-            if dep in module_ids:
-                dep_refs.add(f"validate_{dep}")
 
         wt_ref = f"write_tests_{mid}"
         impl_ref = f"implement_{mid}"

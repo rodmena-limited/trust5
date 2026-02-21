@@ -192,9 +192,12 @@ def test_validate_max_attempts_reimplements(mock_run, mock_emit_block, mock_emit
 @patch("trust5.tasks.validate_task.emit_block")
 @patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_test_fail)
 def test_validate_all_reimplementations_exhausted(mock_run, mock_emit_block, mock_emit):
-    """When all reimplementation attempts exhausted, return TaskResult.terminal()."""
+    """When all reimplementation attempts exhausted, return FAILED_CONTINUE (not TERMINAL).
+
+    A fully exhausted module should not block the rest of the pipeline.
+    """
     task = ValidateTask()
-    # repair_attempt=5 >= max_attempts=5 AND reimpl_count >= max_reimpl → terminal
+    # repair_attempt=5 >= max_attempts=5 AND reimpl_count >= max_reimpl → failed_continue
     stage = make_stage(
         {
             "project_root": "/tmp/proj",
@@ -205,9 +208,10 @@ def test_validate_all_reimplementations_exhausted(mock_run, mock_emit_block, moc
 
     result = task.execute(stage)
 
-    assert result.status == WorkflowStatus.TERMINAL
+    assert result.status == WorkflowStatus.FAILED_CONTINUE
     error_msg = result.context.get("error", "")
     assert "reimplementation" in error_msg.lower() or "failing" in error_msg.lower()
+    assert result.outputs.get("all_attempts_exhausted") is True
 
 
 # ── Lint checking ──────────────────────────────────────────────────────────
@@ -1232,11 +1236,12 @@ def _subprocess_scoped_lint(*args, **kwargs):
     return result
 
 
+@patch("trust5.tasks.validate_task.detect_language", return_value="python")
 @patch("trust5.tasks.validate_task.emit")
 @patch("trust5.tasks.validate_task.emit_block")
 @patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_scoped_lint)
-def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_block, mock_emit):
-    """In parallel pipeline with owned_files, plan lint command is scoped to owned files only."""
+def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_block, mock_emit, mock_detect):
+    """When plan lint command uses syntax-only tool (py_compile), fall back to profile lint (ruff)."""
     task = ValidateTask()
     stage = make_stage(
         {
@@ -1255,17 +1260,48 @@ def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_b
     # Pipeline should succeed (all mocks return OK)
     assert result.status == WorkflowStatus.SUCCEEDED
 
-    # Find the lint subprocess call (sh -c "...")
-    lint_calls = [
-        call for call in mock_run.call_args_list if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
+    # py_compile should NOT be called as lint (syntax-only, skipped)
+    py_compile_calls = [
+        call
+        for call in mock_run.call_args_list
+        if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
     ]
-    assert lint_calls, f"Expected a py_compile call in: {mock_run.call_args_list}"
+    assert not py_compile_calls, f"py_compile should be skipped, but found: {py_compile_calls}"
 
-    # The lint command should NOT contain unowned files
-    lint_cmd_str = " ".join(str(a) for a in lint_calls[0].args[0])
-    assert "monte_carlo.py" in lint_cmd_str
-    assert "simulations.py" not in lint_cmd_str
-    assert "stats.py" not in lint_cmd_str
+    # ruff should be called instead (profile fallback)
+    ruff_calls = [
+        call for call in mock_run.call_args_list if call.args and "ruff" in " ".join(str(a) for a in call.args[0])
+    ]
+    assert ruff_calls, f"Expected ruff call (profile fallback) in: {mock_run.call_args_list}"
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_ok)
+def test_validate_scopes_real_lint_command_in_parallel_pipeline(mock_run, mock_emit_block, mock_emit):
+    """Non-syntax-only plan lint commands (ruff, flake8) are still scoped to owned_files."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "owned_files": ["monte_carlo.py"],
+            "plan_config": {
+                "lint_command": "ruff check monte_carlo.py simulations.py stats.py",
+            },
+        }
+    )
+
+    result = task.execute(stage)
+    assert result.status == WorkflowStatus.SUCCEEDED
+
+    # ruff should be called with only owned files (scoped)
+    ruff_calls = [
+        call for call in mock_run.call_args_list if call.args and "ruff" in " ".join(str(a) for a in call.args[0])
+    ]
+    assert ruff_calls, f"Expected a ruff call in: {mock_run.call_args_list}"
+    ruff_cmd_str = " ".join(str(a) for a in ruff_calls[0].args[0])
+    assert "monte_carlo.py" in ruff_cmd_str
+    assert "simulations.py" not in ruff_cmd_str
 
 
 # ── _strip_nonexistent_files tests ────────────────────────────────────────
@@ -1435,7 +1471,7 @@ def test_validate_strips_nonexistent_files_in_serial_pipeline(
             # No owned_files — serial pipeline
             "plan_config": {
                 "lint_command": (
-                    "source venv/bin/activate && python -m py_compile monte_carlo.py examples/pi_estimation.py"
+                    "ruff check monte_carlo.py examples/pi_estimation.py"
                 ),
             },
         }
@@ -1445,13 +1481,12 @@ def test_validate_strips_nonexistent_files_in_serial_pipeline(
 
     # Find the lint subprocess call
     lint_calls = [
-        call for call in mock_run.call_args_list if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
+        call for call in mock_run.call_args_list if call.args and "ruff" in " ".join(str(a) for a in call.args[0])
     ]
-    assert lint_calls, f"Expected py_compile call in: {mock_run.call_args_list}"
+    assert lint_calls, f"Expected ruff call in: {mock_run.call_args_list}"
 
     lint_cmd_str = " ".join(str(a) for a in lint_calls[0].args[0])
-    # The stale files should be gone, replaced with actual files
-    assert "monte_carlo.py" not in lint_cmd_str or "monte_carlo/" in lint_cmd_str
+    # The stale file should be gone (examples/pi_estimation.py doesn't exist)
     assert "examples/pi_estimation.py" not in lint_cmd_str
 
 
@@ -1554,9 +1589,11 @@ def test_validate_scopes_test_command_in_parallel_pipeline(tmp_path):
         task = ValidateTask()
         task.execute(stage)
 
-    # Find the test subprocess call (pytest)
+    # Find the test subprocess call (pytest), excluding pip install calls
     test_calls = [
-        call for call in mock_run.call_args_list if call.args and "pytest" in " ".join(str(a) for a in call.args[0])
+        call
+        for call in mock_run.call_args_list
+        if call.args and "pytest" in call.args[0] and "pip" not in call.args[0]
     ]
     assert test_calls, f"Expected pytest call in: {mock_run.call_args_list}"
 
@@ -1606,7 +1643,9 @@ def test_validate_auto_derives_test_files_when_planned_missing(tmp_path):
         task.execute(stage)
 
     test_calls = [
-        call for call in mock_run.call_args_list if call.args and "pytest" in " ".join(str(a) for a in call.args[0])
+        call
+        for call in mock_run.call_args_list
+        if call.args and "pytest" in call.args[0] and "pip" not in call.args[0]
     ]
     assert test_calls, f"Expected pytest call in: {mock_run.call_args_list}"
 

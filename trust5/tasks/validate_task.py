@@ -26,6 +26,7 @@ from .validate_helpers import (
     _derive_module_test_files,
     _discover_test_files,
     _filter_test_file_lint,
+    _normalize_owned_files,
     _parse_command,
     _scope_lint_command,
     _scope_test_command,
@@ -44,6 +45,7 @@ __all__ = [
     "MAX_REIMPLEMENTATIONS",
     "_parse_command",
     "_filter_test_file_lint",
+    "_normalize_owned_files",
     "_scope_lint_command",
     "_strip_nonexistent_files",
     "_scope_test_command",
@@ -64,6 +66,17 @@ class ValidateTask(Task):
         max_attempts = stage.context.get("max_repair_attempts", MAX_REPAIR_ATTEMPTS)
         profile_data = stage.context.get("language_profile", {})
         plan_config = stage.context.get("plan_config", {})
+
+        # ── Normalize owned_files / test_files ────────────────────────
+        # The planner often produces module paths without extensions
+        # (e.g. "taskqueue/worker" instead of "taskqueue/worker.py").
+        # Resolve them against the filesystem before any lint/test scoping.
+        raw_owned = stage.context.get("owned_files")
+        if raw_owned:
+            stage.context["owned_files"] = _normalize_owned_files(raw_owned, project_root)
+        raw_test_files = stage.context.get("test_files")
+        if raw_test_files:
+            stage.context["test_files"] = _normalize_owned_files(raw_test_files, project_root)
 
         # ── Jump-limit safety net ─────────────────────────────────────
         if check_jump_limit(stage.context):
@@ -88,6 +101,11 @@ class ValidateTask(Task):
             profile_data = base_profile.to_dict()
             stage.context["language_profile"] = profile_data
             logger.debug("Re-detected language as %s (was unknown)", detected)
+
+        # Auto-install dev dependencies (ruff, pytest-timeout, etc.) if the
+        # profile declares them and the project has a package manager available.
+        if base_profile.dev_dependencies and base_profile.package_install_prefix:
+            self._install_dev_deps(project_root, base_profile)
 
         # Auto-detect test files when not provided.
         # In parallel pipelines (owned_files is set), derive module-scoped
@@ -197,6 +215,13 @@ class ValidateTask(Task):
         # 1. Parallel pipelines: scope to owned files only
         # 2. All pipelines: strip file tokens that don't exist on disk
         plan_lint_cmd = plan_config.get("lint_command") if plan_config else None
+        # If the planner's lint command is just a syntax checker (defined per
+        # language profile), skip it — _check_syntax() already covers it and
+        # file-arg scoping causes spurious failures.
+        if plan_lint_cmd and base_profile.syntax_check_tool_names:
+            if any(t in plan_lint_cmd for t in base_profile.syntax_check_tool_names):
+                logger.info("Ignoring syntax-check plan lint_command %r; using profile lint", plan_lint_cmd)
+                plan_lint_cmd = None
         if plan_lint_cmd:
             owned = stage.context.get("owned_files")
             if owned:
@@ -272,17 +297,32 @@ class ValidateTask(Task):
         module_name = stage.context.get("module_name", "")
         mod_tag = f" [{module_name}]" if module_name else ""
 
-        # Detect repeated identical failures (timeout, unrecognized args, etc.).
-        # When the same failure repeats N times in a row, repair cannot fix it.
-        # Escalate to failed_continue so the pipeline can move on to other modules.
+        # Check reimplementation budget — shared by both escalation paths.
+        reimpl_count = stage.context.get("reimplementation_count", 0)
+        max_reimpl = stage.context.get("max_reimplementations", MAX_REIMPLEMENTATIONS)
+
+        # Detect repeated identical failures (same error N times in a row).
+        # Instead of giving up, trigger reimplementation — repair can't fix a
+        # fundamentally broken implementation, but a fresh implement attempt can.
         n = CONSECUTIVE_FAILURE_LIMIT
         if len(updated_failures) >= n:
             recent = updated_failures[-n:]
             if all(f == recent[0] for f in recent):
+                if reimpl_count < max_reimpl:
+                    emit(
+                        M.VFAL,
+                        f"Same failure repeated {n} times{mod_tag}. "
+                        f"Re-implementing from scratch "
+                        f"(reimplementation {reimpl_count + 1}/{max_reimpl})",
+                    )
+                    return self._jump_to_reimplementation(
+                        stage, output, updated_failures, reimpl_count,
+                        max_attempts, profile_data,
+                    )
                 emit(
                     M.VFAL,
-                    f"Same failure repeated {n} times{mod_tag}. "
-                    f"Marking as failed and continuing pipeline.",
+                    f"Same failure repeated {n} times{mod_tag}, "
+                    f"all reimplementations exhausted. Continuing pipeline.",
                 )
                 return TaskResult.failed_continue(
                     error=f"Repeated failure ({n}x): {recent[0][:200]}",
@@ -294,9 +334,6 @@ class ValidateTask(Task):
                 )
 
         if attempt >= max_attempts:
-            reimpl_count = stage.context.get("reimplementation_count", 0)
-            max_reimpl = stage.context.get("max_reimplementations", MAX_REIMPLEMENTATIONS)
-
             if reimpl_count < max_reimpl:
                 emit(
                     M.VFAL,
@@ -304,41 +341,24 @@ class ValidateTask(Task):
                     f"Re-implementing from scratch "
                     f"(reimplementation {reimpl_count + 1}/{max_reimpl})",
                 )
-                repair_history = previous[-max_attempts:]
-                reimpl_context: dict[str, Any] = {
-                    "previous_test_failures": output[:TEST_OUTPUT_LIMIT],
-                    "repair_history": repair_history,
-                    "failure_summary": (
-                        f"After {max_attempts} repair attempts, "
-                        f"these tests still fail:\n{output[:2000]}\n\n"
-                        f"Repair attempts tried:\n"
-                        + "\n---\n".join(f"Attempt {i + 1}: {f}" for i, f in enumerate(repair_history))
-                    ),
-                    "project_root": stage.context.get("project_root", os.getcwd()),
-                    "language_profile": profile_data,
-                }
-                propagate_context(stage.context, reimpl_context)
-                # Set after propagate to prevent stale values from overwriting.
-                reimpl_context["repair_attempt"] = 0
-                reimpl_context["reimplementation_count"] = reimpl_count + 1
-                increment_jump_count(reimpl_context)
-                return TaskResult.jump_to(
-                    stage.context.get("jump_implement_ref", "implement"),
-                    context=reimpl_context,
+                return self._jump_to_reimplementation(
+                    stage, output, updated_failures, reimpl_count,
+                    max_attempts, profile_data,
                 )
 
             emit(
                 M.VFAL,
                 f"All reimplementation attempts exhausted{mod_tag} "
                 f"({max_reimpl} reimplementations × {max_attempts} repairs). "
-                f"Pipeline FAILED.",
+                f"Continuing pipeline.",
             )
-            return TaskResult.terminal(
+            return TaskResult.failed_continue(
                 error=(
                     f"Tests still failing after {max_reimpl} reimplementations "
                     f"× {max_attempts} repairs = "
                     f"{max_reimpl * max_attempts} total attempts"
                 ),
+                outputs={"tests_passed": False, "all_attempts_exhausted": True},
             )
 
         emit(
@@ -367,6 +387,86 @@ class ValidateTask(Task):
             stage.context.get("jump_repair_ref", "repair"),
             context=repair_context,
         )
+
+    def _jump_to_reimplementation(
+        self,
+        stage: StageExecution,
+        output: str,
+        updated_failures: list[str],
+        reimpl_count: int,
+        max_attempts: int,
+        profile_data: dict[str, Any],
+    ) -> TaskResult:
+        """Build context and jump to the implement stage for a fresh attempt."""
+        repair_history = updated_failures[-max_attempts:]
+        reimpl_context: dict[str, Any] = {
+            "previous_test_failures": output[:TEST_OUTPUT_LIMIT],
+            "repair_history": repair_history,
+            "failure_summary": (
+                f"After {max_attempts} repair attempts, "
+                f"these tests still fail:\n{output[:2000]}\n\n"
+                f"Repair attempts tried:\n"
+                + "\n---\n".join(f"Attempt {i + 1}: {f}" for i, f in enumerate(repair_history))
+            ),
+            "project_root": stage.context.get("project_root", os.getcwd()),
+            "language_profile": profile_data,
+        }
+        propagate_context(stage.context, reimpl_context)
+        # Reset counters — fresh implementation gets a clean slate.
+        reimpl_context["repair_attempt"] = 0
+        reimpl_context["reimplementation_count"] = reimpl_count + 1
+        reimpl_context["previous_failures"] = []
+        increment_jump_count(reimpl_context)
+        return TaskResult.jump_to(
+            stage.context.get("jump_implement_ref", "implement"),
+            context=reimpl_context,
+        )
+
+    # Track which project roots have had dev deps installed to avoid
+    # re-running pip on every validate cycle (class-level cache).
+    _dev_deps_installed: set[str] = set()
+
+    @classmethod
+    def _install_dev_deps(cls, project_root: str, profile: object) -> None:
+        """Install dev dependencies (ruff, pytest-timeout, etc.) if missing."""
+        cache_key = project_root
+        if cache_key in cls._dev_deps_installed:
+            return
+        cls._dev_deps_installed.add(cache_key)
+
+        prefix = getattr(profile, "package_install_prefix", "")
+        deps = getattr(profile, "dev_dependencies", ())
+        if not prefix or not deps:
+            return
+
+        cmd_parts = prefix.split() + ["--quiet"] + list(deps)
+
+        # Use venv-aware env so pip installs into the project venv
+        env: dict[str, str] | None = None
+        for venv_dir in (".venv", "venv"):
+            venv_bin = os.path.join(project_root, venv_dir, "bin")
+            if os.path.isdir(venv_bin):
+                env = os.environ.copy()
+                env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
+                env["VIRTUAL_ENV"] = os.path.join(project_root, venv_dir)
+                env.pop("PYTHONHOME", None)
+                break
+
+        try:
+            result = subprocess.run(
+                cmd_parts,
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+            )
+            if result.returncode == 0:
+                logger.info("Installed dev dependencies: %s", ", ".join(deps))
+            else:
+                logger.warning("Failed to install dev deps: %s", result.stderr[:200])
+        except Exception as exc:
+            logger.warning("Dev dependency install error: %s", exc)
 
     @staticmethod
     def _check_syntax(

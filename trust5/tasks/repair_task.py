@@ -368,18 +368,29 @@ def _build_test_env(
     project_root: str,
     profile_data: dict[str, Any],
 ) -> dict[str, str] | None:
-    """Build subprocess env with source roots on the language path var."""
+    """Build subprocess env with venv activation and source roots."""
+    env: dict[str, str] | None = None
+
+    # Activate project virtualenv if present
+    for venv_dir in (".venv", "venv"):
+        venv_bin = os.path.join(project_root, venv_dir, "bin")
+        if os.path.isdir(venv_bin):
+            env = os.environ.copy()
+            env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
+            env["VIRTUAL_ENV"] = os.path.join(project_root, venv_dir)
+            env.pop("PYTHONHOME", None)
+            break
+
     source_roots = profile_data.get("source_roots", ())
     path_var = profile_data.get("path_env_var", "")
-    if not source_roots or not path_var:
-        return None
+    if source_roots and path_var:
+        for root in source_roots:
+            src_dir = os.path.join(project_root, root)
+            if os.path.isdir(src_dir):
+                if env is None:
+                    env = os.environ.copy()
+                existing = env.get(path_var, "")
+                env[path_var] = f"{src_dir}:{existing}" if existing else src_dir
+                break
 
-    for root in source_roots:
-        src_dir = os.path.join(project_root, root)
-        if os.path.isdir(src_dir):
-            env = os.environ.copy()
-            existing = env.get(path_var, "")
-            env[path_var] = f"{src_dir}:{existing}" if existing else src_dir
-            return env
-
-    return None
+    return env
