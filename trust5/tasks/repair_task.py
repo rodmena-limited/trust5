@@ -174,8 +174,80 @@ class RepairTask(Task):
         owned_files = stage.context.get("owned_files")
         test_files = stage.context.get("test_files")
 
+        # Detect missing/stub source files and prepend creation guidance.
+        # When owned source files don't exist (or contain only scaffold stubs),
+        # the root cause is that implementation never happened — not a bug to
+        # fix.  Tell the repairer explicitly so it creates files from scratch.
+        if owned_files:
+            missing_src: list[str] = []
+            stub_src: list[str] = []
+            for src_file in owned_files:
+                src_full = os.path.join(project_root, src_file)
+                if not os.path.exists(src_full):
+                    missing_src.append(src_file)
+                else:
+                    try:
+                        with open(src_full, encoding="utf-8") as fh:
+                            content = fh.read().strip()
+                        if len(content) < 100:
+                            lower = content.lower()
+                            if "implementation required" in lower:
+                                stub_src.append(src_file)
+                            elif not content or (content.startswith('"""') and content.endswith('"""')):
+                                stub_src.append(src_file)
+                    except OSError:
+                        pass
+
+            if missing_src or stub_src:
+                guidance_parts: list[str] = [
+                    "## CRITICAL: Source Files Need Implementation\n\n"
+                    "The test failures are caused by missing source code, not bugs. "
+                    "You MUST use the Write tool to create these files with COMPLETE implementations.\n\n"
+                ]
+                if missing_src:
+                    guidance_parts.append(
+                        f"Files that DO NOT EXIST (must be created): {missing_src}\n"
+                    )
+                if stub_src:
+                    guidance_parts.append(
+                        f"Files that are EMPTY STUBS (must be replaced with real code): {stub_src}\n"
+                    )
+                guidance_parts.append(
+                    "\nDo NOT try to extract or copy code from other modules' files. "
+                    "Write your implementation independently based on what the tests expect.\n\n"
+                )
+                user_prompt = "".join(guidance_parts) + user_prompt
+
+        # Cross-module interface hints: when errors involve TypeError or
+        # ImportError for classes/functions from OTHER modules, guide the
+        # repair agent to read the calling code and adapt its interface.
+        if owned_files and test_output:
+            cross_mod_hint = _build_cross_module_hint(test_output, owned_files)
+            if cross_mod_hint:
+                user_prompt = cross_mod_hint + user_prompt
+
         repair_thinking = "high" if repair_attempt >= 2 else "low"
         llm = LLM.for_tier("best", stage_name="repairer", thinking_level=repair_thinking)
+
+        # Integration repair (no owned_files) operates across all modules.
+        # It must be able to fix test infrastructure (imports, fixtures)
+        # to resolve cross-module mismatches, so test patterns are NOT denied.
+        # Per-module repair still denies test patterns (tests are the spec).
+        is_integration = owned_files is None
+        deny_tests = not is_integration
+
+        # Integration repair: override the "NO TEST MODIFICATION" prohibition.
+        # Integration has no owned_files and needs to fix cross-module issues
+        # including test infrastructure (imports, fixtures, conftest).
+        if is_integration:
+            system_prompt += (
+                "\n\n## Integration Mode Override\n\n"
+                "You are running in INTEGRATION mode (cross-module repair). "
+                "The normal 'NO TEST MODIFICATION' rule is RELAXED:\n"
+                "- You MAY fix test **imports**, **fixtures**, and **conftest** files.\n"
+                "- You MUST NOT change test **assertions** or **expected values**.\n"
+                "- Check all test files for inconsistent import paths and normalize them.\n"
+            )
 
         with mcp_clients() as mcp:
             agent = Agent(
@@ -184,8 +256,8 @@ class RepairTask(Task):
                 llm=llm,
                 non_interactive=True,
                 owned_files=owned_files,
-                denied_files=test_files,
-                deny_test_patterns=True,
+                denied_files=test_files if deny_tests else None,
+                deny_test_patterns=deny_tests,
                 mcp_clients=mcp,
             )
 
@@ -362,6 +434,47 @@ class RepairTask(Task):
             "what it expects, fix the implementation. After fixing, run "
             f"{verify_cmd} to verify."
         )
+
+
+def _build_cross_module_hint(test_output: str, owned_files: list[str]) -> str:
+    """Return a prompt hint when test errors suggest cross-module interface mismatches.
+
+    Per-module repair agents can only modify their own files but often fail
+    because their interface (constructor args, method names, return types) doesn't
+    match what tests or other modules expect.  This hint tells the agent to READ
+    the calling code (tests, other modules) and adapt its own interface.
+
+    Returns an empty string when no cross-module patterns are detected.
+    """
+    if not test_output:
+        return ""
+
+    lower = test_output.lower()
+
+    # Detect interface-mismatch error patterns.
+    indicators = [
+        "typeerror:" in lower and ("argument" in lower or "__init__" in lower),
+        "attributeerror:" in lower and "has no attribute" in lower,
+        "importerror: cannot import name" in lower,
+    ]
+    if not any(indicators):
+        return ""
+
+    owned_list = ", ".join(owned_files)
+    return (
+        "## Cross-Module Interface Mismatch Detected\n\n"
+        "The test errors suggest that YOUR module's interface (constructor parameters, "
+        "method signatures, exported names) does not match what the tests or other "
+        "modules expect.\n\n"
+        "**You MUST do the following before making changes:**\n"
+        "1. READ the failing test files to understand the EXPECTED interface "
+        "(constructor args, method names, return types).\n"
+        "2. READ any other source files that import from your module to see how "
+        "they call your code.\n"
+        "3. ADAPT your implementation to match the expected interface — the tests "
+        "are the specification, not your current code.\n\n"
+        f"Your files: {owned_list}\n\n"
+    )
 
 
 def _build_test_env(

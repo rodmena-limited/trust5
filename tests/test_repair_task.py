@@ -699,6 +699,62 @@ def test_repair_passes_plan_config_to_build_repair_prompt(
 # ── build_repair_prompt uses plan_config test_command ──────────────────────
 
 
+# ── _build_cross_module_hint tests ──────────────────────────────────────────
+
+
+class TestBuildCrossModuleHint:
+    """Tests for _build_cross_module_hint() which detects interface mismatches."""
+
+    def test_returns_empty_for_no_output(self):
+        from trust5.tasks.repair_task import _build_cross_module_hint
+
+        assert _build_cross_module_hint("", ["src/core.py"]) == ""
+
+    def test_detects_typeerror_with_argument(self):
+        from trust5.tasks.repair_task import _build_cross_module_hint
+
+        output = "TypeError: Worker.__init__() got an unexpected keyword argument 'queue'"
+        result = _build_cross_module_hint(output, ["celerylited/worker.py"])
+        assert "Cross-Module Interface Mismatch" in result
+        assert "celerylited/worker.py" in result
+
+    def test_detects_typeerror_missing_positional(self):
+        from trust5.tasks.repair_task import _build_cross_module_hint
+
+        output = "TypeError: __init__() missing 1 required positional argument: 'db_path'"
+        result = _build_cross_module_hint(output, ["src/broker.py"])
+        assert "Cross-Module Interface Mismatch" in result
+
+    def test_detects_attributeerror(self):
+        from trust5.tasks.repair_task import _build_cross_module_hint
+
+        output = "AttributeError: 'CeleryLite' object has no attribute 'task'"
+        result = _build_cross_module_hint(output, ["src/app.py"])
+        assert "Cross-Module Interface Mismatch" in result
+        assert "READ the failing test files" in result
+
+    def test_detects_importerror(self):
+        from trust5.tasks.repair_task import _build_cross_module_hint
+
+        output = "ImportError: cannot import name 'TaskWrapper' from 'celerylited.task'"
+        result = _build_cross_module_hint(output, ["celerylited/task.py"])
+        assert "Cross-Module Interface Mismatch" in result
+
+    def test_ignores_assertion_errors(self):
+        from trust5.tasks.repair_task import _build_cross_module_hint
+
+        output = "AssertionError: expected 42 but got 0"
+        result = _build_cross_module_hint(output, ["src/core.py"])
+        assert result == ""
+
+    def test_ignores_plain_test_failures(self):
+        from trust5.tasks.repair_task import _build_cross_module_hint
+
+        output = "FAILED test_add - assert 2 + 2 == 5"
+        result = _build_cross_module_hint(output, ["src/math.py"])
+        assert result == ""
+
+
 def test_build_repair_prompt_uses_plan_config_test_command():
     """When plan_config has test_command, it overrides the profile test_verify_command."""
     from trust5.core.context_builder import build_repair_prompt

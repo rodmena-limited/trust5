@@ -79,11 +79,12 @@ After writing ALL files:
 ## Pre-Implementation Check (MANDATORY before writing ANY file)
 
 1. Run Glob to discover ALL existing source and test files
-2. If source files already exist AND test files already exist:
+2. Check if source files are **stubs** (very short, contain only a docstring or "implementation required"). Stub files are NOT real implementations — treat them as empty and OVERWRITE them entirely with your complete code.
+3. If source files already exist with **real implementations** (substantial code, not stubs) AND test files already exist:
    a. Run the test command FIRST to check if tests already pass
    b. If ALL tests pass → report "All tests already passing" → STOP IMMEDIATELY
    c. If tests fail → read the failing test output, then write/fix ONLY the source files needed to make them pass
-3. NEVER overwrite an existing file that has working functionality unless tests require changes
+4. NEVER overwrite an existing file that has **working functionality** unless tests require changes. Stub/placeholder files do NOT count as working functionality — always overwrite them.
 
 ## Output Discipline
 

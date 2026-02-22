@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from stabilize import StageExecution, TaskExecution, Workflow
@@ -28,6 +29,8 @@ __all__ = [
 ]
 
 
+logger = logging.getLogger(__name__)
+
 # Primary extension per language — used to normalize extensionless paths from the planner.
 _LANG_EXT: dict[str, str] = {
     "python": ".py",
@@ -37,6 +40,25 @@ _LANG_EXT: dict[str, str] = {
     "rust": ".rs",
     "java": ".java",
     "ruby": ".rb",
+}
+
+# Minimal stub content per language.  The "{name}" placeholder is replaced with
+# the file's stem (basename without extension).  Stubs are intentionally tiny —
+# just enough for the agent to see the file exists and write its implementation there.
+_STUB_TEMPLATES: dict[str, str] = {
+    "python": '"""Module: {name} — implementation required."""\n',
+    "go": "package {package}\n",
+    "typescript": "// Module: {name} — implementation required.\nexport {{}};\n",
+    "javascript": "// Module: {name} — implementation required.\nmodule.exports = {{}};\n",
+    "rust": "// Module: {name} — implementation required.\n",
+    "java": "// Module: {name} — implementation required.\n",
+    "ruby": "# Module: {name} — implementation required.\n",
+}
+_DEFAULT_STUB = "// Implementation required.\n"
+
+# Languages that require package marker files in every directory for imports to work.
+_PACKAGE_MARKERS: dict[str, str] = {
+    "python": "__init__.py",
 }
 
 
@@ -68,6 +90,107 @@ def _ensure_ext(path: str, default_ext: str) -> str:
     return path + default_ext
 
 
+def _scaffold_module_files(
+    modules: list[ModuleSpec],
+    project_root: str,
+    language: str,
+) -> None:
+    """Pre-create minimal stub files for each module's owned source files.
+
+    Parallel agents that start without a visible target file tend to write
+    all functionality into a single facade file (e.g. ``__init__.py``), then
+    other modules fail because they try to modify the facade instead of
+    creating their own files.  Pre-creating stubs anchors each agent to its
+    own files.
+
+    Rules:
+    - Only source files (``mod.files``) are stubbed — never ``mod.test_files``.
+    - Existing files are never overwritten (safe for resume / incremental runs).
+    - Parent directories are created as needed.
+    - For Python, ``__init__.py`` package markers are created in every
+      intermediate directory that doesn't already have one.
+    """
+    stub_template = _STUB_TEMPLATES.get(language, _DEFAULT_STUB)
+    package_marker_name = _PACKAGE_MARKERS.get(language)
+    marker_dirs_needed: set[str] = set()
+
+    for mod in modules:
+        for file_path in mod.files or []:
+            full_path = os.path.join(project_root, file_path)
+
+            # Create parent directories
+            parent_dir = os.path.dirname(full_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+
+            # Collect intermediate directories for package marker creation
+            if package_marker_name:
+                parts = file_path.replace("\\", "/").split("/")
+                for i in range(1, len(parts)):
+                    marker_dirs_needed.add("/".join(parts[:i]))
+
+            # Create stub file only if it doesn't already exist
+            if os.path.exists(full_path):
+                continue
+
+            basename = os.path.splitext(os.path.basename(file_path))[0]
+            if language == "go":
+                dir_name = os.path.basename(os.path.dirname(file_path)) or "main"
+                content = stub_template.format(package=dir_name, name=basename)
+            else:
+                content = stub_template.format(name=basename)
+
+            try:
+                with open(full_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                logger.info("Scaffolded stub: %s", file_path)
+            except OSError:
+                logger.warning("Failed to scaffold stub: %s", file_path)
+
+    # Create package marker files (__init__.py) in intermediate directories.
+    if package_marker_name:
+        for dir_path in sorted(marker_dirs_needed):
+            marker_rel = f"{dir_path}/{package_marker_name}"
+            marker_full = os.path.join(project_root, marker_rel)
+            if not os.path.exists(marker_full):
+                os.makedirs(os.path.dirname(marker_full) or project_root, exist_ok=True)
+                try:
+                    with open(marker_full, "w", encoding="utf-8") as f:
+                        f.write("")
+                    logger.info("Created package marker: %s", marker_rel)
+                except OSError:
+                    logger.warning("Failed to create package marker: %s", marker_rel)
+
+
+# Reverse map: extension → language (inverted from _LANG_EXT).
+_EXT_TO_LANG: dict[str, str] = {ext: lang for lang, ext in _LANG_EXT.items()}
+
+
+def _infer_language_from_modules(modules: list[ModuleSpec]) -> str:
+    """Infer the project language from module file extensions.
+
+    When ``detect_language()`` returns ``"unknown"`` (no manifest files in a
+    greenfield project), we fall back to checking what extensions the planner
+    assigned to source files.  If all files share the same recognized extension,
+    we use that language.
+    """
+    from collections import Counter
+
+    ext_counts: Counter[str] = Counter()
+    for mod in modules:
+        for f in mod.files or []:
+            _, ext = os.path.splitext(f)
+            if ext:
+                ext_counts[ext.lower()] += 1
+
+    if not ext_counts:
+        return "unknown"
+
+    # Most common extension wins
+    most_common_ext, _ = ext_counts.most_common(1)[0]
+    return _EXT_TO_LANG.get(most_common_ext, "unknown")
+
+
 def _load_development_mode(project_root: str) -> str:
     try:
         mgr = ConfigManager(project_root)
@@ -91,12 +214,23 @@ def create_parallel_develop_workflow(
 
     project_root = os.getcwd()
     language = detect_language(project_root)
+
+    # Greenfield projects have no manifest files yet so detect_language
+    # returns "unknown".  Fall back to inferring from module file extensions.
+    if language == "unknown":
+        language = _infer_language_from_modules(modules)
+
     profile = get_profile(language)
     profile_dict = profile.to_dict()
 
     # Normalize paths BEFORE building stages so the test-writer receives
     # proper file paths (e.g. "tests/test_task.py" not "tests/test_task").
     _normalize_module_paths(modules, profile_dict)
+
+    # Pre-create stub files so parallel agents see their target files
+    # and write implementations there instead of trying to modify other
+    # modules' files (the "facade collision" anti-pattern).
+    _scaffold_module_files(modules, project_root, language)
 
     dev_mode = _load_development_mode(project_root)
     use_tdd = dev_mode in ("tdd", "hybrid")
@@ -125,12 +259,24 @@ def create_parallel_develop_workflow(
     stages.append(setup)
 
     validate_ref_ids: set[str] = set()
+    repair_ref_ids: set[str] = set()
 
-    # Give each module the full jump budget.  With FAILED_CONTINUE at the
-    # jump limit (not TERMINAL), a stuck module no longer blocks other modules.
-    # Protection comes from: per-module cap + TIMEOUT_DEVELOP + max_repair ×
-    # max_reimplementations.  Integration and quality stages also get full budget.
-    per_module_jumps = MAX_REPAIR_JUMPS
+    # Per-module budget is intentionally lower than the serial pipeline budget.
+    # In parallel pipelines, cross-module interface mismatches are the primary
+    # failure mode, and per-module repair *cannot* fix them (it can only modify
+    # its own files).  A shorter budget lets integration_validate/repair kick
+    # in sooner — those stages run WITHOUT owned_files and CAN fix cross-module
+    # issues.  30 jumps still allows 2 full reimplementation cycles.
+    per_module_jumps = min(MAX_REPAIR_JUMPS, 30)
+
+    # Collect all test files for cross-module interface visibility.
+    # Each implementer will see OTHER modules' test files so it can read
+    # them and understand what interface callers expect (constructor args,
+    # column names, method signatures).
+    all_module_tests: dict[str, list[str]] = {}
+    for mod in modules:
+        if mod.test_files:
+            all_module_tests[mod.name] = list(mod.test_files)
 
     for mod in modules:
         mid = mod.id
@@ -144,6 +290,12 @@ def create_parallel_develop_workflow(
         val_ref = f"validate_{mid}"
         rep_ref = f"repair_{mid}"
 
+        # Other modules' test files — for cross-module interface awareness
+        other_tests = {
+            name: files for name, files in all_module_tests.items()
+            if name != mod.name
+        } or None
+
         module_context = {
             "jump_repair_ref": rep_ref,
             "jump_validate_ref": val_ref,
@@ -151,6 +303,7 @@ def create_parallel_develop_workflow(
             "test_files": mod.test_files or None,
             "owned_files": mod.files or None,
             "module_name": mod.name,
+            "cross_module_tests": other_tests,
         }
 
         if use_tdd:
@@ -253,6 +406,7 @@ def create_parallel_develop_workflow(
         )
         stages.append(validate)
         validate_ref_ids.add(val_ref)
+        repair_ref_ids.add(rep_ref)
 
         repair = StageExecution(
             ref_id=rep_ref,
@@ -305,7 +459,11 @@ def create_parallel_develop_workflow(
         type="validate",
         name="Integration Validate (All Tests)",
         context=int_val_ctx,
-        requisite_stage_ref_ids=validate_ref_ids,
+        # Depend on BOTH validate AND repair stages.  When validate
+        # uses jump_to(repair), the jump handler bypasses the normal
+        # CompleteStageHandler→AND-join check.  Adding repair refs
+        # ensures integration starts when the last repair finishes.
+        requisite_stage_ref_ids=validate_ref_ids | repair_ref_ids,
         tasks=[
             TaskExecution.create(
                 name="Run All Tests",

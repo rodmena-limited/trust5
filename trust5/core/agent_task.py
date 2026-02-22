@@ -71,6 +71,44 @@ def _collect_ancestor_outputs(context: dict[str, Any]) -> list[str]:
     return sections
 
 
+# Minimum content length (bytes) for a file to be considered "implemented".
+# Stubs from _scaffold_module_files are ~50 chars; real implementations
+# are typically 200+ chars.  The threshold must be low enough to catch
+# empty/stub files but high enough to avoid false positives on legitimate
+# small files (e.g. __init__.py re-exports, constants modules).
+_STUB_THRESHOLD = 100
+
+
+def _detect_stub_files(owned_files: list[str], project_root: str) -> list[str]:
+    """Return owned files that are still stubs (missing, empty, or scaffold-only).
+
+    A file is considered a stub if:
+    - It doesn't exist on disk, OR
+    - Its content is shorter than _STUB_THRESHOLD chars AND contains
+      "implementation required" (the scaffold marker), OR
+    - Its content is shorter than _STUB_THRESHOLD chars AND consists
+      only of a module docstring (no actual code)
+    """
+    stubs: list[str] = []
+    for rel_path in owned_files:
+        full = os.path.join(project_root, rel_path)
+        if not os.path.exists(full):
+            stubs.append(rel_path)
+            continue
+        try:
+            with open(full, encoding="utf-8") as fh:
+                content = fh.read().strip()
+        except OSError:
+            continue
+        if len(content) < _STUB_THRESHOLD:
+            lower = content.lower()
+            if "implementation required" in lower:
+                stubs.append(rel_path)
+            elif not content or content.startswith('"""') and content.endswith('"""'):
+                stubs.append(rel_path)
+    return stubs
+
+
 _TDD_GREEN_PHASE_INSTRUCTIONS = (
     "## TDD GREEN PHASE (auto-injected)\n\n"
     "Test files already exist from the RED phase. Your job is to:\n"
@@ -176,10 +214,13 @@ class AgentTask(Task):
                 files_list = "\n".join(f"- {f}" for f in effective_owned)
                 ownership_lines.append(
                     f"## Your Module Files{header}\n\n"
-                    f"You MUST ONLY create/modify these files:\n{files_list}\n\n"
-                    f"Do NOT create, modify, or delete files owned by other modules.\n"
-                    f"If you need functionality from another module, import it — "
-                    f"do not duplicate it.\n\n"
+                    f"You MUST create/modify ONLY these files:\n{files_list}\n\n"
+                    f"**CRITICAL — Parallel Module Rules:**\n"
+                    f"- CREATE each of your files from scratch with your COMPLETE implementation.\n"
+                    f"- Your files may already exist as placeholder stubs — OVERWRITE them with your full code.\n"
+                    f"- NEVER try to modify, extract from, or move code from files owned by other modules.\n"
+                    f"- Even if you see related code in other modules, write YOUR implementation independently.\n"
+                    f"- If you need functionality from another module, import it — do not duplicate it.\n\n"
                 )
             if denied_for_agent:
                 denied_list = "\n".join(f"- {f}" for f in denied_for_agent)
@@ -196,6 +237,30 @@ class AgentTask(Task):
                 len(effective_owned),
                 len(denied_for_agent),
             )
+
+        # Cross-module test visibility: tell implementers/repairers about
+        # OTHER modules' test files so they can read them and match the
+        # expected interface (constructor args, column names, method names).
+        cross_module_tests = stage.context.get("cross_module_tests")
+        if cross_module_tests and is_implementer_or_repairer:
+            cm_lines = [
+                "## Cross-Module Interface Reference\n\n"
+                "Other modules' tests may import from YOUR code. "
+                "Before implementing, READ these test files (especially their "
+                "import statements and setup code) to understand what interface "
+                "they expect — constructor parameters, method names, database "
+                "column names, return types:\n\n"
+            ]
+            for cm_mod, cm_files in cross_module_tests.items():
+                for tf in cm_files:
+                    cm_lines.append(f"- {tf} ({cm_mod} module)\n")
+            cm_lines.append(
+                "\n**CRITICAL**: Your implementation must be compatible with "
+                "ALL tests across all modules, not just your own module's "
+                "tests. Mismatched interfaces are the #1 cause of pipeline "
+                "failure in parallel builds.\n\n"
+            )
+            user_input = "".join(cm_lines) + user_input
 
         if not agent_name or not prompt_file:
             return TaskResult.terminal(error="AgentTask requires 'agent_name' and 'prompt_file' in context")
@@ -297,6 +362,33 @@ class AgentTask(Task):
                         raise TransientError(
                             f"Planner {agent_name} returned empty output",
                             retry_after=30.0,
+                        )
+
+                # Post-execution verification for implementer agents:
+                # Check that owned source files were actually written.
+                # Without this, the LLM can exhaust its turns without writing
+                # any code, return "success", and waste 10+ validate/repair
+                # cycles on files that were never implemented.
+                if is_implementer_or_repairer and effective_owned:
+                    still_stubs = _detect_stub_files(effective_owned, project_root)
+                    if still_stubs:
+                        stub_list = ", ".join(still_stubs)
+                        emit(
+                            M.SWRN,
+                            f"[{agent_name}] Agent finished but {len(still_stubs)} "
+                            f"source file(s) are still stubs: {stub_list}",
+                        )
+                        return TaskResult.failed_continue(
+                            error=(
+                                f"Agent {agent_name} did not write implementation code. "
+                                f"Files still empty/stubs: {still_stubs}"
+                            ),
+                            outputs={
+                                "result": result,
+                                output_key: result,
+                                "stub_files": still_stubs,
+                                "implementation_missing": True,
+                            },
                         )
 
                 return TaskResult.success(outputs={"result": result, output_key: result})

@@ -26,12 +26,22 @@ Write test files that define the expected behavior described in the plan. These 
 3. Write ONLY test files and test infrastructure using the Write tool. NEVER write source/implementation code.
 4. Each acceptance criterion in the plan MUST map to at least one test function. Name tests `test_ac{N}_description` to enable SPEC compliance tracking (e.g., `test_ac1_returns_json`, `test_ac3_handles_invalid_input`).
 5. Test both happy paths AND error/edge cases.
-6. Import from the expected module paths (even though modules don't exist yet).
+6. Import from the expected module paths (even though modules don't exist yet). See "Import Path Convention" below.
 7. Use standard test conventions for the project language (see Project Language section).
 8. DO NOT run the tests. They are expected to fail since there is no implementation.
 9. NEVER use AskUserQuestion. Make all decisions yourself.
 10. Target max 400 lines per test file (hard limit 500).
 11. Create the test directory structure and any required conftest/setup files.
+
+## Import Path Convention
+
+Before writing import statements, check the project's test configuration to determine the correct import base path:
+
+1. Read `pytest.ini`, `setup.cfg`, or `pyproject.toml` for a `pythonpath` setting (e.g., `pythonpath = src`).
+2. If `pythonpath = src`, the `src/` directory is on the Python path. Import as `from package.module import X`, NOT `from src.package.module import X`.
+3. If the project uses a `src/` layout, the `src/` prefix is NOT part of the import path.
+4. Check existing test files (if any) for the import convention already in use and follow it consistently.
+5. All test files in this project MUST use the same import convention.
 
 ## Test Infrastructure Setup
 

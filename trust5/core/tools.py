@@ -165,9 +165,11 @@ class Tools:
             return None
         if real_path in self._owned_files:
             return None
+        owned_list = sorted(self._owned_files)
         return (
-            f"BLOCKED: Write to {real_path} denied — file not in owned_files. "
-            f"This module may only write to: {sorted(self._owned_files)}"
+            f"BLOCKED: Write to {real_path} denied — this file is owned by another module. "
+            f"Do NOT attempt to modify files outside your ownership. "
+            f"Instead, write your implementation from scratch into YOUR files: {owned_list}"
         )
 
     @staticmethod

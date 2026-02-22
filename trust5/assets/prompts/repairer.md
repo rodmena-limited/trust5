@@ -60,6 +60,7 @@ Repair sessions have a HARD turn limit. Wasting turns on repeated failures means
 - **Wrong return type**: Match the type the test asserts
 - **Logic error**: Trace through the test input and fix the logic path
 - **Import / ModuleNotFoundError**: If the module file EXISTS but can't be imported, the project likely uses a non-flat layout (source in a subdirectory). Do NOT rename files or blindly change import statements. Instead: (1) Check the PROJECT LAYOUT section in the prompt for details. (2) If import/module resolution fails, check whether the project needs source root configuration per the Project Language section (path env var and source roots). (3) If the module truly doesn't exist, create it.
+- **Dual import path / isinstance failures**: If `isinstance()` returns `False` even though the object appears to be the correct type, check for dual import paths. This happens when tests use `from src.package.X import Y` while source code uses `from package.X import Y`. Read `pytest.ini` or `pyproject.toml` for the `pythonpath` setting and fix the source code imports to match (source code should import relative to `pythonpath`).
 - **Circular import**: Move shared types to a separate module, use late imports, or restructure
 - **File not found at runtime**: Check the WORKING DIRECTORY in the prompt. All paths are relative to it. Never use `/testbed` or hardcoded absolute paths.
 

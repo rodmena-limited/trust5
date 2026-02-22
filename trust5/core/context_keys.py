@@ -26,6 +26,7 @@ PROPAGATED_CONTEXT_KEYS: tuple[str, ...] = (
     "repair_attempt",
     "_max_jumps",
     "_jump_count",
+    "cross_module_tests",
 )
 
 

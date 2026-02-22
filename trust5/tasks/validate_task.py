@@ -303,6 +303,7 @@ class ValidateTask(Task):
             max_attempts,
             "test",
             profile_data,
+            test_pass_count=test_result.get("total", 0),
         )
 
     def _handle_failure(
@@ -313,6 +314,7 @@ class ValidateTask(Task):
         max_attempts: int,
         failure_type: str,
         profile_data: dict[str, Any],
+        test_pass_count: int = 0,
     ) -> TaskResult:
         previous = stage.context.get("previous_failures", [])
         summary = output[:500]
@@ -323,6 +325,16 @@ class ValidateTask(Task):
         # Check reimplementation budget — shared by both escalation paths.
         reimpl_count = stage.context.get("reimplementation_count", 0)
         max_reimpl = stage.context.get("max_reimplementations", MAX_REIMPLEMENTATIONS)
+
+        # ── Stagnation detection ────────────────────────────────────────
+        # Track test pass count across reimplementation cycles.  If a full
+        # reimpl cycle (implement + N repairs) didn't improve the pass count,
+        # per-module repair is stuck on cross-module issues and further
+        # reimplementations won't help.  Bail out to let integration repair
+        # handle it instead of burning through the entire jump budget.
+        prev_pass_count = stage.context.get("_best_pass_count", 0)
+        if test_pass_count > prev_pass_count:
+            stage.context["_best_pass_count"] = test_pass_count
 
         # Detect repeated identical failures (same error N times in a row).
         # Instead of giving up, trigger reimplementation — repair can't fix a
@@ -358,6 +370,33 @@ class ValidateTask(Task):
 
         if attempt >= max_attempts:
             if reimpl_count < max_reimpl:
+                # Stagnation check: if a full reimplementation cycle didn't
+                # improve the test pass count, per-module repair is stuck
+                # (likely cross-module interface issues).  Skip remaining
+                # reimplementations and let integration repair handle it.
+                reimpl_start_pass = stage.context.get("_reimpl_start_pass_count", 0)
+                best_pass = stage.context.get("_best_pass_count", 0)
+                if reimpl_count > 0 and best_pass <= reimpl_start_pass:
+                    emit(
+                        M.VFAL,
+                        f"Stagnation detected{mod_tag}: pass count unchanged "
+                        f"({best_pass}) after reimplementation {reimpl_count}. "
+                        f"Skipping remaining reimplementations — "
+                        f"integration repair will handle cross-module issues.",
+                    )
+                    return TaskResult.failed_continue(
+                        error=(
+                            f"Stagnation: test pass count unchanged ({best_pass}) "
+                            f"after {reimpl_count} reimplementation(s). "
+                            f"Per-module repair exhausted."
+                        ),
+                        outputs={
+                            "tests_passed": False,
+                            "stagnation_detected": True,
+                            "best_pass_count": best_pass,
+                        },
+                    )
+
                 emit(
                     M.VFAL,
                     f"Repair exhausted ({max_attempts} attempts).{mod_tag} "
@@ -439,6 +478,9 @@ class ValidateTask(Task):
         reimpl_context["repair_attempt"] = 0
         reimpl_context["reimplementation_count"] = reimpl_count + 1
         reimpl_context["previous_failures"] = []
+        # Snapshot current best pass count so stagnation detection can
+        # compare after this reimplementation cycle completes.
+        reimpl_context["_reimpl_start_pass_count"] = stage.context.get("_best_pass_count", 0)
         increment_jump_count(reimpl_context)
         return TaskResult.jump_to(
             stage.context.get("jump_implement_ref", "implement"),

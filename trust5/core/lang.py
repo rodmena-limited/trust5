@@ -135,6 +135,19 @@ def build_language_context(profile: LanguageProfile) -> str:
     manifests = ", ".join(profile.manifest_files) if profile.manifest_files else "(none)"
     path_var = profile.path_env_var or "(none)"
 
+    # Import convention guidance based on source roots.
+    if profile.source_roots:
+        roots = ", ".join(f"`{r}/`" for r in profile.source_roots)
+        import_convention = (
+            f"\n**Import Convention:** This project uses a source-root layout ({roots}). "
+            f"The source root directory is added to the module path at runtime. "
+            f"Imports MUST NOT include the source root prefix. "
+            f"For example, if source root is `src/` and the package is `mylib`, "
+            f"import as `from mylib.module import X`, NOT `from src.mylib.module import X`.\n"
+        )
+    else:
+        import_convention = ""
+
     lang_upper = profile.language.upper()
 
     # Package markers: only mention them for languages that have them.
@@ -178,6 +191,7 @@ def build_language_context(profile: LanguageProfile) -> str:
         f"- Manifest files: {manifests}\n"
         f"{pkg_markers}"
         f"{fw_line}"
+        f"{import_convention}"
         f"\nIMPORTANT: The working directory is the project root. "
         f"Do NOT cd to /testbed or other paths. "
         f"STOP immediately after tests pass and files are verified — "
