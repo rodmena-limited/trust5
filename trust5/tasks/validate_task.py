@@ -31,6 +31,7 @@ from .validate_helpers import (
     _scope_lint_command,
     _scope_test_command,
     _strip_nonexistent_files,
+    detect_cross_module_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -321,6 +322,37 @@ class ValidateTask(Task):
         updated_failures = previous + [summary]
         module_name = stage.context.get("module_name", "")
         mod_tag = f" [{module_name}]" if module_name else ""
+
+        # ── Early bail on cross-module interface mismatches ──────────────
+        # In parallel pipelines (owned_files is set), per-module repair
+        # cannot fix cross-module interface issues.  If the test output
+        # shows cross-module patterns (TypeError/AttributeError/ImportError
+        # with interface-related messages) AND the pass count hasn't
+        # improved in the last 2 attempts, bail early to let integration
+        # repair handle it — don't burn the full per-module budget.
+        owned_files = stage.context.get("owned_files")
+        if owned_files and attempt >= 2:
+            if detect_cross_module_failure(output):
+                prev_pass_count = stage.context.get("_best_pass_count", 0)
+                if test_pass_count <= prev_pass_count:
+                    emit(
+                        M.VFAL,
+                        f"Cross-module interface mismatch detected{mod_tag}. "
+                        f"Per-module repair cannot fix this (pass count: {test_pass_count}, "
+                        f"best: {prev_pass_count}). "
+                        f"Bailing to integration repair.",
+                    )
+                    return TaskResult.failed_continue(
+                        error=(
+                            f"Cross-module interface mismatch: per-module repair cannot fix. "
+                            f"Test pass count stagnant at {test_pass_count}."
+                        ),
+                        outputs={
+                            "tests_passed": False,
+                            "cross_module_stagnation": True,
+                            "best_pass_count": max(test_pass_count, prev_pass_count),
+                        },
+                    )
 
         # Check reimplementation budget — shared by both escalation paths.
         reimpl_count = stage.context.get("reimplementation_count", 0)

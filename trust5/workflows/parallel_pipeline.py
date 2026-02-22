@@ -7,7 +7,7 @@ import os
 
 from stabilize import StageExecution, TaskExecution, Workflow
 
-from ..core.config import ConfigManager
+from ..core.config import ConfigManager  # noqa: F401
 from ..core.lang import detect_language, get_profile
 from ..tasks.validate_helpers import _SOURCE_EXTENSIONS
 from .module_spec import (
@@ -18,7 +18,7 @@ from .module_spec import (
     extract_plan_output,
     parse_modules,
 )
-from .pipeline import MAX_REPAIR_JUMPS, _load_code_review_enabled, _load_mutation_enabled
+from .pipeline import _load_code_review_enabled, _load_mutation_enabled, _load_pipeline_limits
 
 # Re-export so existing ``from trust5.workflows.parallel_pipeline import ...`` keeps working.
 __all__ = [
@@ -213,6 +213,7 @@ def create_parallel_develop_workflow(
     _validate_module_completeness(modules)
 
     project_root = os.getcwd()
+    limits = _load_pipeline_limits(project_root)
     language = detect_language(project_root)
 
     # Greenfield projects have no manifest files yet so detect_language
@@ -267,7 +268,7 @@ def create_parallel_develop_workflow(
     # its own files).  A shorter budget lets integration_validate/repair kick
     # in sooner — those stages run WITHOUT owned_files and CAN fix cross-module
     # issues.  30 jumps still allows 2 full reimplementation cycles.
-    per_module_jumps = min(MAX_REPAIR_JUMPS, 30)
+    per_module_jumps = limits["per_module_max_jumps"]
 
     # Collect all test files for cross-module interface visibility.
     # Each implementer will see OTHER modules' test files so it can read
@@ -318,6 +319,7 @@ def create_parallel_develop_workflow(
                 "development_mode": dev_mode,
                 "pipeline_phase": "run",
                 "ancestor_outputs": {"plan": plan_output},
+                "plan_output": plan_output,
                 **module_context,
             }
             if plan_config_dict:
@@ -353,6 +355,7 @@ def create_parallel_develop_workflow(
             "development_mode": dev_mode,
             "test_first_completed": use_tdd,
             "ancestor_outputs": {"plan": plan_output},
+            "plan_output": plan_output,
             **module_context,
         }
         if plan_config_dict:
@@ -377,8 +380,8 @@ def create_parallel_develop_workflow(
 
         validate_ctx: dict[str, object] = {
             "project_root": project_root,
-            "max_repair_attempts": 5,
-            "max_reimplementations": 3,
+            "max_repair_attempts": limits["max_repair_attempts"],
+            "max_reimplementations": limits["max_reimplementations"],
             "_max_jumps": per_module_jumps,
             "language_profile": profile_dict,
             "pipeline_phase": "run",
@@ -439,9 +442,9 @@ def create_parallel_develop_workflow(
 
     int_val_ctx: dict[str, object] = {
         "project_root": project_root,
-        "max_repair_attempts": 5,
+        "max_repair_attempts": limits["max_repair_attempts"],
         "max_reimplementations": 2,
-        "_max_jumps": MAX_REPAIR_JUMPS,
+        "_max_jumps": limits["max_jumps"],
         "language_profile": profile_dict,
         "pipeline_phase": "run",
         "development_mode": dev_mode,
@@ -481,7 +484,7 @@ def create_parallel_develop_workflow(
         name="Integration Repair (Cross-Module Fix)",
         context={
             "project_root": project_root,
-            "_max_jumps": MAX_REPAIR_JUMPS,
+            "_max_jumps": limits["max_jumps"],
             "language_profile": profile_dict,
             "development_mode": dev_mode,
             "jump_repair_ref": "integration_repair",
@@ -562,7 +565,7 @@ def create_parallel_develop_workflow(
         "project_root": project_root,
         "quality_attempt": 0,
         "max_quality_attempts": 3,
-        "_max_jumps": MAX_REPAIR_JUMPS,
+        "_max_jumps": limits["max_jumps"],
         "language_profile": profile_dict,
         "pipeline_phase": "run",
         "development_mode": dev_mode,

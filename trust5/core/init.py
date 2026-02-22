@@ -106,6 +106,10 @@ max_lint_errors: 0
 max_warnings: 10
 max_security_warnings: 0
 max_quality_repairs: 3
+max_jumps: 50
+per_module_max_jumps: 30
+max_repair_attempts: 5
+max_reimplementations: 3
 enforce_quality: true
 """)
 

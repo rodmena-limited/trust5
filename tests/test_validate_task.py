@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from stabilize.models.status import WorkflowStatus
 
+from trust5.tasks.validate_helpers import detect_cross_module_failure
 from trust5.tasks.validate_task import (
     MAX_REIMPLEMENTATIONS,
     ValidateTask,
@@ -1652,3 +1653,180 @@ def test_validate_auto_derives_test_files_when_planned_missing(tmp_path):
     test_cmd_str = " ".join(str(a) for a in test_calls[0].args[0])
     # Should auto-derive and find test_distributions.py
     assert "test_distributions.py" in test_cmd_str
+
+
+
+# ── detect_cross_module_failure tests ─────────────────────────────────────
+
+
+def test_detect_cross_module_failure_typeerror_argument():
+    """TypeError with 'argument' keyword triggers cross-module detection."""
+    output = (
+        "FAILED test_engine.py::test_create\n"
+        "TypeError: __init__() got an unexpected keyword argument 'task_name'\n"
+        "2 passed, 1 failed"
+    )
+    assert detect_cross_module_failure(output) is True
+
+
+def test_detect_cross_module_failure_typeerror_init():
+    """TypeError with '__init__' triggers cross-module detection."""
+    output = "TypeError: TaskQueue.__init__() takes 1 positional argument but 2 were given"
+    assert detect_cross_module_failure(output) is True
+
+
+def test_detect_cross_module_failure_attributeerror():
+    """AttributeError with 'has no attribute' triggers cross-module detection."""
+    output = "AttributeError: 'Engine' object has no attribute 'run_task'"
+    assert detect_cross_module_failure(output) is True
+
+
+def test_detect_cross_module_failure_importerror():
+    """ImportError with 'cannot import name' triggers cross-module detection."""
+    output = "ImportError: cannot import name 'TaskQueue' from 'taskqueue'"
+    assert detect_cross_module_failure(output) is True
+
+
+def test_detect_cross_module_failure_assertion_error():
+    """Normal AssertionError does NOT trigger cross-module detection."""
+    output = "AssertionError: expected 5 but got 3"
+    assert detect_cross_module_failure(output) is False
+
+
+def test_detect_cross_module_failure_generic_typeerror():
+    """TypeError without 'argument' or '__init__' does NOT trigger detection."""
+    output = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
+    assert detect_cross_module_failure(output) is False
+
+
+def test_detect_cross_module_failure_empty_output():
+    """Empty output returns False."""
+    assert detect_cross_module_failure("") is False
+    assert detect_cross_module_failure(None) is False  # type: ignore[arg-type]
+
+
+def test_detect_cross_module_failure_attributeerror_without_has_no():
+    """AttributeError without 'has no attribute' does NOT trigger."""
+    output = "AttributeError: module 'os' has attribute 'path'"
+    assert detect_cross_module_failure(output) is False
+
+
+# ── Cross-module early bail in validate_task ──────────────────────────────
+
+
+def _subprocess_cross_module_fail(*args, **kwargs):
+    """subprocess.run mock: syntax/lint OK, tests fail with cross-module TypeError."""
+    cmd = args[0] if args else kwargs.get("args", [])
+    cmd_str = " ".join(cmd)
+    if "compileall" in cmd_str:
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = ""
+        result.stderr = ""
+        return result
+    if "ruff" in cmd_str:
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = ""
+        result.stderr = ""
+        return result
+    # Tests fail with cross-module pattern
+    result = MagicMock()
+    result.returncode = 1
+    result.stdout = (
+        "FAILED test_engine.py::test_create_task\n"
+        "TypeError: __init__() got an unexpected keyword argument 'task_name'\n"
+        "2 passed, 3 failed"
+    )
+    result.stderr = ""
+    return result
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_cross_module_fail)
+def test_cross_module_failure_bails_early(mock_run, mock_emit_block, mock_emit):
+    """When cross-module interface mismatch detected in parallel pipeline with stagnant
+    pass count, bail early with FAILED_CONTINUE + cross_module_stagnation=True."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 2,  # 3rd attempt (>= 2)
+            "owned_files": ["src/engine.py"],  # parallel pipeline
+            "_best_pass_count": 5,  # no improvement (test total is 5)
+        }
+    )
+
+    result = task.execute(stage)
+
+    assert result.status == WorkflowStatus.FAILED_CONTINUE
+    assert result.outputs.get("cross_module_stagnation") is True
+    assert result.outputs.get("tests_passed") is False
+    assert result.outputs.get("best_pass_count") == 5
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_cross_module_fail)
+def test_cross_module_failure_no_bail_on_first_attempts(mock_run, mock_emit_block, mock_emit):
+    """Cross-module patterns on attempt 0 or 1 should NOT bail early — give repair a chance."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 1,  # only 2nd attempt, not >= 2
+            "owned_files": ["src/engine.py"],
+            "_best_pass_count": 5,
+        }
+    )
+
+    result = task.execute(stage)
+
+    # Should jump to repair, not bail
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "repair"
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_cross_module_fail)
+def test_cross_module_failure_no_bail_without_owned_files(mock_run, mock_emit_block, mock_emit):
+    """Cross-module patterns in serial pipeline (no owned_files) should NOT bail early."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 2,
+            # No owned_files — serial pipeline
+            "_best_pass_count": 5,
+        }
+    )
+
+    result = task.execute(stage)
+
+    # Should jump to repair normally, not bail
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "repair"
+
+
+@patch("trust5.tasks.validate_task.emit")
+@patch("trust5.tasks.validate_task.emit_block")
+@patch("trust5.tasks.validate_task.subprocess.run", side_effect=_subprocess_cross_module_fail)
+def test_cross_module_failure_no_bail_when_improving(mock_run, mock_emit_block, mock_emit):
+    """Cross-module patterns with improving pass count should NOT bail — still making progress."""
+    task = ValidateTask()
+    stage = make_stage(
+        {
+            "project_root": "/tmp/proj",
+            "repair_attempt": 2,
+            "owned_files": ["src/engine.py"],
+            "_best_pass_count": 3,  # lower than current total (5), so improving
+        }
+    )
+
+    result = task.execute(stage)
+
+    # Should jump to repair, not bail (test_pass_count=5 > prev_pass_count=3)
+    assert result.status == WorkflowStatus.REDIRECT
+    assert result.target_stage_ref_id == "repair"

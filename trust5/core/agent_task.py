@@ -63,11 +63,23 @@ def _collect_ancestor_outputs(context: dict[str, Any]) -> list[str]:
         "agent_output": "Previous Stage Output",
     }
     sections: list[str] = []
+    seen_keys: set[str] = set()
     for key in (*_STAGE_OUTPUT_KEYS, "agent_output"):
         value = context.get(key, "")
         if value:
             label = key_labels.get(key, key)
             sections.append(f"## {label}\n\n{value}")
+            seen_keys.add(key)
+    # Also check the nested ancestor_outputs dict (used by parallel pipeline
+    # and strip_plan_stage) for any keys not already found via flat lookup.
+    ancestor_dict = context.get("ancestor_outputs", {})
+    if isinstance(ancestor_dict, dict):
+        for nested_key, nested_value in ancestor_dict.items():
+            # Map nested keys to flat keys: "plan" -> "plan_output"
+            flat_key = f"{nested_key}_output" if not nested_key.endswith("_output") else nested_key
+            if flat_key not in seen_keys and nested_value:
+                label = key_labels.get(flat_key, flat_key)
+                sections.append(f"## {label}\n\n{nested_value}")
     return sections
 
 
@@ -81,16 +93,19 @@ _STUB_THRESHOLD = 100
 
 def _detect_stub_files(owned_files: list[str], project_root: str) -> list[str]:
     """Return owned files that are still stubs (missing, empty, or scaffold-only).
-
-    A file is considered a stub if:
     - It doesn't exist on disk, OR
     - Its content is shorter than _STUB_THRESHOLD chars AND contains
       "implementation required" (the scaffold marker), OR
     - Its content is shorter than _STUB_THRESHOLD chars AND consists
       only of a module docstring (no actual code)
+    __init__.py files are exempt from stub detection because they are
+    legitimately small (re-exports, package markers).
     """
     stubs: list[str] = []
     for rel_path in owned_files:
+        # Skip __init__.py files — they are legitimately small
+        if os.path.basename(rel_path) == "__init__.py":
+            continue
         full = os.path.join(project_root, rel_path)
         if not os.path.exists(full):
             stubs.append(rel_path)
@@ -104,7 +119,7 @@ def _detect_stub_files(owned_files: list[str], project_root: str) -> list[str]:
             lower = content.lower()
             if "implementation required" in lower:
                 stubs.append(rel_path)
-            elif not content or content.startswith('"""') and content.endswith('"""'):
+            elif not content or (content.startswith('"""') and content.endswith('"""')):
                 stubs.append(rel_path)
     return stubs
 

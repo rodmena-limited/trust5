@@ -323,3 +323,75 @@ def test_invalid_config_falls_back_to_defaults(tmp_path, config_dir):
     # Should fall back to default rather than crash
     assert cfg.quality.development_mode == "hybrid"
     assert cfg.quality.coverage_threshold == 80.0
+
+
+# ---------------------------------------------------------------------------
+# Pipeline limit fields
+# ---------------------------------------------------------------------------
+
+
+def test_default_pipeline_limit_fields():
+    """Default QualityConfig has correct pipeline limit defaults."""
+    cfg = QualityConfig()
+    assert cfg.max_jumps == 50
+    assert cfg.per_module_max_jumps == 30
+    assert cfg.max_repair_attempts == 5
+    assert cfg.max_reimplementations == 3
+
+
+def test_custom_pipeline_limit_values():
+    """Custom pipeline limit values are accepted."""
+    cfg = QualityConfig(
+        max_jumps=100,
+        per_module_max_jumps=60,
+        max_repair_attempts=10,
+        max_reimplementations=5,
+    )
+    assert cfg.max_jumps == 100
+    assert cfg.per_module_max_jumps == 60
+    assert cfg.max_repair_attempts == 10
+    assert cfg.max_reimplementations == 5
+
+
+def test_max_jumps_too_low():
+    """max_jumps must be >= 2."""
+    with pytest.raises(ValueError, match="max_jumps must be >= 2"):
+        QualityConfig(max_jumps=1)
+
+
+def test_per_module_max_jumps_too_low():
+    """per_module_max_jumps must be >= 2."""
+    with pytest.raises(ValueError, match="per_module_max_jumps must be >= 2"):
+        QualityConfig(per_module_max_jumps=0)
+
+
+def test_max_repair_attempts_too_low():
+    """max_repair_attempts must be >= 1."""
+    with pytest.raises(ValueError, match="max_repair_attempts must be >= 1"):
+        QualityConfig(max_repair_attempts=0)
+
+
+def test_max_reimplementations_negative():
+    """max_reimplementations must be >= 0."""
+    with pytest.raises(ValueError, match="max_reimplementations must be >= 0"):
+        QualityConfig(max_reimplementations=-1)
+
+
+def test_pipeline_limits_loaded_from_yaml(tmp_path, config_dir):
+    """Pipeline limits are loaded from quality.yaml."""
+    quality_yaml = {
+        "quality": {
+            "max_jumps": 80,
+            "per_module_max_jumps": 40,
+            "max_repair_attempts": 8,
+            "max_reimplementations": 2,
+        }
+    }
+    (config_dir / "quality.yaml").write_text(yaml.dump(quality_yaml), encoding="utf-8")
+
+    mgr = ConfigManager(project_root=str(tmp_path))
+    cfg = mgr.load_config()
+    assert cfg.quality.max_jumps == 80
+    assert cfg.quality.per_module_max_jumps == 40
+    assert cfg.quality.max_repair_attempts == 8
+    assert cfg.quality.max_reimplementations == 2

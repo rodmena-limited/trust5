@@ -3,15 +3,23 @@ import os
 from stabilize import StageExecution, TaskExecution, Workflow
 
 from ..core.config import ConfigManager
+from ..core.lang import detect_language, get_profile
 
 
 def create_plan_workflow(user_request: str) -> Workflow:
     config_manager = ConfigManager(os.getcwd())
     config = config_manager.load_config()
-
     if config.workflow.team.get("enabled", False):
         return _create_team_plan_workflow(user_request)
+    project_root = os.getcwd()
+    language = detect_language(project_root)
+    profile = get_profile(language)
+    profile_dict = profile.to_dict()
 
+    try:
+        dev_mode = config.quality.development_mode
+    except Exception:
+        dev_mode = "hybrid"
     return Workflow.create(
         application="trust5",
         name="Plan Phase",
@@ -19,15 +27,19 @@ def create_plan_workflow(user_request: str) -> Workflow:
             StageExecution(
                 ref_id="plan_stage",
                 type="agent",
-                name="Manager Spec",
+                name="Plan (Create SPEC)",
                 context={
-                    "agent_name": "manager-spec",
-                    "prompt_file": "manager-spec.md",
+                    "agent_name": "trust5-planner",
+                    "prompt_file": "trust5-planner.md",
                     "user_input": user_request,
+                    "model_tier": "good",
+                    "non_interactive": True,
+                    "language_profile": profile_dict,
+                    "development_mode": dev_mode,
                 },
                 tasks=[
                     TaskExecution.create(
-                        name="Execute Manager Spec",
+                        name="Create SPEC",
                         implementing_class="agent",
                         stage_start=True,
                         stage_end=True,
@@ -84,6 +96,7 @@ def _create_team_plan_workflow(user_request: str) -> Workflow:
             "prompt_file": "manager-spec.md",
             "user_input": f"Consolidate team findings and create SPEC for: {user_request}",
         },
+        requisite_stage_ref_ids={"research_stage", "analyst_stage", "architect_stage"},
         tasks=[TaskExecution.create("Consolidate", "agent", stage_start=True, stage_end=True)],
     )
 

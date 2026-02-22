@@ -562,3 +562,28 @@ def _count_tests(output: str) -> int:
         if m:
             total += int(m.group(1))
     return total
+
+
+
+def detect_cross_module_failure(test_output: str) -> bool:
+    """Return True if test output contains cross-module interface mismatch patterns.
+
+    These patterns indicate the module's repair agent cannot fix the issue
+    because the problem is in another module's code or in the interface contract
+    between modules. Per-module repair wastes budget on these — the module should
+    bail to integration repair where file ownership restrictions are lifted.
+
+    Patterns detected:
+    - TypeError with constructor/argument mismatches
+    - AttributeError with missing attributes (wrong interface)
+    - ImportError with missing names (wrong exports)
+    """
+    if not test_output:
+        return False
+
+    lower = test_output.lower()
+    return any([
+        "typeerror:" in lower and ("argument" in lower or "__init__" in lower),
+        "attributeerror:" in lower and "has no attribute" in lower,
+        "importerror: cannot import name" in lower,
+    ])

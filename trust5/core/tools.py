@@ -363,6 +363,8 @@ class Tools:
         """Install a package using the project's package manager."""
         if not _VALID_PACKAGE_RE.match(package_name):
             return f"Error: invalid package name: {package_name!r}"
+        if not install_prefix:
+            return f"Error: no install command configured. Cannot install {package_name!r}."
         return Tools.run_bash(f"{shlex.quote(install_prefix)} {shlex.quote(package_name)}")
 
     @classmethod

@@ -185,18 +185,23 @@ def test_install_package_rejects_injection():
 
 @patch("trust5.core.tools.Tools.run_bash")
 def test_install_package_calls_run_bash_for_valid(mock_bash: MagicMock):
-    """When the package name is valid, install_package delegates to run_bash."""
+    """When the package name is valid and install_prefix is set, install_package delegates to run_bash."""
     mock_bash.return_value = "ok"
-    result = Tools.install_package("requests")
+    result = Tools.install_package("requests", install_prefix="pip install")
     assert mock_bash.called
     assert result == "ok"
+
+
+def test_install_package_rejects_empty_prefix():
+    """install_package should reject when install_prefix is empty."""
+    result = Tools.install_package("requests")
+    assert "no install command" in result.lower()
 
 
 def test_install_package_blocks_invalid_name():
     """install_package should return an error string without ever calling run_bash."""
     result = Tools.install_package("foo; rm -rf /")
     assert "invalid package name" in result.lower()
-
 
 # ---------------------------------------------------------------------------
 # Write permission — owned_files and symlink resolution

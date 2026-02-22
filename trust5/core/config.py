@@ -108,12 +108,45 @@ class QualityConfig(BaseModel):
             raise ValueError(f"max_quality_repairs must be >= 0, got {v}")
         return v
 
+    @field_validator("max_jumps")
+    @classmethod
+    def _validate_max_jumps(cls, v: int) -> int:
+        if v < 2:
+            raise ValueError(f"max_jumps must be >= 2, got {v}")
+        return v
+
+    @field_validator("per_module_max_jumps")
+    @classmethod
+    def _validate_per_module_max_jumps(cls, v: int) -> int:
+        if v < 2:
+            raise ValueError(f"per_module_max_jumps must be >= 2, got {v}")
+        return v
+
+    @field_validator("max_repair_attempts")
+    @classmethod
+    def _validate_max_repair_attempts(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"max_repair_attempts must be >= 1, got {v}")
+        return v
+
+    @field_validator("max_reimplementations")
+    @classmethod
+    def _validate_max_reimplementations(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"max_reimplementations must be >= 0, got {v}")
+        return v
+
     max_errors: int = 0
     max_type_errors: int = 0
     max_lint_errors: int = 0
     max_warnings: int = 10
     max_security_warnings: int = 0
     max_quality_repairs: int = 3
+    # Pipeline repair loop limits (configurable via quality.yaml)
+    max_jumps: int = 50
+    per_module_max_jumps: int = 30
+    max_repair_attempts: int = 5
+    max_reimplementations: int = 3
     max_file_lines: int = 500
     enforce_quality: bool = True
     spec_compliance_threshold: float = 0.7

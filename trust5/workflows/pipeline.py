@@ -82,6 +82,7 @@ def strip_plan_stage(
             continue
         stage.requisite_stage_ref_ids = stage.requisite_stage_ref_ids - {"plan"}
         if plan_output:
+            stage.context["plan_output"] = plan_output
             stage.context["ancestor_outputs"] = {"plan": plan_output}
         result.append(stage)
     return result
@@ -107,6 +108,27 @@ def _load_code_review_enabled(project_root: str) -> bool:
         return True  # enabled by default
 
 
+
+
+def _load_pipeline_limits(project_root: str) -> dict[str, int]:
+    """Load pipeline repair limits from config, with hardcoded fallbacks."""
+    try:
+        mgr = ConfigManager(project_root)
+        cfg = mgr.load_config()
+        return {
+            "max_jumps": cfg.quality.max_jumps,
+            "max_repair_attempts": cfg.quality.max_repair_attempts,
+            "max_reimplementations": cfg.quality.max_reimplementations,
+            "per_module_max_jumps": cfg.quality.per_module_max_jumps,
+        }
+    except Exception:
+        return {
+            "max_jumps": 50,
+            "max_repair_attempts": 5,
+            "max_reimplementations": 3,
+            "per_module_max_jumps": 30,
+        }
+
 def create_develop_workflow(user_request: str) -> Workflow:
     project_root = os.getcwd()
 
@@ -114,6 +136,7 @@ def create_develop_workflow(user_request: str) -> Workflow:
     profile = get_profile(language)
     profile_dict = profile.to_dict()
     dev_mode = _load_development_mode(project_root)
+    limits = _load_pipeline_limits(project_root)
 
     use_tdd = dev_mode in ("tdd", "hybrid")
     use_mutation = _load_mutation_enabled(project_root)
@@ -201,9 +224,9 @@ def create_develop_workflow(user_request: str) -> Workflow:
         name="Validate (Run Tests)",
         context={
             "project_root": project_root,
-            "max_repair_attempts": 5,
-            "max_reimplementations": 3,
-            "_max_jumps": MAX_REPAIR_JUMPS,
+            "max_repair_attempts": limits["max_repair_attempts"],
+            "max_reimplementations": limits["max_reimplementations"],
+            "_max_jumps": limits["max_jumps"],
             "language_profile": profile_dict,
             "pipeline_phase": "run",
             "development_mode": dev_mode,
@@ -226,7 +249,7 @@ def create_develop_workflow(user_request: str) -> Workflow:
         name="Repair (Fix Failures)",
         context={
             "project_root": project_root,
-            "_max_jumps": MAX_REPAIR_JUMPS,
+            "_max_jumps": limits["max_jumps"],
             "language_profile": profile_dict,
             "development_mode": dev_mode,
         },
@@ -297,7 +320,7 @@ def create_develop_workflow(user_request: str) -> Workflow:
             "project_root": project_root,
             "quality_attempt": 0,
             "max_quality_attempts": 3,
-            "_max_jumps": MAX_REPAIR_JUMPS,
+            "_max_jumps": limits["max_jumps"],
             "language_profile": profile_dict,
             "pipeline_phase": "run",
             "development_mode": dev_mode,
