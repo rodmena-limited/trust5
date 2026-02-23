@@ -349,7 +349,9 @@ class QualityTask(Task):
         lines = [f"Score: {report.score:.3f} | Errors: {report.total_errors} | Warnings: {report.total_warnings}"]
         if assessment:
             lines.append(f"Overall: {assessment.overall_status().upper()}")
-        for name, pr in report.principles.items():
+        for idx, (name, pr) in enumerate(report.principles.items()):
+            if idx > 0:
+                lines.append("")
             status_tag = "PASS" if pr.passed else "FAIL"
             tier = ""
             if assessment and name in assessment.pillars:

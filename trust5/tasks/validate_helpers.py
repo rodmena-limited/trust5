@@ -595,7 +595,7 @@ def detect_cross_module_failure(test_output: str) -> bool:
 # The template is appended to directory-style commands (e.g. `ruff check .`).
 _LINT_EXCLUDE_FLAGS: dict[str, list[tuple[str, str]]] = {
     "python": [
-        ("ruff", "--extend-exclude 'test_*,*_test*,conftest*,tests/'"),
+        ("ruff", "--extend-exclude tests/ --extend-exclude test_* --extend-exclude *_test* --extend-exclude conftest*"),
     ],
     "typescript": [
         ("eslint",

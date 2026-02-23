@@ -238,7 +238,7 @@ class Trust5Log(RichLog):
                 border_style=C_DIM,
                 box=ROUNDED,
             )
-        elif code in (M.QRPT, M.RVRP, M.PPLN, M.ARSP, M.ASUM):
+        elif code in (M.RVRP, M.PPLN, M.ARSP, M.ASUM):
             inner: Any
             try:
                 inner = Markdown(content)
@@ -246,6 +246,15 @@ class Trust5Log(RichLog):
                 inner = Text(content)
             renderable = Panel(
                 inner,
+                title=f" {theme['title']} ",
+                border_style=theme["color"],
+                box=ROUNDED,
+            )
+        elif code == M.QRPT:
+            # Quality report: plain text, not Markdown — contains lint output
+            # with carets and line numbers that Markdown collapses into paragraphs.
+            renderable = Panel(
+                Text(content, style=C_TEXT),
                 title=f" {theme['title']} ",
                 border_style=theme["color"],
                 box=ROUNDED,
