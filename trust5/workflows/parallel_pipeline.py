@@ -7,7 +7,7 @@ import os
 
 from stabilize import StageExecution, TaskExecution, Workflow
 
-from ..core.config import ConfigManager  # noqa: F401
+from ..core.config import ConfigManager, load_global_config  # noqa: F401
 from ..core.lang import detect_language, get_profile
 from .module_spec import (
     ModuleSpec,
@@ -316,6 +316,7 @@ def create_parallel_develop_workflow(
             "project_root": project_root,
             "language_profile": profile_dict,
             "model_tier": "watchdog",
+            "workflow_timeout": int(load_global_config().timeouts.develop),
         },
         requisite_stage_ref_ids=set(),
         tasks=[

@@ -87,6 +87,8 @@ MODEL_CONTEXT_WINDOW: dict[str, int] = {
     "gemini-2.5-flash": 1_048_576,
 }
 
+# Legacy Ollama defaults — superseded by GlobalConfig.models.ollama in ~/.trust5/config.yaml.
+# Kept for backward compatibility if config load fails unexpectedly.
 MODEL_TIERS = {
     "best": "qwen3-coder-next:cloud",
     "good": "kimi-k2.5:cloud",
@@ -96,6 +98,13 @@ MODEL_TIERS = {
 }
 
 THINKING_TIERS = {"best", "good"}
+DEFAULT_FALLBACK_CHAIN = [
+    "qwen3-coder-next:cloud",
+    "kimi-k2.5:cloud",
+    "nemotron-3-nano:30b-cloud",
+]
+
+
 
 # Per-stage thinking levels: None=off, "low", "high"
 # Planner needs deep reasoning; test-writer needs some; implementer needs max output tokens.
@@ -107,19 +116,6 @@ STAGE_THINKING_LEVEL: dict[str, str] = {
     "repairer": "low",
     "repair": "low",
 }
-
-# Anthropic thinking budget mapped from level
-_ANTHROPIC_THINKING_BUDGET = {"low": 5000, "high": 10000}
-
-# Gemini 2.5 thinking budget mapped from level
-_GEMINI_25_THINKING_BUDGET = {"low": 5000, "high": 10000}
-
-DEFAULT_FALLBACK_CHAIN = [
-    "qwen3-coder-next:cloud",
-    "kimi-k2.5:cloud",
-    "nemotron-3-nano:30b-cloud",
-]
-
 
 def _resolve_thinking_level(
     tier: str,
@@ -205,15 +201,35 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
         thinking_level: str | None = None,
         **kwargs: Any,
     ) -> "LLM":
-        from .auth.registry import get_active_token
+        """Create an LLM instance for the given tier, reading models from global config.
 
+        Model resolution order:
+          1. ``~/.trust5/config.yaml`` → ``models.<provider>.<tier>``
+          2. Hardcoded provider config (fallback for unknown providers)
+          3. Ollama defaults (when no provider is authenticated)
+        """
+        from .auth.registry import get_active_token
+        from .config import load_global_config
+
+        gcfg = load_global_config()
         active = get_active_token()
         if active is not None:
             provider, token_data = active
             cfg = provider.config
-            model = cfg.models.get(tier, cfg.models.get("default", ""))
-            fallback = [m for m in cfg.fallback_chain if m != model]
-            resolved = _resolve_thinking_level(tier, cfg.thinking_tiers, stage_name, thinking_level)
+            # Read model config from global config (user-editable ~/.trust5/config.yaml)
+            provider_models = getattr(gcfg.models, cfg.name, None)
+            if provider_models is not None:
+                model = getattr(provider_models, tier, None) or provider_models.default
+                fallback_chain = provider_models.fallback_chain or cfg.fallback_chain
+                tt = provider_models.thinking_tiers
+                thinking_tiers = set(tt) if tt else cfg.thinking_tiers
+            else:
+                # Unknown provider — fall back to hardcoded provider config
+                model = cfg.models.get(tier, cfg.models.get("default", ""))
+                fallback_chain = cfg.fallback_chain
+                thinking_tiers = cfg.thinking_tiers
+            fallback = [m for m in fallback_chain if m != model]
+            resolved = _resolve_thinking_level(tier, thinking_tiers, stage_name, thinking_level)
             return cls(
                 model=model,
                 base_url=cfg.api_base_url,
@@ -226,9 +242,11 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
                 **kwargs,
             )
 
-        model = MODEL_TIERS.get(tier, MODEL_TIERS["default"])
-        fallback = [m for m in DEFAULT_FALLBACK_CHAIN if m != model]
-        resolved = _resolve_thinking_level(tier, THINKING_TIERS, stage_name, thinking_level)
+        # Ollama fallback — read from global config
+        ollama_cfg = gcfg.models.ollama
+        model = getattr(ollama_cfg, tier, None) or ollama_cfg.default
+        fallback = [m for m in ollama_cfg.fallback_chain if m != model]
+        resolved = _resolve_thinking_level(tier, set(ollama_cfg.thinking_tiers), stage_name, thinking_level)
         return cls(model=model, fallback_models=fallback, thinking_level=resolved, **kwargs)
 
     def chat(

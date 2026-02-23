@@ -407,23 +407,21 @@ class WatchdogTask(Task):
       3. **Feedback** — TUI events, atomic report writes, ``load_watchdog_findings()``.
     """
 
-    # How long to wait between check cycles (seconds)
     CHECK_INTERVAL = 12
-    # Maximum runtime (prevent infinite running if pipeline hangs)
-    MAX_RUNTIME = 7200  # 2 hours
-    # How often to emit "all clear" (every Nth clean check)
-    OK_EMIT_INTERVAL = 25  # ~5 minutes at 12s interval
-
+    MAX_RUNTIME = 7200
+    OK_EMIT_INTERVAL = 25
     def execute(self, stage: StageExecution) -> TaskResult:
         project_root = stage.context.get("project_root", os.getcwd())
         language_profile = stage.context.get("language_profile", {})
-
-        # Remove stale sentinel from a previous pipeline run.
         self._clear_sentinel(project_root)
 
-        # Start EventBus consumer (Layer 1 — real-time pipeline observability)
         health = PipelineHealth()
-        max_runtime = stage.context.get("workflow_timeout", self.MAX_RUNTIME)
+
+        gcfg = self._load_watchdog_config()
+        max_runtime = stage.context.get("workflow_timeout", gcfg.get("max_runtime", self.MAX_RUNTIME))
+        check_interval = gcfg.get("check_interval", self.CHECK_INTERVAL)
+        ok_emit_interval = gcfg.get("ok_emit_interval", self.OK_EMIT_INTERVAL)
+        max_llm_audits = gcfg.get("max_llm_audits", _MAX_LLM_AUDITS)
         consumer_thread, sub_q = _start_event_consumer(health)
 
         emit(M.WDST, "Watchdog started \u2014 monitoring pipeline health")
@@ -467,7 +465,7 @@ class WatchdogTask(Task):
                 total_errors += errors
 
                 # ── Layer 2: LLM audit triggers ─────────────────────
-                max_audits = max(_MAX_LLM_AUDITS, int(elapsed / 3600 / 2))  # ~1 audit per 2 hours
+                max_audits = max(max_llm_audits, int(elapsed / 3600 / 2))  # ~1 audit per 2 hours
                 trigger = _should_trigger_audit(health, findings, audit_triggers_fired, max_audits)
                 if trigger is not None:
                     audit_result = _run_llm_audit(health, language_profile, findings, trigger, max_audits)
@@ -483,14 +481,14 @@ class WatchdogTask(Task):
                         self._emit_findings_block(findings, check_count)
                         last_emitted_findings = [dict(f) for f in findings]
 
-                if warnings == 0 and errors == 0 and check_count % self.OK_EMIT_INTERVAL == 0:
+                if warnings == 0 and errors == 0 and check_count % ok_emit_interval == 0:
                     emit(M.WDOK, f"Check #{check_count} \u2014 all clear ({elapsed:.0f}s elapsed)")
                     all_findings = []
                     self._write_report(project_root, all_findings, check_count, health, audit_summaries)
 
                 # Progressive interval: tighter at start, relaxed for long runs
                 if elapsed < 3600:
-                    interval = self.CHECK_INTERVAL  # 12s
+                    interval = check_interval
                 elif elapsed < 21600:
                     interval = 30  # 6 hours
                 else:
@@ -598,6 +596,21 @@ class WatchdogTask(Task):
             os.remove(sentinel)
         except FileNotFoundError:
             pass
+
+    @staticmethod
+    def _load_watchdog_config() -> dict[str, int]:
+        try:
+            from ..core.config import load_global_config
+            cfg = load_global_config().watchdog
+            return {
+                "max_runtime": cfg.max_runtime,
+                "check_interval": cfg.check_interval,
+                "ok_emit_interval": cfg.ok_emit_interval,
+                "max_llm_audits": cfg.max_llm_audits,
+            }
+        except Exception:
+            logger.debug("Failed to load watchdog config from GlobalConfig", exc_info=True)
+            return {}
 
     # ── Layer 1a: Deterministic rules ─────────────────────────────────
 

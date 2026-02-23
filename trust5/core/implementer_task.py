@@ -10,8 +10,48 @@ from .agent import Agent
 from .context_builder import build_implementation_prompt, discover_latest_spec
 from .llm import LLM, LLMError
 from .mcp_manager import mcp_clients
+from .message import M, emit
 
 logger = logging.getLogger(__name__)
+
+# Source file extensions to clean during rebuild.
+_SOURCE_EXTS = frozenset(
+    {
+        ".py",
+        ".go",
+        ".ts",
+        ".js",
+        ".tsx",
+        ".jsx",
+        ".rs",
+        ".java",
+        ".rb",
+        ".ex",
+        ".exs",
+        ".cpp",
+        ".c",
+        ".h",
+    }
+)
+
+# Directories to skip during rebuild cleanup.
+_SKIP_DIRS = frozenset(
+    {
+        ".trust5",
+        ".moai",
+        ".git",
+        "node_modules",
+        "vendor",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "target",
+        "dist",
+        "build",
+        ".tox",
+        ".nox",
+    }
+)
 
 # Outer (Stabilize-level) retry backoff for LLM errors.
 # Inner retry in LLM._chat_with_retry already spent its budget.
@@ -50,8 +90,31 @@ class ImplementerTask(Task):
 
         logger.info("Implementing %s", spec_id)
 
-        user_prompt = build_implementation_prompt(spec_id, project_root)
+        # ── Rebuild handling ──────────────────────────────────────────
+        rebuild_requested = stage.context.get("_rebuild_requested", False)
+        rebuild_reason = stage.context.get("_rebuild_reason", "")
+        if rebuild_requested:
+            self._clean_source_files(project_root, stage.context)
+            emit(M.WDWN, f"Rebuild: cleaned source files. Reason: {rebuild_reason}")
+            logger.info("Rebuild: cleaned source files. Reason: %s", rebuild_reason)
+
+        base_prompt = build_implementation_prompt(spec_id, project_root)
         system_prompt = self._load_system_prompt()
+
+        # Inject rebuild context into the user prompt so the LLM knows
+        # why the rebuild was triggered and what to avoid.
+        if rebuild_requested:
+            rebuild_preamble = (
+                "\n\n## REBUILD NOTICE\n"
+                "The watchdog has ordered a FULL REBUILD of this project.\n"
+                f"Reason: {rebuild_reason}\n"
+                "Previous implementation attempts failed repeatedly.\n"
+                "You MUST write the code from scratch. Do NOT repeat previous mistakes.\n"
+                "All source files have been deleted. Only test files and config remain.\n"
+            )
+            user_prompt = rebuild_preamble + "\n" + base_prompt
+        else:
+            user_prompt = base_prompt
 
         llm = LLM.for_tier("best", stage_name="implementer")
 
@@ -89,6 +152,50 @@ class ImplementerTask(Task):
             except Exception as e:
                 logger.exception("Implementation failed")
                 return TaskResult.terminal(error=f"Implementation failed: {e}")
+
+    @staticmethod
+    def _clean_source_files(project_root: str, context: dict) -> None:
+        """Delete source files before a full rebuild.
+
+        Removes all source files (by extension) from the project directory,
+        preserving test files, config, .trust5/, .moai/, and .git/.
+        If ``owned_files`` is in context, only those files are deleted.
+        Otherwise, all source files outside skip dirs are removed.
+        """
+        owned_files = context.get("owned_files")
+        deleted = 0
+
+        if owned_files and isinstance(owned_files, (list, tuple)):
+            # Scoped rebuild: only delete owned source files
+            for fpath in owned_files:
+                full = os.path.join(project_root, fpath) if not os.path.isabs(fpath) else fpath
+                if os.path.isfile(full):
+                    try:
+                        os.remove(full)
+                        deleted += 1
+                    except OSError:
+                        logger.debug("Failed to delete owned file: %s", fpath)
+        else:
+            # Full rebuild: delete all source files outside protected dirs
+            for dirpath, dirnames, filenames in os.walk(project_root):
+                # Prune protected directories
+                dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+                for fname in filenames:
+                    _, ext = os.path.splitext(fname)
+                    if ext.lower() not in _SOURCE_EXTS:
+                        continue
+                    # Preserve test files
+                    lower = fname.lower()
+                    if lower.startswith("test_") or "_test" in lower or lower.startswith("test."):
+                        continue
+                    full = os.path.join(dirpath, fname)
+                    try:
+                        os.remove(full)
+                        deleted += 1
+                    except OSError:
+                        logger.debug("Failed to delete source file: %s", full)
+
+        logger.info("Rebuild cleanup: deleted %d source files", deleted)
 
     @staticmethod
     def _load_system_prompt() -> str:

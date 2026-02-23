@@ -321,9 +321,58 @@ class WatchdogConfig(BaseModel):
     max_llm_audits: int = 3
 
 
+class ProviderModelsConfig(BaseModel):
+    """Model assignments per tier for a single LLM provider.
+
+    Tiers: best (planner/complex), good (implementer/repairer),
+    fast (test-writer/simple), watchdog (lightweight monitor)."""
+
+    best: str
+    good: str
+    fast: str
+    watchdog: str
+    default: str
+    fallback_chain: list[str] = Field(default_factory=list)
+    thinking_tiers: list[str] = Field(default_factory=lambda: ["best", "good"])
+
+
+class ModelsConfig(BaseModel):
+    """Per-provider model configuration.
+
+    Users can override which models each provider uses for each tier.
+    These override the hardcoded defaults in auth/claude.py, auth/google.py, and llm.py."""
+
+    claude: ProviderModelsConfig = Field(default_factory=lambda: ProviderModelsConfig(
+        best="claude-opus-4-6",
+        good="claude-opus-4-6",
+        fast="claude-sonnet-4-5",
+        watchdog="claude-haiku-4-5",
+        default="claude-opus-4-6",
+        fallback_chain=["claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"],
+        thinking_tiers=["best", "good"],
+    ))
+    google: ProviderModelsConfig = Field(default_factory=lambda: ProviderModelsConfig(
+        best="gemini-3-pro-preview",
+        good="gemini-3-pro-preview",
+        fast="gemini-3-flash-preview",
+        watchdog="gemini-3-flash-preview",
+        default="gemini-3-pro-preview",
+        fallback_chain=["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+        thinking_tiers=["best", "good"],
+    ))
+    ollama: ProviderModelsConfig = Field(default_factory=lambda: ProviderModelsConfig(
+        best="qwen3-coder-next:cloud",
+        good="kimi-k2.5:cloud",
+        fast="nemotron-3-nano:30b-cloud",
+        watchdog="nemotron-3-nano:30b-cloud",
+        default="qwen3-coder-next:cloud",
+        fallback_chain=["qwen3-coder-next:cloud", "kimi-k2.5:cloud", "nemotron-3-nano:30b-cloud"],
+        thinking_tiers=["best", "good"],
+    ))
+
+
 class LLMConfig(BaseModel):
     """LLM provider retry and timeout settings."""
-
     timeout_fast: int = 120
     timeout_standard: int = 300
     timeout_extended: int = 600
@@ -353,6 +402,7 @@ class GlobalConfig(BaseModel):
     event_bus: EventBusConfig = Field(default_factory=EventBusConfig)
     tui: TUIConfig = Field(default_factory=TUIConfig)
     watchdog: WatchdogConfig = Field(default_factory=WatchdogConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
 
 
 # ── Singleton: the resolved global config ────────────────────────────────────

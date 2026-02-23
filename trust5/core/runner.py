@@ -94,8 +94,7 @@ def finalize_status(
     prefix: str = "Status",
 ) -> None:
     """Check stage-level failures hidden behind SUCCEEDED.
-
-    Only TEST failures override to TERMINAL (code is broken, needs resume).
+    TEST failures and SPEC COMPLIANCE failures override to TERMINAL (resumable).
     Quality-only failures keep SUCCEEDED with a warning — the code works,
     quality is advisory.
     """
@@ -119,15 +118,18 @@ def finalize_status(
                 emit(M.WFAL, detail)
             emit(M.WFAL, "Run 'trust5 resume' to retry from the failed stage.")
         elif has_compliance_fail:
-            # SPEC compliance failed but tests pass → code works but is incomplete
-            warnings = ["SPEC compliance below threshold"]
+            # SPEC compliance failed → code works but is incomplete → TERMINAL (resumable)
+            result.status = WorkflowStatus.TERMINAL
+            store.update_status(result)
+
+            problems = ["SPEC compliance below threshold"]
             if has_quality_fail:
-                warnings.append("quality gate failed")
-            emit(M.WSUC, f"{prefix}: {status_name} (with SPEC compliance warnings)")
-            emit(M.SWRN, "SPEC COMPLIANCE WARNING — the following criteria are not addressed:")
+                problems.append("quality gate failed")
+            emit(M.WFAL, f"{prefix}: FAILED ({', '.join(problems)})")
+            emit(M.WFAL, "SPEC COMPLIANCE FAILURE — the following criteria are not addressed:")
             for detail in details:
-                emit(M.SWRN, detail)
-            emit(M.SWRN, "The code works but may be missing features from the SPEC.")
+                emit(M.WFAL, detail)
+            emit(M.WFAL, "Run 'trust5 resume' to retry from the failed stage.")
         elif has_quality_fail:
             # Quality failed but tests pass → code works, warn but keep SUCCEEDED
             emit(M.WSUC, f"{prefix}: {status_name} (with quality warnings)")

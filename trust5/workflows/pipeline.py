@@ -3,7 +3,7 @@ import os
 
 from stabilize import StageExecution, TaskExecution, Workflow
 
-from ..core.config import ConfigManager
+from ..core.config import ConfigManager, load_global_config
 from ..core.lang import detect_language, get_profile
 
 logger = logging.getLogger(__name__)
@@ -348,6 +348,7 @@ def create_develop_workflow(user_request: str) -> Workflow:
             "project_root": project_root,
             "language_profile": profile_dict,
             "model_tier": "watchdog",
+            "workflow_timeout": int(load_global_config().timeouts.develop),
         },
         requisite_stage_ref_ids=set(),
         tasks=[
