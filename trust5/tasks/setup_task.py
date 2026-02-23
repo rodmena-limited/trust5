@@ -74,8 +74,9 @@ def _quote_version_specifiers(cmd: str) -> str:
     ``pip install 'flask>=3.0.0' 'pytest>=8.0'`` while leaving other commands untouched.
     """
     # Only process pip/uv install commands
-    if not re.search(r'\bpip\b.*\binstall\b|\buv\b.*\binstall\b', cmd):
+    if not re.search(r"\bpip\b.*\binstall\b|\buv\b.*\binstall\b", cmd):
         return cmd
+
     # Quote whitespace-delimited tokens that contain version specifiers
     # (>=, <=, ==, !=, ~=, <, >) but skip tokens already inside quotes.
     def _quote_token(m: re.Match[str]) -> str:
@@ -84,6 +85,7 @@ def _quote_version_specifiers(cmd: str) -> str:
         if start > 0 and cmd[start - 1] in ("'", '"'):
             return token
         return f"'{token}'"
+
     return re.sub(
         r"(?<=\s)([a-zA-Z0-9_][a-zA-Z0-9_.\-\[\]]*(?:>=|<=|==|!=|~=|<|>)[^\s'\"]*)",
         _quote_token,

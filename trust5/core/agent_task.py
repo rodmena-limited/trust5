@@ -322,6 +322,7 @@ class AgentTask(Task):
             system_prompt += "\n\n" + _TDD_GREEN_PHASE_INSTRUCTIONS
 
         from ..tasks.watchdog_task import load_watchdog_findings
+
         watchdog_ctx = load_watchdog_findings(project_root)
         if watchdog_ctx:
             system_prompt += "\n\n" + watchdog_ctx

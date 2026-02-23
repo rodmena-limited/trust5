@@ -74,7 +74,7 @@ def _is_project_scoped_rm(command: str, workdir: str) -> bool:
 
     # Collect non-flag arguments until a shell operator
     targets: list[str] = []
-    for part in parts[rm_idx + 1:]:
+    for part in parts[rm_idx + 1 :]:
         if part.startswith("-"):
             continue
         if part in ("&&", "||", ";", "|"):

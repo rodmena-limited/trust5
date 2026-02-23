@@ -108,8 +108,6 @@ def _load_code_review_enabled(project_root: str) -> bool:
         return True  # enabled by default
 
 
-
-
 def _load_pipeline_limits(project_root: str) -> dict[str, int]:
     """Load pipeline repair limits from config, with hardcoded fallbacks."""
     try:
@@ -128,6 +126,7 @@ def _load_pipeline_limits(project_root: str) -> dict[str, int]:
             "max_reimplementations": 3,
             "per_module_max_jumps": 30,
         }
+
 
 def create_develop_workflow(user_request: str) -> Workflow:
     project_root = os.getcwd()

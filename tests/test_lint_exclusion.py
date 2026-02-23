@@ -127,10 +127,7 @@ def test_exclude_spec_files_from_js():
 
 def test_filter_lint_concise_format():
     """Concise format (ruff --output-format=concise): test file lines are dropped."""
-    raw = (
-        "tests/test_main.py:12:1: F401 `pytest` imported but unused\n"
-        "main.py:5:1: E302 expected 2 blank lines\n"
-    )
+    raw = "tests/test_main.py:12:1: F401 `pytest` imported but unused\nmain.py:5:1: E302 expected 2 blank lines\n"
     result = _filter_test_file_lint(raw)
     assert "test_main.py" not in result
     assert "main.py" in result
@@ -158,13 +155,7 @@ def test_filter_lint_rich_format():
 
 def test_filter_lint_rich_format_only_test_files():
     """Rich format with only test file errors: all lint lines dropped."""
-    raw = (
-        "F401 [*] `pytest` imported but unused\n"
-        " --> tests/test_main.py:3:8\n"
-        "  |\n"
-        "3 | import pytest\n"
-        "  |\n"
-    )
+    raw = "F401 [*] `pytest` imported but unused\n --> tests/test_main.py:3:8\n  |\n3 | import pytest\n  |\n"
     result = _filter_test_file_lint(raw)
     # All lines reference test files, so the file-path line is dropped.
     # Non-file-matching lines (context lines) are kept by the filter.

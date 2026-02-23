@@ -30,9 +30,9 @@ class LanguageProfile:
     syntax_check_tool_names: tuple[str, ...] = ()  # tool names that are syntax-only (for lint dedup)
     dev_dependencies: tuple[str, ...] = ()  # packages auto-installed before lint/test if missing
     required_project_files: tuple[str, ...] = ()  # critical files that must exist in generated projects
-    tool_check_commands: tuple[str, ...] = ()      # commands to verify required tools are installed
-    manifest_validators: tuple[str, ...] = ()      # commands to validate manifest file syntax
-    test_discovery_command: str | None = None       # command to discover tests without running them
+    tool_check_commands: tuple[str, ...] = ()  # commands to verify required tools are installed
+    manifest_validators: tuple[str, ...] = ()  # commands to validate manifest file syntax
+    test_discovery_command: str | None = None  # command to discover tests without running them
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -126,8 +126,7 @@ PROFILES: dict[str, LanguageProfile] = {
         required_files=("pyproject.toml",),
         tool_checks=("python3 -c 'import pytest'", "python3 -c 'import ruff'"),
         manifest_vals=(
-            "python3 -c 'import tomllib,pathlib;"
-            " tomllib.loads(pathlib.Path(\"pyproject.toml\").read_text())'",
+            "python3 -c 'import tomllib,pathlib; tomllib.loads(pathlib.Path(\"pyproject.toml\").read_text())'",
         ),
         test_disc="pytest --collect-only -q 2>/dev/null | tail -1",
     ),

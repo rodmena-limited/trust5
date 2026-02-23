@@ -172,7 +172,6 @@ def build_repair_prompt(
     if spec_id:
         spec_section = f"\n\nSPEC CONTEXT:\n{build_spec_context(spec_id, project_root)}"
 
-
     # Inject acceptance criteria so the repairer knows WHAT was supposed to be built.
     # Without this, the repairer only sees error output and has no specification context.
     criteria_section = ""

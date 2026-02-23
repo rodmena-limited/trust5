@@ -314,6 +314,7 @@ def test_emit_findings_block_warning_only(mock_emit_block):
     mock_emit_block.assert_called_once()
     args = mock_emit_block.call_args
     from trust5.core.message import M as _M
+
     assert args[0][0] == _M.WDWN
     assert "Watchdog Audit (check #3)" in args[0][1]
     assert "stub_file" in args[0][2]
@@ -331,6 +332,7 @@ def test_emit_findings_block_error_escalates(mock_emit_block):
     mock_emit_block.assert_called_once()
     args = mock_emit_block.call_args
     from trust5.core.message import M as _M
+
     assert args[0][0] == _M.WDER
     assert "\u274c" in args[0][2]  # error icon
     assert "\u26a0\ufe0f" in args[0][2]  # warning icon too
@@ -399,7 +401,6 @@ def test_clear_sentinel_noop_when_missing():
     with tempfile.TemporaryDirectory() as tmpdir:
         # Should not raise
         WatchdogTask._clear_sentinel(tmpdir)
-
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -647,6 +648,7 @@ def test_start_event_consumer_no_bus(_mock_bus):
 @patch("trust5.core.event_bus.get_bus")
 def test_start_event_consumer_with_bus(mock_get_bus):
     import queue
+
     mock_bus = MagicMock()
     mock_q: queue.Queue = queue.Queue()
     mock_bus.subscribe.return_value = mock_q

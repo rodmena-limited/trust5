@@ -444,6 +444,7 @@ class TrackableValidator(_ValidatorBase):
         result.passed = len(bad_names) == 0 and (not non_test or len(test_files) > 0)
         return result
 
+
 # ── ProjectCompletenessValidator ──────────────────────────────────────
 
 
@@ -468,11 +469,13 @@ class ProjectCompletenessValidator(_ValidatorBase):
                 score += 1.0
             else:
                 issues_count += 1
-                result.issues.append(Issue(
-                    severity="error",
-                    message=f"required project file missing: {req_file}",
-                    rule="required-file-missing",
-                ))
+                result.issues.append(
+                    Issue(
+                        severity="error",
+                        message=f"required project file missing: {req_file}",
+                        rule="required-file-missing",
+                    )
+                )
 
         # Check 2: No garbled files in project root (artifacts from shell redirect bugs)
         garbled_count = 0
@@ -480,12 +483,14 @@ class ProjectCompletenessValidator(_ValidatorBase):
             for entry in os.scandir(self._root):
                 if entry.is_file() and self._GARBLED_FILE_RE.match(entry.name):
                     garbled_count += 1
-                    result.issues.append(Issue(
-                        file=entry.name,
-                        severity="error",
-                        message=f"garbled file detected (likely shell redirect artifact): {entry.name}",
-                        rule="garbled-file",
-                    ))
+                    result.issues.append(
+                        Issue(
+                            file=entry.name,
+                            severity="error",
+                            message=f"garbled file detected (likely shell redirect artifact): {entry.name}",
+                            rule="garbled-file",
+                        )
+                    )
         except OSError:
             pass
 

@@ -84,15 +84,44 @@ def _normalize_module_paths(modules: list[ModuleSpec], profile_dict: dict[str, o
 # Non-source extensions that should never get a language extension appended.
 # These are config, manifest, data, and tooling files that happen to appear in
 # module.files because the planner includes them in the module's ownership.
-_NON_SOURCE_EXTENSIONS = frozenset((
-    ".toml", ".cfg", ".ini", ".yaml", ".yml", ".json", ".xml",
-    ".txt", ".md", ".rst", ".lock", ".mod", ".sum",
-    ".gradle", ".properties", ".sbt", ".cabal",
-    ".dockerfile", ".mk", ".cmake",
-    ".gitignore", ".editorconfig", ".env",
-    ".html", ".css", ".scss", ".less", ".svg",
-    ".sh", ".bash", ".zsh", ".fish", ".bat", ".ps1",
-))
+_NON_SOURCE_EXTENSIONS = frozenset(
+    (
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".xml",
+        ".txt",
+        ".md",
+        ".rst",
+        ".lock",
+        ".mod",
+        ".sum",
+        ".gradle",
+        ".properties",
+        ".sbt",
+        ".cabal",
+        ".dockerfile",
+        ".mk",
+        ".cmake",
+        ".gitignore",
+        ".editorconfig",
+        ".env",
+        ".html",
+        ".css",
+        ".scss",
+        ".less",
+        ".svg",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".fish",
+        ".bat",
+        ".ps1",
+    )
+)
 
 
 def _ensure_ext(path: str, default_ext: str) -> str:
@@ -278,7 +307,6 @@ def create_parallel_develop_workflow(
     )
     stages.append(setup)
 
-
     watchdog = StageExecution(
         ref_id="watchdog",
         type="watchdog",
@@ -333,10 +361,7 @@ def create_parallel_develop_workflow(
         rep_ref = f"repair_{mid}"
 
         # Other modules' test files — for cross-module interface awareness
-        other_tests = {
-            name: files for name, files in all_module_tests.items()
-            if name != mod.name
-        } or None
+        other_tests = {name: files for name, files in all_module_tests.items() if name != mod.name} or None
 
         module_context = {
             "jump_repair_ref": rep_ref,

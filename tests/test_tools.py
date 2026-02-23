@@ -203,6 +203,7 @@ def test_install_package_blocks_invalid_name():
     result = Tools.install_package("foo; rm -rf /")
     assert "invalid package name" in result.lower()
 
+
 # ---------------------------------------------------------------------------
 # Write permission — owned_files and symlink resolution
 # ---------------------------------------------------------------------------

@@ -1263,9 +1263,7 @@ def test_validate_scopes_lint_command_in_parallel_pipeline(mock_run, mock_emit_b
 
     # py_compile should NOT be called as lint (syntax-only, skipped)
     py_compile_calls = [
-        call
-        for call in mock_run.call_args_list
-        if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
+        call for call in mock_run.call_args_list if call.args and "py_compile" in " ".join(str(a) for a in call.args[0])
     ]
     assert not py_compile_calls, f"py_compile should be skipped, but found: {py_compile_calls}"
 
@@ -1471,9 +1469,7 @@ def test_validate_strips_nonexistent_files_in_serial_pipeline(
             "project_root": str(tmp_path),
             # No owned_files — serial pipeline
             "plan_config": {
-                "lint_command": (
-                    "ruff check monte_carlo.py examples/pi_estimation.py"
-                ),
+                "lint_command": ("ruff check monte_carlo.py examples/pi_estimation.py"),
             },
         }
     )
@@ -1592,9 +1588,7 @@ def test_validate_scopes_test_command_in_parallel_pipeline(tmp_path):
 
     # Find the test subprocess call (pytest), excluding pip install calls
     test_calls = [
-        call
-        for call in mock_run.call_args_list
-        if call.args and "pytest" in call.args[0] and "pip" not in call.args[0]
+        call for call in mock_run.call_args_list if call.args and "pytest" in call.args[0] and "pip" not in call.args[0]
     ]
     assert test_calls, f"Expected pytest call in: {mock_run.call_args_list}"
 
@@ -1644,16 +1638,13 @@ def test_validate_auto_derives_test_files_when_planned_missing(tmp_path):
         task.execute(stage)
 
     test_calls = [
-        call
-        for call in mock_run.call_args_list
-        if call.args and "pytest" in call.args[0] and "pip" not in call.args[0]
+        call for call in mock_run.call_args_list if call.args and "pytest" in call.args[0] and "pip" not in call.args[0]
     ]
     assert test_calls, f"Expected pytest call in: {mock_run.call_args_list}"
 
     test_cmd_str = " ".join(str(a) for a in test_calls[0].args[0])
     # Should auto-derive and find test_distributions.py
     assert "test_distributions.py" in test_cmd_str
-
 
 
 # ── detect_cross_module_failure tests ─────────────────────────────────────

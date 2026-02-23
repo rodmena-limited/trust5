@@ -363,9 +363,7 @@ class ReviewTask(Task):
         for finding in report.findings[:20]:
             sev = finding.severity.upper()
             loc = f"{finding.file}:{finding.line}" if finding.file else "\u2014"
-            lines.append(
-                f"{sev:<8} {finding.category:<18} {loc:<30} {finding.description}"
-            )
+            lines.append(f"{sev:<8} {finding.category:<18} {loc:<30} {finding.description}")
         emit_block(M.RVRP, "Code Review Report", "\n".join(lines), max_lines=30)
 
     @staticmethod

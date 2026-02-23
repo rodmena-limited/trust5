@@ -213,13 +213,9 @@ class RepairTask(Task):
                     "You MUST use the Write tool to create these files with COMPLETE implementations.\n\n"
                 ]
                 if missing_src:
-                    guidance_parts.append(
-                        f"Files that DO NOT EXIST (must be created): {missing_src}\n"
-                    )
+                    guidance_parts.append(f"Files that DO NOT EXIST (must be created): {missing_src}\n")
                 if stub_src:
-                    guidance_parts.append(
-                        f"Files that are EMPTY STUBS (must be replaced with real code): {stub_src}\n"
-                    )
+                    guidance_parts.append(f"Files that are EMPTY STUBS (must be replaced with real code): {stub_src}\n")
                 guidance_parts.append(
                     "\nDo NOT try to extract or copy code from other modules' files. "
                     "Write your implementation independently based on what the tests expect.\n\n"
@@ -393,10 +389,7 @@ class RepairTask(Task):
                 env=env,
             )
             # Self-heal: if --timeout isn't recognized, retry without it.
-            if (
-                result.returncode != 0
-                and "unrecognized arguments: --timeout" in (result.stderr or "")
-            ):
+            if result.returncode != 0 and "unrecognized arguments: --timeout" in (result.stderr or ""):
                 cleaned = [t for t in test_cmd if not t.startswith("--timeout")]
                 if len(cleaned) < len(list(test_cmd)):
                     result = subprocess.run(

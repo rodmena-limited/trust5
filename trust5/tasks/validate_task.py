@@ -181,11 +181,7 @@ class ValidateTask(Task):
         scoped_test_files = stage.context.get("test_files")
         owned_files_for_tests = stage.context.get("owned_files")
         if scoped_test_files:
-            existing = [
-                f
-                for f in scoped_test_files
-                if _test_path_has_content(os.path.join(project_root, f))
-            ]
+            existing = [f for f in scoped_test_files if _test_path_has_content(os.path.join(project_root, f))]
             if existing:
                 # Planner's test files exist — use them
                 if plan_test_cmd and owned_files_for_tests:
@@ -258,10 +254,11 @@ class ValidateTask(Task):
             lint_check_raw = profile_data.get("lint_check_commands", ())
             if not lint_check_raw:
                 lint_check_raw = base_profile.lint_check_commands
-            lint_cmds = [
-                _parse_command(_exclude_test_files_from_lint_cmd(c, lang_name))
-                for c in lint_check_raw
-            ] if lint_check_raw else []
+            lint_cmds = (
+                [_parse_command(_exclude_test_files_from_lint_cmd(c, lang_name)) for c in lint_check_raw]
+                if lint_check_raw
+                else []
+            )
 
         # Detect source root layout and build env for subprocess calls.
         test_env = _build_test_env(project_root, profile_data)
@@ -388,13 +385,16 @@ class ValidateTask(Task):
                         f"(reimplementation {reimpl_count + 1}/{max_reimpl})",
                     )
                     return self._jump_to_reimplementation(
-                        stage, output, updated_failures, reimpl_count,
-                        max_attempts, profile_data,
+                        stage,
+                        output,
+                        updated_failures,
+                        reimpl_count,
+                        max_attempts,
+                        profile_data,
                     )
                 emit(
                     M.VFAL,
-                    f"Same failure repeated {n} times{mod_tag}, "
-                    f"all reimplementations exhausted. Continuing pipeline.",
+                    f"Same failure repeated {n} times{mod_tag}, all reimplementations exhausted. Continuing pipeline.",
                 )
                 return TaskResult.failed_continue(
                     error=f"Repeated failure ({n}x): {recent[0][:200]}",
@@ -441,8 +441,12 @@ class ValidateTask(Task):
                     f"(reimplementation {reimpl_count + 1}/{max_reimpl})",
                 )
                 return self._jump_to_reimplementation(
-                    stage, output, updated_failures, reimpl_count,
-                    max_attempts, profile_data,
+                    stage,
+                    output,
+                    updated_failures,
+                    reimpl_count,
+                    max_attempts,
+                    profile_data,
                 )
 
             emit(
@@ -665,10 +669,7 @@ class ValidateTask(Task):
             # Self-heal: if --timeout flag isn't recognized (pytest-timeout
             # not installed in the target env), retry without it so we get
             # real test output instead of a useless argument error.
-            if (
-                result.returncode != 0
-                and "unrecognized arguments: --timeout" in (result.stderr or "")
-            ):
+            if result.returncode != 0 and "unrecognized arguments: --timeout" in (result.stderr or ""):
                 cleaned = [t for t in test_cmd if not t.startswith("--timeout")]
                 if len(cleaned) < len(list(test_cmd)):
                     logger.info("pytest-timeout not available, retrying without --timeout")

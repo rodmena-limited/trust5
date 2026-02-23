@@ -1,4 +1,5 @@
 """Tests for role-aware denied_files labels in agent_task.py (Bug 11 fix)."""
+
 from __future__ import annotations
 
 
@@ -31,8 +32,7 @@ def _build_ownership_prompt(
     if effective_owned:
         files_list = "\n".join(f"- {f}" for f in effective_owned)
         ownership_lines.append(
-            f"## Your Module Files{header}\n\n"
-            f"You MUST create/modify ONLY these files:\n{files_list}\n\n"
+            f"## Your Module Files{header}\n\nYou MUST create/modify ONLY these files:\n{files_list}\n\n"
         )
 
     if denied_for_agent:

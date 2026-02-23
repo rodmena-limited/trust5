@@ -100,7 +100,6 @@ class M(StrEnum):
     LDIG = "LDIG"  # loop diagnostics count
     LERR = "LERR"  # loop error
 
-
     # ── Watchdog ──
     WDST = "WDST"  # watchdog started
     WDOK = "WDOK"  # watchdog check passed (all clear)

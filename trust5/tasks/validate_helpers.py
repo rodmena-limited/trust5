@@ -565,7 +565,6 @@ def _count_tests(output: str) -> int:
     return total
 
 
-
 def detect_cross_module_failure(test_output: str) -> bool:
     """Return True if test output contains cross-module interface mismatch patterns.
 
@@ -583,11 +582,13 @@ def detect_cross_module_failure(test_output: str) -> bool:
         return False
 
     lower = test_output.lower()
-    return any([
-        "typeerror:" in lower and ("argument" in lower or "__init__" in lower),
-        "attributeerror:" in lower and "has no attribute" in lower,
-        "importerror: cannot import name" in lower,
-    ])
+    return any(
+        [
+            "typeerror:" in lower and ("argument" in lower or "__init__" in lower),
+            "attributeerror:" in lower and "has no attribute" in lower,
+            "importerror: cannot import name" in lower,
+        ]
+    )
 
 
 # ── Exclude flags for common linters ────────────────────────────────
@@ -598,14 +599,18 @@ _LINT_EXCLUDE_FLAGS: dict[str, list[tuple[str, str]]] = {
         ("ruff", "--extend-exclude tests/ --extend-exclude test_* --extend-exclude *_test* --extend-exclude conftest*"),
     ],
     "typescript": [
-        ("eslint",
-         "--ignore-pattern 'test_*' --ignore-pattern '*_test*'"
-         " --ignore-pattern '*.test.*' --ignore-pattern '*.spec.*'"),
+        (
+            "eslint",
+            "--ignore-pattern 'test_*' --ignore-pattern '*_test*'"
+            " --ignore-pattern '*.test.*' --ignore-pattern '*.spec.*'",
+        ),
     ],
     "javascript": [
-        ("eslint",
-         "--ignore-pattern 'test_*' --ignore-pattern '*_test*'"
-         " --ignore-pattern '*.test.*' --ignore-pattern '*.spec.*'"),
+        (
+            "eslint",
+            "--ignore-pattern 'test_*' --ignore-pattern '*_test*'"
+            " --ignore-pattern '*.test.*' --ignore-pattern '*.spec.*'",
+        ),
     ],
     # Rust tests are inline — no exclusion needed.
     # Go gofmt/go vet don't support exclude flags — handled via file filtering.
