@@ -321,6 +321,11 @@ class AgentTask(Task):
         if agent_name and "implementer" in agent_name.lower() and stage.context.get("test_first_completed"):
             system_prompt += "\n\n" + _TDD_GREEN_PHASE_INSTRUCTIONS
 
+        from ..tasks.watchdog_task import load_watchdog_findings
+        watchdog_ctx = load_watchdog_findings(project_root)
+        if watchdog_ctx:
+            system_prompt += "\n\n" + watchdog_ctx
+
         reimpl_count = stage.context.get("reimplementation_count", 0)
         if agent_name and "implementer" in agent_name.lower() and reimpl_count > 0:
             failure_summary = stage.context.get("failure_summary", "")

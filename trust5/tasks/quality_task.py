@@ -25,6 +25,7 @@ from ..core.quality_gates import (
     validate_methodology,
     validate_phase,
 )
+from ..tasks.watchdog_task import signal_pipeline_done
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ class QualityTask(Task):
                 M.QPAS,
                 f"Quality gate PASSED — score {report.score:.3f} (threshold {config.pass_score_threshold}) [{status}]",
             )
+            signal_pipeline_done(project_root)
             return TaskResult.success(
                 outputs={
                     "quality_passed": True,
@@ -191,6 +193,7 @@ class QualityTask(Task):
                 f"Quality gate FAILED (score {report.score:.3f}) — "
                 f"tests_partial=True (repair exhausted). Accepting partial result.",
             )
+            signal_pipeline_done(project_root)
             return TaskResult.failed_continue(
                 error=(f"Quality gate failed (score={report.score:.3f}) with partial test results (repair exhausted)"),
                 outputs={
@@ -210,6 +213,7 @@ class QualityTask(Task):
                 M.QFAL,
                 f"Max quality attempts ({max_attempts}) reached. Accepting partial result.",
             )
+            signal_pipeline_done(project_root)
             return TaskResult.failed_continue(
                 error=f"Quality gate failed after {attempt} attempts (score={report.score:.3f})",
                 outputs={
@@ -226,6 +230,7 @@ class QualityTask(Task):
                 M.QFAL,
                 "Quality stagnant — no improvement between attempts. Accepting partial.",
             )
+            signal_pipeline_done(project_root)
             return TaskResult.failed_continue(
                 error=f"Quality stagnant at score={report.score:.3f}",
                 outputs={

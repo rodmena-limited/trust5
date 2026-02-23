@@ -160,6 +160,14 @@ class RepairTask(Task):
             except (TypeError, KeyError):
                 pass
 
+        # Inject watchdog audit findings so the repairer is aware of
+        # file-system anomalies (garbled files, missing manifests, stubs).
+        from .watchdog_task import load_watchdog_findings
+
+        watchdog_ctx = load_watchdog_findings(project_root)
+        if watchdog_ctx:
+            system_prompt += "\n\n" + watchdog_ctx
+
         plan_config = stage.context.get("plan_config")
         user_prompt = build_repair_prompt(
             test_output=summarized_output,

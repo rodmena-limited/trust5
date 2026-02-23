@@ -23,6 +23,7 @@ C_GREEN = "#8cc084"  # Warm green — success
 C_AMBER = "#d4943c"  # Copper — thinking, warnings, retries
 C_RED = "#c87070"  # Dusty rose — errors, failures
 C_LAVENDER = "#b08cb8"  # Dusty mauve — stages, validation
+C_PURPLE = "#a87fd4"  # Warm purple — watchdog monitoring
 
 # Dim variants for subtle/background use
 C_DIM_TEAL = "#5a8068"
@@ -30,6 +31,7 @@ C_DIM_GREEN = "#68986c"
 C_DIM_AMBER = "#a07838"
 C_DIM_RED = "#985858"
 C_DIM_LAVENDER = "#887098"
+C_DIM_PURPLE = "#7c5ca0"
 
 # ─── Theme Map ───────────────────────────────────────────────────────────────
 # marker: 4-char fixed-width badge text (for left-column alignment)
@@ -110,9 +112,9 @@ THEME: dict[str, dict[str, Any]] = {
     M.LITR: {"marker": "LOOP", "color": C_DIM_LAVENDER, "title": "Iteration", "pill": False},
     M.LDIG: {"marker": " DX ", "color": C_DIM_LAVENDER, "title": "Diagnostics", "pill": False},
     # Watchdog
-    M.WDST: {"marker": " W~ ", "color": C_TEAL, "title": "Watchdog", "pill": True},
-    M.WDOK: {"marker": " W. ", "color": C_DIM_GREEN, "title": "Watchdog OK", "pill": False},
-    M.WDWN: {"marker": " W! ", "color": C_AMBER, "title": "Watchdog", "pill": True},
+    M.WDST: {"marker": " W~ ", "color": C_PURPLE, "title": "Watchdog", "pill": True},
+    M.WDOK: {"marker": " W. ", "color": C_DIM_PURPLE, "title": "Watchdog OK", "pill": False},
+    M.WDWN: {"marker": " W! ", "color": C_PURPLE, "title": "Watchdog", "pill": True},
     M.WDER: {"marker": " W!!", "color": C_RED, "title": "Watchdog", "pill": True},
     # Blocked
     M.UASK: {"marker": "  ?", "color": C_AMBER, "title": "Question", "pill": True},

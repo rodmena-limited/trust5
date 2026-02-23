@@ -22,9 +22,11 @@ from .theme import (
     C_BLUE,
     C_CHROME,
     C_DIM,
+    C_DIM_PURPLE,
     C_GREEN,
     C_LAVENDER,
     C_MUTED,
+    C_PURPLE,
     C_RED,
     C_SECONDARY,
     C_TEAL,
@@ -255,6 +257,14 @@ class Trust5Log(RichLog):
                 border_style=C_CHROME,
                 box=ROUNDED,
             )
+        elif code in (M.WDWN, M.WDER):
+            border = C_RED if code == M.WDER else C_PURPLE
+            renderable = Panel(
+                Text(content, style=C_TEXT),
+                title=f" {theme['title']} ",
+                border_style=border,
+                box=ROUNDED,
+            )
         else:
             renderable = Panel(
                 Text(content),
@@ -414,5 +424,10 @@ class Trust5Log(RichLog):
         # Info — bold gold
         if code == M.SINF:
             return f"bold {C_BLUE}"
+        # Watchdog — purple for warnings, red for errors, purple for lifecycle
+        if code in (M.WDWN, M.WDER):
+            return f"bold {C_RED}" if code == M.WDER else f"bold {C_PURPLE}"
+        if code in (M.WDST, M.WDOK):
+            return C_PURPLE if code == M.WDST else C_DIM_PURPLE
         # Default — secondary (not bright, reserve cream for AI response content)
         return C_SECONDARY
