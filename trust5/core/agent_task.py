@@ -2,9 +2,11 @@ import logging
 import os
 import threading
 import time
+from datetime import timedelta
 from typing import Any
 
 import yaml
+from resilient_circuit import ExponentialDelay
 from stabilize import StageExecution, Task, TaskResult
 from stabilize.errors import TransientError
 
@@ -17,6 +19,22 @@ from ..core.mcp_manager import mcp_clients
 from ..core.message import M, emit
 
 logger = logging.getLogger(__name__)
+
+# Outer (Stabilize-level) retry backoff for LLM errors.
+# Inner retry in LLM._chat_with_retry already spent its budget;
+# these delays let external conditions change before another attempt.
+_OUTER_BACKOFF_CONNECTION = ExponentialDelay(
+    min_delay=timedelta(seconds=120),
+    max_delay=timedelta(seconds=300),
+    factor=2,
+    jitter=0.3,
+)
+_OUTER_BACKOFF_DEFAULT = ExponentialDelay(
+    min_delay=timedelta(seconds=60),
+    max_delay=timedelta(seconds=300),
+    factor=2,
+    jitter=0.3,
+)
 
 NON_INTERACTIVE_PREFIX = (
     "CRITICAL: You are running inside a fully autonomous, non-interactive pipeline. "
@@ -436,13 +454,16 @@ class AgentTask(Task):
                     # Inner retry already spent its budget (5 min for connection,
                     # 3 min for server). Pick a Stabilize-level wait that lets
                     # external conditions change before we burn another budget.
+                    # Progressive: increase wait between outer retries.
+                    outer_attempt = stage.context.get("_transient_retry_count", 0) + 1
+                    stage.context["_transient_retry_count"] = outer_attempt
                     retry_after: float
                     if e.error_class == "connection":
-                        retry_after = 120.0  # 2 min — network may need time
+                        retry_after = _OUTER_BACKOFF_CONNECTION.for_attempt(outer_attempt)
                     elif e.error_class == "rate_limit":
-                        retry_after = max(e.retry_after, 60.0)
+                        retry_after = max(e.retry_after, _OUTER_BACKOFF_DEFAULT.for_attempt(outer_attempt))
                     else:
-                        retry_after = 60.0  # server errors
+                        retry_after = _OUTER_BACKOFF_DEFAULT.for_attempt(outer_attempt)
                     raise TransientError(
                         f"LLM failed for {agent_name}: {e}",
                         retry_after=retry_after,

@@ -1,9 +1,13 @@
 import logging
 import threading
 import time
+from datetime import timedelta
+from fractions import Fraction
 from typing import Any
 
 import requests
+from resilient_circuit import CircuitProtectorPolicy, ExponentialDelay
+from resilient_circuit.exceptions import ProtectedCallError
 
 from .constants import (
     STREAM_READ_TIMEOUT_STANDARD,
@@ -24,11 +28,47 @@ CONNECT_TIMEOUT = 10  # TCP connect timeout (fail fast, then retry)
 TOKEN_REFRESH_MARGIN = 300  # refresh token if it expires within 5 min
 
 # Retry budgets (total seconds per error class before giving up)
-RETRY_BUDGET_CONNECT = 300  # 5 min: network outages, DNS failures
-RETRY_BUDGET_SERVER = 180  # 3 min: 5xx errors, overloaded backends
-RETRY_BUDGET_RATE = 300  # 5 min: rate limiting (uses server's Retry-After)
-RETRY_DELAY_CONNECT = 5  # quick retries — network may recover any moment
-RETRY_DELAY_SERVER = 30  # give server time to recover
+RETRY_BUDGET_CONNECT = 3600   # 1 hour: long-running pipelines need extended patience
+RETRY_BUDGET_SERVER = 1800    # 30 min: 5xx errors, overloaded backends
+RETRY_BUDGET_RATE = 3600      # 1 hour: rate limiting (uses server's Retry-After)
+RETRY_DELAY_CONNECT = 5       # quick retries — network may recover any moment (unchanged)
+RETRY_DELAY_SERVER = 10       # lower initial base — Full Jitter handles growth
+MAX_BACKOFF_DELAY = 300.0     # 5 minute ceiling for exponential backoff
+
+# Backoff strategies per error class (using resilient-circuit)
+_BACKOFF_CONNECT = ExponentialDelay(
+    min_delay=timedelta(seconds=5),      # RETRY_DELAY_CONNECT
+    max_delay=timedelta(seconds=300),    # MAX_BACKOFF_DELAY
+    factor=2,
+    jitter=1.0,  # Full-spread jitter: delay ∈ [0, 2 × base × 2^(attempt-1)]
+)
+_BACKOFF_SERVER = ExponentialDelay(
+    min_delay=timedelta(seconds=10),     # RETRY_DELAY_SERVER
+    max_delay=timedelta(seconds=300),    # MAX_BACKOFF_DELAY
+    factor=2,
+    jitter=1.0,
+)
+
+
+# ── Model circuit breakers ───────────────────────────────────────────
+# Prevents wasting retry budget on models that consistently fail.
+# Circuit opens after 3/5 failures, closes after 2 consecutive successes.
+# 2-minute cooldown before half-open probe.
+
+_model_circuits: dict[str, CircuitProtectorPolicy] = {}
+
+
+def _get_model_circuit(model: str) -> CircuitProtectorPolicy:
+    """Get or create a circuit breaker for a specific model endpoint."""
+    if model not in _model_circuits:
+        _model_circuits[model] = CircuitProtectorPolicy(
+            resource_key=f"trust5-llm-{model}",
+            cooldown=timedelta(seconds=120),
+            failure_limit=Fraction(3, 5),
+            success_limit=Fraction(2, 2),
+        )
+    return _model_circuits[model]
+
 
 MODEL_CONTEXT_WINDOW: dict[str, int] = {
     "claude-opus-4-20250514": 200_000,
@@ -189,12 +229,24 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
 
         last_error = None
         for try_model in models_to_try:
+            circuit = _get_model_circuit(try_model)
             try:
-                return self._chat_with_retry(messages, tools, try_model, effective_timeout)
+                circuit._status.validate_execution()
+            except ProtectedCallError:
+                emit(M.AFBK, f"Circuit open for {try_model}, skipping to fallback.")
+                continue
+
+            try:
+                result = self._chat_with_retry(messages, tools, try_model, effective_timeout)
+                circuit._status.mark_success()
+                circuit._save_state()
+                return result
             except LLMError as e:
                 last_error = e
-                # Connection and auth errors affect ALL models (same network /
-                # same credentials) — don't waste time trying fallbacks.
+                if e.retryable:
+                    if circuit.should_consider_failure(e):
+                        circuit._status.mark_failure()
+                        circuit._save_state()
                 if e.error_class in ("connection", "auth"):
                     break
                 emit(M.AFBK, f"Model {try_model} failed: {e}. Trying fallback.")
@@ -213,10 +265,12 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
         model: str,
         timeout: int,
     ) -> dict[str, Any]:
-        """Retry with a time budget that varies by error class.
+        """Retry with Full Jitter exponential backoff and time budgets.
 
-        Connection errors get 5 min of quick retries (5s apart).
-        Server/rate errors get 3-5 min of slower retries (30s+ apart).
+        Connection errors get 1 hour of retries (5s base, jittered up to 5 min).
+        Server errors get 30 min (10s base, jittered).
+        Rate limit errors get 1 hour (respect server Retry-After, jittered).
+        Sleep is interruptible via ``self._abort`` so watchdog can cancel.
         """
         start = time.monotonic()
         attempt = 0
@@ -228,28 +282,26 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
                     raise
                 attempt += 1
                 elapsed = time.monotonic() - start
-
-                budget: float
                 delay: float
                 if e.error_class == "connection":
                     budget = RETRY_BUDGET_CONNECT
-                    delay = RETRY_DELAY_CONNECT
+                    delay = _BACKOFF_CONNECT.for_attempt(attempt)
                 elif e.error_class == "rate_limit":
                     budget = RETRY_BUDGET_RATE
-                    delay = max(e.retry_after, float(RETRY_DELAY_SERVER))
+                    delay = max(e.retry_after, _BACKOFF_SERVER.for_attempt(attempt))
                 else:
                     budget = RETRY_BUDGET_SERVER
-                    delay = max(e.retry_after, float(RETRY_DELAY_SERVER))
-
+                    delay = _BACKOFF_SERVER.for_attempt(attempt)
                 remaining = budget - elapsed
                 if remaining <= delay:
                     raise  # budget exhausted
-
                 emit(
                     M.ARTY,
                     f"Retry {attempt} for {model} in {delay:.0f}s ({e.error_class}, {remaining:.0f}s budget left): {e}",
                 )
-                time.sleep(delay)
+                # Interruptible sleep: abort() wakes this immediately
+                if self._abort.wait(timeout=delay):
+                    raise  # aborted during retry sleep
 
     def _do_chat(
         self,

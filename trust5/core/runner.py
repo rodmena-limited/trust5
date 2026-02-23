@@ -22,7 +22,10 @@ TERMINAL_STATUSES: frozenset[WorkflowStatus] = frozenset(
     }
 )
 
-POLL_INTERVAL: float = 0.5
+POLL_INTERVAL_FAST: float = 0.5      # first 60 seconds
+POLL_INTERVAL_MODERATE: float = 2.0  # 1-5 minutes
+POLL_INTERVAL_SLOW: float = 5.0     # beyond 5 minutes
+POLL_INTERVAL: float = POLL_INTERVAL_FAST  # backward compat alias
 
 
 def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, list[str]]:
@@ -146,19 +149,30 @@ def wait_for_completion(
     stop_event: threading.Event | None = None,
 ) -> Workflow:
     """Poll workflow status until it reaches a terminal state, timeout, or stop signal.
-
+    Uses progressive polling intervals to reduce DB load on long-running pipelines:
+    - First 60s: 0.5s (fast feedback during startup)
+    - 1-5 min: 2.0s (moderate)
+    - Beyond 5 min: 5.0s (minimal DB overhead for multi-day runs)
     When *stop_event* is provided and becomes set (e.g. TUI exits via Ctrl+C),
     the poll loop exits immediately so the calling thread can clean up its
     QueueProcessor and other resources without blocking for the full timeout.
     """
-    deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    deadline = start + timeout
     while time.monotonic() < deadline:
         if stop_event is not None and stop_event.is_set():
             return store.retrieve(workflow_id)
         result = store.retrieve(workflow_id)
         if result.status in TERMINAL_STATUSES:
             return result
-        time.sleep(POLL_INTERVAL)
+        elapsed = time.monotonic() - start
+        if elapsed < 60:
+            interval = POLL_INTERVAL_FAST
+        elif elapsed < 300:
+            interval = POLL_INTERVAL_MODERATE
+        else:
+            interval = POLL_INTERVAL_SLOW
+        time.sleep(interval)
     return store.retrieve(workflow_id)
 
 

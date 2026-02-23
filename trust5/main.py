@@ -14,9 +14,9 @@ os.environ.setdefault("STABILIZE_SQLITE_MMAP_SIZE_MB", "0")
 # LLM calls, so the extra fsync cost is negligible).
 os.environ.setdefault("STABILIZE_SQLITE_SYNCHRONOUS", "FULL")
 # ── Stabilize watchdog: raise the CompleteWorkflow poll limit ──────────
-# Default is 240 retries × 15 s = 1 hour, which is too short for a
-# multi-module LLM pipeline (TIMEOUT_DEVELOP = 2 h).  480 × 15 s = 2 h.
-os.environ.setdefault("STABILIZE_MAX_STAGE_WAIT_RETRIES", "480")
+# Default is 240 retries × 15 s = 1 hour.  Trust5 pipelines can run for
+# days/weeks for large projects.  57600 × 15 s = 10 days.
+os.environ.setdefault("STABILIZE_MAX_STAGE_WAIT_RETRIES", "57600")
 
 import typer
 from stabilize import Workflow

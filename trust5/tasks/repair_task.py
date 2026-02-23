@@ -14,6 +14,7 @@ from ..core.lang import LanguageProfile, build_language_context, detect_language
 from ..core.llm import LLM, LLMError
 from ..core.mcp_manager import mcp_clients
 from ..core.message import M, emit
+from .watchdog_task import check_rebuild_signal, clear_rebuild_signal
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,23 @@ class RepairTask(Task):
             return TaskResult.failed_continue(
                 error="Jump limit exceeded — validate/repair loop ran too long",
                 outputs={"tests_passed": False, "jump_limit_reached": True},
+            )
+
+
+        # ── Watchdog rebuild signal ───────────────────────────────────
+        rebuild_signaled, rebuild_reason = check_rebuild_signal(project_root)
+        if rebuild_signaled:
+            clear_rebuild_signal(project_root)
+            emit(M.RFAL, f"Watchdog ordered rebuild: {rebuild_reason}")
+            rebuild_ctx: dict[str, Any] = {
+                "_rebuild_requested": True,
+                "_rebuild_reason": rebuild_reason,
+            }
+            propagate_context(stage.context, rebuild_ctx)
+            increment_jump_count(rebuild_ctx)
+            return TaskResult.jump_to(
+                stage.context.get("jump_validate_ref", "validate"),
+                context=rebuild_ctx,
             )
 
         # Re-detect language at runtime when build-time detection was "unknown"

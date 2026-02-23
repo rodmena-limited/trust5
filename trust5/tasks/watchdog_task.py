@@ -139,6 +139,50 @@ def signal_pipeline_done(project_root: str) -> None:
         logger.debug("Failed to write pipeline-done sentinel")
 
 
+
+
+# ── Rebuild sentinel ─────────────────────────────────────────────────
+
+_REBUILD_SENTINEL = "watchdog_rebuild"
+
+
+def signal_rebuild(project_root: str, reason: str) -> None:
+    """Write a rebuild sentinel so validate/repair stages trigger reimplementation.
+
+    The watchdog writes this when it determines the project is in an
+    unrecoverable state.  ``validate_task`` and ``repair_task`` check for it.
+    """
+    sentinel_dir = os.path.join(project_root, ".trust5")
+    os.makedirs(sentinel_dir, exist_ok=True)
+    sentinel = os.path.join(sentinel_dir, _REBUILD_SENTINEL)
+    try:
+        with open(sentinel, "w", encoding="utf-8") as f:
+            json.dump({"reason": reason, "timestamp": time.time()}, f)
+        emit(M.WDWN, f"Watchdog signaled rebuild: {reason}")
+    except OSError:
+        logger.debug("Failed to write rebuild sentinel")
+
+
+def check_rebuild_signal(project_root: str) -> tuple[bool, str]:
+    """Check if the watchdog has signaled a rebuild.  Returns (signaled, reason)."""
+    sentinel = os.path.join(project_root, ".trust5", _REBUILD_SENTINEL)
+    if not os.path.exists(sentinel):
+        return False, ""
+    try:
+        with open(sentinel, encoding="utf-8") as f:
+            data = json.load(f)
+        return True, data.get("reason", "watchdog-triggered rebuild")
+    except (OSError, json.JSONDecodeError):
+        return True, "watchdog-triggered rebuild (unreadable sentinel)"
+
+
+def clear_rebuild_signal(project_root: str) -> None:
+    """Remove the rebuild sentinel after it has been acted on."""
+    sentinel = os.path.join(project_root, ".trust5", _REBUILD_SENTINEL)
+    try:
+        os.remove(sentinel)
+    except FileNotFoundError:
+        pass
 # ── Pipeline Health state machine ────────────────────────────────────
 
 
@@ -154,6 +198,8 @@ class PipelineHealth:
     consecutive_readonly_turns: int = 0
     llm_audit_count: int = 0
     _current_stage: str = ""
+    test_pass_history: list[bool] = field(default_factory=list)
+    last_stage_completion_time: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -163,7 +209,13 @@ class PipelineHealth:
             "stages_failed": list(self.stages_failed),
             "tool_calls_by_stage": dict(self.tool_calls_by_stage),
             "consecutive_readonly_turns": self.consecutive_readonly_turns,
+            "test_pass_history": list(self.test_pass_history),
+            "last_stage_completion_time": self.last_stage_completion_time,
         }
+
+    def record_test_result(self, passed: bool) -> None:
+        """Track test pass/fail history for regression detection."""
+        self.test_pass_history.append(passed)
 
 
 # ── EventBus consumer ────────────────────────────────────────────────
@@ -210,11 +262,19 @@ def _start_event_consumer(health: PipelineHealth) -> tuple[threading.Thread, que
                     if stage_name and stage_name not in health.stages_completed:
                         health.stages_completed.append(stage_name)
                     health._current_stage = stage_name
+                    health.last_stage_completion_time = time.monotonic()
             elif code in {"VFAL", "WFAL", "QFAL"}:
                 stage_name = label or event.msg or ""
                 stage_name = stage_name.strip().lower()
                 if stage_name and stage_name not in health.stages_failed:
                     health.stages_failed.append(stage_name)
+                if code == "VFAL":
+                    health.record_test_result(False)
+
+            # Test result tracking for regression detection
+            elif code == "VPAS":
+                health.record_test_result(True)
+                health.last_stage_completion_time = time.monotonic()
 
             # Tool call tracking
             elif code in {"CTLC", "CTLR"}:
@@ -266,9 +326,10 @@ def _run_llm_audit(
     profile: dict[str, Any],
     rule_findings: list[dict[str, str]],
     trigger: str,
+    max_audits: int = _MAX_LLM_AUDITS,
 ) -> dict[str, Any] | None:
     """Perform a single LLM audit call.  Returns parsed audit dict or ``None`` on failure."""
-    if health.llm_audit_count >= _MAX_LLM_AUDITS:
+    if health.llm_audit_count >= max_audits:
         return None
 
     try:
@@ -310,9 +371,10 @@ def _should_trigger_audit(
     health: PipelineHealth,
     rule_findings: list[dict[str, str]],
     previous_triggers: set[str],
+    max_audits: int = _MAX_LLM_AUDITS,
 ) -> str | None:
     """Determine if an LLM audit should be triggered.  Returns trigger name or ``None``."""
-    if health.llm_audit_count >= _MAX_LLM_AUDITS:
+    if health.llm_audit_count >= max_audits:
         return None
 
     # After implement stage completes
@@ -362,6 +424,7 @@ class WatchdogTask(Task):
 
         # Start EventBus consumer (Layer 1 — real-time pipeline observability)
         health = PipelineHealth()
+        max_runtime = stage.context.get("workflow_timeout", self.MAX_RUNTIME)
         consumer_thread, sub_q = _start_event_consumer(health)
 
         emit(M.WDST, "Watchdog started \u2014 monitoring pipeline health")
@@ -378,8 +441,8 @@ class WatchdogTask(Task):
         try:
             while True:
                 elapsed = time.monotonic() - start_time
-                if elapsed > self.MAX_RUNTIME:
-                    emit(M.WDWN, f"Watchdog max runtime reached ({self.MAX_RUNTIME}s). Stopping.")
+                if elapsed > max_runtime:
+                    emit(M.WDWN, f"Watchdog max runtime reached ({max_runtime}s). Stopping.")
                     break
 
                 # Check if the pipeline signalled completion.
@@ -397,15 +460,18 @@ class WatchdogTask(Task):
                 # ── Layer 1a: Deterministic rules ────────────────────
                 self._run_rules(project_root, language_profile, stage.context, health, findings)
 
+                # Check for rebuild trigger
+                self._should_trigger_rebuild(health, stage.context, project_root)
                 # ── Layer 1b: Filesystem checks (existing) ──────────
                 warnings, errors = self._run_checks(project_root, language_profile, stage.context, findings)
                 total_warnings += warnings
                 total_errors += errors
 
                 # ── Layer 2: LLM audit triggers ─────────────────────
-                trigger = _should_trigger_audit(health, findings, audit_triggers_fired)
+                max_audits = max(_MAX_LLM_AUDITS, int(elapsed / 3600 / 2))  # ~1 audit per 2 hours
+                trigger = _should_trigger_audit(health, findings, audit_triggers_fired, max_audits)
                 if trigger is not None:
-                    audit_result = _run_llm_audit(health, language_profile, findings, trigger)
+                    audit_result = _run_llm_audit(health, language_profile, findings, trigger, max_audits)
                     if audit_result is not None:
                         audit_summaries.append(audit_result)
                         audit_triggers_fired.add(trigger)
@@ -423,7 +489,14 @@ class WatchdogTask(Task):
                     all_findings = []
                     self._write_report(project_root, all_findings, check_count, health, audit_summaries)
 
-                time.sleep(self.CHECK_INTERVAL)
+                # Progressive interval: tighter at start, relaxed for long runs
+                if elapsed < 3600:
+                    interval = self.CHECK_INTERVAL  # 12s
+                elif elapsed < 21600:
+                    interval = 30  # 6 hours
+                else:
+                    interval = 60  # beyond 6 hours
+                time.sleep(interval)
 
         except Exception as e:
             emit(M.WDER, f"Watchdog crashed: {e}")
@@ -544,6 +617,9 @@ class WatchdogTask(Task):
         findings.extend(self._rule_idle_agent(health))
         findings.extend(self._rule_quality_prerequisites(project_root, profile, health))
         findings.extend(self._rule_cross_module_consistency(project_root, context))
+        findings.extend(self._rule_regression(health))
+        findings.extend(self._rule_stall(health))
+        findings.extend(self._rule_exhaustion(health, context))
 
     @staticmethod
     def _rule_tool_availability(profile: dict[str, Any]) -> list[dict[str, str]]:
@@ -729,6 +805,113 @@ class WatchdogTask(Task):
                 )
         return findings
 
+
+    @staticmethod
+    def _rule_regression(health: PipelineHealth) -> list[dict[str, str]]:
+        """Rule 8: Detect declining test pass rate (regression)."""
+        findings: list[dict[str, str]] = []
+        history = health.test_pass_history
+        if len(history) < 4:
+            return findings
+        # Check if last 3 results are all failures after at least 1 pass
+        if any(history[:-3]) and all(not r for r in history[-3:]):
+            findings.append(
+                {
+                    "severity": "error",
+                    "category": "regression",
+                    "file": "",
+                    "message": (
+                        f"Test regression detected: last 3 test runs failed after previous passes "
+                        f"(history: {len([r for r in history if r])}/{len(history)} passes)"
+                    ),
+                }
+            )
+        return findings
+
+    @staticmethod
+    def _rule_stall(health: PipelineHealth) -> list[dict[str, str]]:
+        """Rule 9: Detect pipeline stall (no stage completions for extended period)."""
+        findings: list[dict[str, str]] = []
+        if health.last_stage_completion_time <= 0:
+            return findings
+        stall_duration = time.monotonic() - health.last_stage_completion_time
+        # After 30 minutes of no stage completions, warn
+        if stall_duration > 1800:
+            findings.append(
+                {
+                    "severity": "warning" if stall_duration < 3600 else "error",
+                    "category": "pipeline_stall",
+                    "file": "",
+                    "message": (
+                        f"Pipeline stall: no stage completed in {stall_duration / 60:.0f} minutes. "
+                        f"Last stages: {health.stages_completed[-3:] if health.stages_completed else 'none'}"
+                    ),
+                }
+            )
+        return findings
+
+    @staticmethod
+    def _rule_exhaustion(health: PipelineHealth, context: dict[str, Any]) -> list[dict[str, str]]:
+        """Rule 10: Detect when jump count is approaching the limit."""
+        findings: list[dict[str, str]] = []
+        max_jumps = context.get("_max_jumps", 50)
+        if max_jumps <= 0:
+            return findings
+        ratio = health.jump_count / max_jumps
+        if ratio >= 0.8:
+            findings.append(
+                {
+                    "severity": "error",
+                    "category": "jump_exhaustion",
+                    "file": "",
+                    "message": (
+                        f"Jump limit nearly exhausted: {health.jump_count}/{max_jumps} "
+                        f"({ratio:.0%}). Pipeline may terminate soon."
+                    ),
+                }
+            )
+        elif ratio >= 0.6:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "category": "jump_exhaustion",
+                    "file": "",
+                    "message": f"Jump count at {health.jump_count}/{max_jumps} ({ratio:.0%}).",
+                }
+            )
+        return findings
+
+    def _should_trigger_rebuild(
+        self,
+        health: PipelineHealth,
+        context: dict[str, Any],
+        project_root: str,
+    ) -> bool:
+        """Determine if a full project rebuild should be triggered.
+
+        Fires when jump count >= 80% of limit AND no recent progress
+        (test regression or stall).
+        """
+        max_jumps = context.get("_max_jumps", 50)
+        if max_jumps <= 0 or health.jump_count < max_jumps * 0.8:
+            return False
+
+        # Need evidence of being stuck, not just high jump count
+        history = health.test_pass_history
+        recent_regression = len(history) >= 3 and all(not r for r in history[-3:])
+
+        stall = False
+        if health.last_stage_completion_time > 0:
+            stall = (time.monotonic() - health.last_stage_completion_time) > 1800
+
+        if recent_regression or stall:
+            signal_rebuild(
+                project_root,
+                f"Jump count {health.jump_count}/{max_jumps} with "
+                f"{'test regression' if recent_regression else 'pipeline stall'}",
+            )
+            return True
+        return False
     # ── Layer 1b: Filesystem checks (preserved from original) ─────────
 
     def _run_checks(
@@ -769,14 +952,17 @@ class WatchdogTask(Task):
         project_root: str,
         findings: list[dict[str, str]],
     ) -> tuple[int, int]:
-        """Check for garbled files (shell redirect artifacts)."""
+        """Check for and auto-delete garbled files (shell redirect artifacts)."""
         errors = 0
         try:
             for entry in os.scandir(project_root):
                 if entry.is_file() and _GARBLED_RE.match(entry.name):
-                    msg = (
-                        f"Garbled file detected: {entry.name} (likely shell redirect artifact \u2014 should be deleted)"
-                    )
+                    try:
+                        os.remove(entry.path)
+                        msg = f"Garbled file auto-deleted: {entry.name} (shell redirect artifact)"
+                        emit(M.WDWN, f"Auto-deleted garbled file: {entry.name}")
+                    except OSError:
+                        msg = f"Garbled file detected but could not delete: {entry.name}"
                     findings.append(
                         {
                             "severity": "error",

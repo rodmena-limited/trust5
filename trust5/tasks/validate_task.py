@@ -34,6 +34,7 @@ from .validate_helpers import (
     _strip_nonexistent_files,
     detect_cross_module_failure,
 )
+from .watchdog_task import check_rebuild_signal, clear_rebuild_signal
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,27 @@ class ValidateTask(Task):
             return TaskResult.failed_continue(
                 error="Jump limit exceeded — validate/repair loop ran too long",
                 outputs={"tests_passed": False, "jump_limit_reached": True},
+            )
+
+
+        # ── Watchdog rebuild signal ───────────────────────────────────
+        rebuild_signaled, rebuild_reason = check_rebuild_signal(project_root)
+        if rebuild_signaled:
+            clear_rebuild_signal(project_root)
+            emit(M.VFAL, f"Watchdog ordered rebuild: {rebuild_reason}")
+            rebuild_ctx: dict[str, Any] = {
+                "_rebuild_requested": True,
+                "_rebuild_reason": rebuild_reason,
+                "project_root": project_root,
+                "language_profile": profile_data,
+            }
+            propagate_context(stage.context, rebuild_ctx)
+            rebuild_ctx["repair_attempt"] = 0
+            rebuild_ctx["previous_failures"] = []
+            increment_jump_count(rebuild_ctx)
+            return TaskResult.jump_to(
+                stage.context.get("jump_implement_ref", "implement"),
+                context=rebuild_ctx,
             )
 
         # Resolve language profile: use context data, fall back to auto-detection.

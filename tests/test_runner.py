@@ -277,3 +277,52 @@ def test_wait_for_completion_ignores_none_stop_event():
     result = wait_for_completion(store, "wf-123", timeout=10.0, stop_event=None)
 
     assert result.status == WorkflowStatus.SUCCEEDED
+
+
+
+# ── Progressive polling tests ──────────────────────────────────────
+
+
+def test_progressive_poll_constants_exist():
+    """Progressive polling constants are defined and ordered correctly."""
+    from trust5.core.runner import POLL_INTERVAL, POLL_INTERVAL_FAST, POLL_INTERVAL_MODERATE, POLL_INTERVAL_SLOW
+
+    assert POLL_INTERVAL_FAST == 0.5
+    assert POLL_INTERVAL_MODERATE == 2.0
+    assert POLL_INTERVAL_SLOW == 5.0
+    assert POLL_INTERVAL == POLL_INTERVAL_FAST  # backward compat
+
+
+def test_progressive_poll_constants_ordered():
+    """Fast < Moderate < Slow."""
+    from trust5.core.runner import POLL_INTERVAL_FAST, POLL_INTERVAL_MODERATE, POLL_INTERVAL_SLOW
+
+    assert POLL_INTERVAL_FAST < POLL_INTERVAL_MODERATE < POLL_INTERVAL_SLOW
+
+
+@patch("trust5.core.runner.time")
+def test_wait_for_completion_uses_fast_poll_initially(mock_time):
+    """Within first 60s, polling uses POLL_INTERVAL_FAST."""
+    store = MagicMock()
+
+    # First call: RUNNING, second call: SUCCEEDED
+    wf_running = MagicMock()
+    wf_running.status = WorkflowStatus.RUNNING
+    wf_done = MagicMock()
+    wf_done.status = WorkflowStatus.SUCCEEDED
+
+    store.retrieve.side_effect = [wf_running, wf_done]
+
+    # Simulate: monotonic() returns 100, 100 (start), 100+0.5 (loop check < deadline), 100 (elapsed calc)
+    # Keep elapsed < 60 to stay in FAST interval
+    mock_time.monotonic.side_effect = [100.0, 100.0, 100.5, 100.0, 100.5, 101.0]
+    mock_time.sleep = MagicMock()
+
+    from trust5.core.runner import POLL_INTERVAL_FAST
+
+    result = wait_for_completion(store, "wf-test", timeout=600.0)
+
+    assert result.status == WorkflowStatus.SUCCEEDED
+    # Should have slept with FAST interval
+    if mock_time.sleep.called:
+        mock_time.sleep.assert_called_with(POLL_INTERVAL_FAST)

@@ -18,8 +18,11 @@ from trust5.tasks.watchdog_task import (
     _run_llm_audit,
     _should_trigger_audit,
     _start_event_consumer,
+    check_rebuild_signal,
+    clear_rebuild_signal,
     load_watchdog_findings,
     signal_pipeline_done,
+    signal_rebuild,
 )
 
 
@@ -827,3 +830,212 @@ def test_run_rules_aggregates_all_rules(_mock_emit):
 
 def test_max_llm_audits_is_three():
     assert _MAX_LLM_AUDITS == 3
+
+
+# ── Rebuild sentinel tests ───────────────────────────────────────
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_signal_rebuild_creates_sentinel(_mock_emit):
+    """signal_rebuild writes a JSON sentinel file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        signal_rebuild(tmpdir, "test regression detected")
+        signaled, reason = check_rebuild_signal(tmpdir)
+        assert signaled is True
+        assert "test regression" in reason
+
+
+def test_check_rebuild_signal_returns_false_when_absent():
+    """No sentinel file → (False, "")."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        signaled, reason = check_rebuild_signal(tmpdir)
+        assert signaled is False
+        assert reason == ""
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_clear_rebuild_signal_removes_sentinel(_mock_emit):
+    """clear_rebuild_signal removes the sentinel."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        signal_rebuild(tmpdir, "some reason")
+        clear_rebuild_signal(tmpdir)
+        signaled, _ = check_rebuild_signal(tmpdir)
+        assert signaled is False
+
+
+def test_clear_rebuild_signal_noop_when_absent():
+    """clear_rebuild_signal doesn't fail if no sentinel exists."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        clear_rebuild_signal(tmpdir)  # Should not raise
+
+
+# ── Auto-delete garbled files tests ──────────────────────────────
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_check_garbled_files_auto_deletes(_mock_emit):
+    """Garbled files should be auto-deleted, not just reported."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        garbled_path = os.path.join(tmpdir, "=3.0.0")
+        open(garbled_path, "w").close()
+        findings: list[dict[str, str]] = []
+        _make_watchdog()._check_garbled_files(tmpdir, findings)
+        assert not os.path.exists(garbled_path), "Garbled file should be deleted"
+        assert len(findings) >= 1
+        assert "auto-deleted" in findings[0]["message"].lower() or "garbled" in findings[0]["message"].lower()
+
+
+# ── PipelineHealth enhancement tests ─────────────────────────────
+
+
+def test_pipeline_health_record_test_result():
+    """PipelineHealth.record_test_result tracks pass/fail history."""
+    h = PipelineHealth()
+    h.record_test_result(True)
+    h.record_test_result(False)
+    h.record_test_result(True)
+    assert h.test_pass_history == [True, False, True]
+
+
+def test_pipeline_health_to_dict_includes_new_fields():
+    """to_dict() should include test_pass_history and last_stage_completion_time."""
+    h = PipelineHealth()
+    h.record_test_result(True)
+    h.last_stage_completion_time = 12345.0
+    d = h.to_dict()
+    assert "test_pass_history" in d
+    assert d["test_pass_history"] == [True]
+    assert "last_stage_completion_time" in d
+    assert d["last_stage_completion_time"] == 12345.0
+
+
+# ── New rule tests ───────────────────────────────────────────────
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_rule_regression_detects_decline(_mock_emit):
+    """Rule 8: 3 consecutive failures after a pass triggers regression warning."""
+    health = PipelineHealth()
+    health.test_pass_history = [True, True, False, False, False]
+    findings = WatchdogTask._rule_regression(health)
+    assert len(findings) == 1
+    assert findings[0]["category"] == "regression"
+    assert findings[0]["severity"] == "error"
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_rule_regression_no_alert_on_short_history(_mock_emit):
+    """Rule 8: Less than 4 results → no finding."""
+    health = PipelineHealth()
+    health.test_pass_history = [False, False, False]
+    findings = WatchdogTask._rule_regression(health)
+    assert len(findings) == 0
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_rule_regression_no_alert_when_never_passed(_mock_emit):
+    """Rule 8: All failures (never passed) → no regression (it was never good)."""
+    health = PipelineHealth()
+    health.test_pass_history = [False, False, False, False, False]
+    findings = WatchdogTask._rule_regression(health)
+    assert len(findings) == 0
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_rule_stall_detects_long_gap(_mock_emit):
+    """Rule 9: No stage completion for >30 min → stall warning."""
+    import time as _time
+
+    health = PipelineHealth()
+    health.last_stage_completion_time = _time.monotonic() - 2000  # 33+ minutes ago
+    findings = WatchdogTask._rule_stall(health)
+    assert len(findings) == 1
+    assert findings[0]["category"] == "pipeline_stall"
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_rule_stall_no_alert_when_recent(_mock_emit):
+    """Rule 9: Recent stage completion → no stall."""
+    import time as _time
+
+    health = PipelineHealth()
+    health.last_stage_completion_time = _time.monotonic() - 60  # 1 minute ago
+    findings = WatchdogTask._rule_stall(health)
+    assert len(findings) == 0
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_rule_exhaustion_warns_at_60_percent(_mock_emit):
+    """Rule 10: Jump count at 60%+ of limit → warning."""
+    health = PipelineHealth()
+    health.jump_count = 31
+    context = {"_max_jumps": 50}
+    findings = WatchdogTask._rule_exhaustion(health, context)
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "warning"
+    assert findings[0]["category"] == "jump_exhaustion"
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_rule_exhaustion_errors_at_80_percent(_mock_emit):
+    """Rule 10: Jump count at 80%+ of limit → error."""
+    health = PipelineHealth()
+    health.jump_count = 42
+    context = {"_max_jumps": 50}
+    findings = WatchdogTask._rule_exhaustion(health, context)
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "error"
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_rule_exhaustion_no_alert_below_threshold(_mock_emit):
+    """Rule 10: Jump count below 60% → no finding."""
+    health = PipelineHealth()
+    health.jump_count = 10
+    context = {"_max_jumps": 50}
+    findings = WatchdogTask._rule_exhaustion(health, context)
+    assert len(findings) == 0
+
+
+# ── Rebuild trigger tests ────────────────────────────────────────
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_should_trigger_rebuild_on_regression_and_high_jumps(_mock_emit):
+    """Rebuild triggers when jump count >= 80% AND recent regression."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        health = PipelineHealth()
+        health.jump_count = 42
+        health.test_pass_history = [True, True, False, False, False]
+        context: dict = {"_max_jumps": 50}
+        result = _make_watchdog()._should_trigger_rebuild(health, context, tmpdir)
+        assert result is True
+        signaled, _ = check_rebuild_signal(tmpdir)
+        assert signaled is True
+        clear_rebuild_signal(tmpdir)
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_should_trigger_rebuild_false_when_jumps_low(_mock_emit):
+    """No rebuild when jump count is below 80%."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        health = PipelineHealth()
+        health.jump_count = 10
+        health.test_pass_history = [True, False, False, False]
+        context: dict = {"_max_jumps": 50}
+        result = _make_watchdog()._should_trigger_rebuild(health, context, tmpdir)
+        assert result is False
+
+
+# ── Scaled audit budget tests ────────────────────────────────────
+
+
+def test_should_trigger_audit_respects_max_audits():
+    """With max_audits raised, more triggers allowed."""
+    health = PipelineHealth()
+    health.stages_completed.append("implement")
+    health.llm_audit_count = 3
+    # Default max=3 → should return None
+    assert _should_trigger_audit(health, [], set()) is None
+    # Raised max=5 → should return trigger
+    assert _should_trigger_audit(health, [], set(), max_audits=5) == "post_implement"
