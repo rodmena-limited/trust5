@@ -350,17 +350,21 @@ class ReviewTask(Task):
 
     @staticmethod
     def _emit_report(report: ReviewReport) -> None:
-        """Emit the review report as a block event."""
+        """Emit the review report as a structured text block."""
         lines = [
-            f"Score: {report.summary_score:.2f} | "
-            f"Errors: {report.total_errors} | "
-            f"Warnings: {report.total_warnings} | "
-            f"Info: {report.total_info}"
+            f"Score: {report.summary_score:.2f}  |  "
+            f"Errors: {report.total_errors}  |  "
+            f"Warnings: {report.total_warnings}  |  "
+            f"Info: {report.total_info}",
+            "",
+            f"{'SEV':<8} {'CATEGORY':<18} {'LOCATION':<30} DESCRIPTION",
+            f"{'---':<8} {'--------':<18} {'--------':<30} -----------",
         ]
         for finding in report.findings[:20]:
+            sev = finding.severity.upper()
+            loc = f"{finding.file}:{finding.line}" if finding.file else "\u2014"
             lines.append(
-                f"  [{finding.severity.upper()}] [{finding.category}] "
-                f"{finding.file}:{finding.line} — {finding.description}"
+                f"{sev:<8} {finding.category:<18} {loc:<30} {finding.description}"
             )
         emit_block(M.RVRP, "Code Review Report", "\n".join(lines), max_lines=30)
 

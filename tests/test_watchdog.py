@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from trust5.tasks.watchdog_task import (
     _DOUBLE_EXT_RE,
     _GARBLED_RE,
     _LEGIT_DOUBLE_EXT,
+    _MAX_LLM_AUDITS,
+    PipelineHealth,
     WatchdogTask,
+    _build_audit_prompt,
+    _run_llm_audit,
+    _should_trigger_audit,
+    _start_event_consumer,
     load_watchdog_findings,
     signal_pipeline_done,
 )
@@ -393,3 +399,429 @@ def test_clear_sentinel_noop_when_missing():
     with tempfile.TemporaryDirectory() as tmpdir:
         # Should not raise
         WatchdogTask._clear_sentinel(tmpdir)
+
+
+
+# ════════════════════════════════════════════════════════════════════
+# New tests for hybrid watchdog (rules, EventBus, LLM auditor)
+# ════════════════════════════════════════════════════════════════════
+
+
+# ── PipelineHealth ─────────────────────────────────────────────────
+
+
+def test_pipeline_health_defaults():
+    h = PipelineHealth()
+    assert h.repair_attempts == 0
+    assert h.jump_count == 0
+    assert h.stages_completed == []
+    assert h.stages_failed == []
+    assert h.tool_calls_by_stage == {}
+    assert h.consecutive_readonly_turns == 0
+    assert h.llm_audit_count == 0
+
+
+def test_pipeline_health_to_dict():
+    h = PipelineHealth(repair_attempts=2, jump_count=5)
+    h.stages_completed.append("implement")
+    h.stages_failed.append("validate")
+    h.tool_calls_by_stage["implement"] = 35
+    d = h.to_dict()
+    assert d["repair_attempts"] == 2
+    assert d["jump_count"] == 5
+    assert "implement" in d["stages_completed"]
+    assert "validate" in d["stages_failed"]
+    assert d["tool_calls_by_stage"]["implement"] == 35
+    assert d["consecutive_readonly_turns"] == 0
+
+
+def test_pipeline_health_mutation():
+    h = PipelineHealth()
+    h.repair_attempts = 3
+    h.jump_count = 20
+    h.consecutive_readonly_turns = 10
+    assert h.repair_attempts == 3
+    assert h.jump_count == 20
+    assert h.consecutive_readonly_turns == 10
+
+
+# ── Rule: tool_availability ─────────────────────────────────────────
+
+
+def test_rule_tool_availability_present():
+    profile = {"tool_check_commands": ("python3 -c 'import sys'",)}
+    findings = _make_watchdog()._rule_tool_availability(profile)
+    assert findings == []
+
+
+def test_rule_tool_availability_missing():
+    profile = {"tool_check_commands": ("nonexistent_binary_xyz123 --version",)}
+    findings = _make_watchdog()._rule_tool_availability(profile)
+    assert len(findings) == 1
+    assert findings[0]["category"] == "tool_missing"
+    assert findings[0]["severity"] == "warning"
+
+
+def test_rule_tool_availability_empty():
+    profile = {}
+    findings = _make_watchdog()._rule_tool_availability(profile)
+    assert findings == []
+
+
+# ── Rule: test_discovery ──────────────────────────────────────────
+
+
+def test_rule_test_discovery_before_implement():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        health = PipelineHealth()
+        profile = {"test_discovery_command": "pytest --collect-only", "extensions": (".py",)}
+        findings = _make_watchdog()._rule_test_discovery(tmpdir, profile, health)
+        assert findings == []
+
+
+def test_rule_test_discovery_no_tests():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir, "main.py"), "w") as f:
+            f.write("print('hello')")
+        health = PipelineHealth()
+        health.stages_completed.append("implement")
+        profile = {"test_discovery_command": "pytest --collect-only", "extensions": (".py",)}
+        findings = _make_watchdog()._rule_test_discovery(tmpdir, profile, health)
+        assert len(findings) == 1
+        assert findings[0]["category"] == "no_tests"
+
+
+def test_rule_test_discovery_has_tests():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir, "test_main.py"), "w") as f:
+            f.write("def test_x(): pass")
+        health = PipelineHealth()
+        health.stages_completed.append("implement")
+        profile = {"test_discovery_command": "pytest --collect-only", "extensions": (".py",)}
+        findings = _make_watchdog()._rule_test_discovery(tmpdir, profile, health)
+        assert findings == []
+
+
+# ── Rule: manifest_valid ──────────────────────────────────────────
+
+
+def test_rule_manifest_valid_pass():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        profile = {"manifest_validators": ("true",)}
+        findings = _make_watchdog()._rule_manifest_valid(tmpdir, profile)
+        assert findings == []
+
+
+def test_rule_manifest_valid_fail():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        profile = {"manifest_validators": ("false",)}
+        findings = _make_watchdog()._rule_manifest_valid(tmpdir, profile)
+        assert len(findings) == 1
+        assert findings[0]["category"] == "manifest_invalid"
+        assert findings[0]["severity"] == "error"
+
+
+def test_rule_manifest_valid_empty():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        profile = {}
+        findings = _make_watchdog()._rule_manifest_valid(tmpdir, profile)
+        assert findings == []
+
+
+# ── Rule: repair_loop ──────────────────────────────────────────────
+
+
+def test_rule_repair_loop_low():
+    health = PipelineHealth(repair_attempts=1, jump_count=5)
+    findings = _make_watchdog()._rule_repair_loop(health)
+    assert findings == []
+
+
+def test_rule_repair_loop_high_repairs():
+    health = PipelineHealth(repair_attempts=3)
+    findings = _make_watchdog()._rule_repair_loop(health)
+    assert len(findings) == 1
+    assert findings[0]["category"] == "repair_loop"
+    assert findings[0]["severity"] == "warning"
+
+
+def test_rule_repair_loop_excessive_jumps():
+    health = PipelineHealth(jump_count=20)
+    findings = _make_watchdog()._rule_repair_loop(health)
+    assert any(f["category"] == "excessive_jumps" for f in findings)
+    assert any(f["severity"] == "error" for f in findings)
+
+
+def test_rule_repair_loop_both():
+    health = PipelineHealth(repair_attempts=5, jump_count=25)
+    findings = _make_watchdog()._rule_repair_loop(health)
+    assert len(findings) == 2
+
+
+# ── Rule: idle_agent ───────────────────────────────────────────────
+
+
+def test_rule_idle_agent_active():
+    health = PipelineHealth(consecutive_readonly_turns=3)
+    findings = _make_watchdog()._rule_idle_agent(health)
+    assert findings == []
+
+
+def test_rule_idle_agent_stuck():
+    health = PipelineHealth(consecutive_readonly_turns=8)
+    findings = _make_watchdog()._rule_idle_agent(health)
+    assert len(findings) == 1
+    assert findings[0]["category"] == "idle_agent"
+    assert findings[0]["severity"] == "warning"
+
+
+# ── Rule: quality_prerequisites ────────────────────────────────────
+
+
+def test_rule_quality_prereqs_file_present():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        open(os.path.join(tmpdir, "pyproject.toml"), "w").close()
+        health = PipelineHealth()
+        profile = {"required_project_files": ("pyproject.toml",)}
+        findings = _make_watchdog()._rule_quality_prerequisites(tmpdir, profile, health)
+        assert findings == []
+
+
+def test_rule_quality_prereqs_file_missing():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        health = PipelineHealth()
+        profile = {"required_project_files": ("pyproject.toml",)}
+        findings = _make_watchdog()._rule_quality_prerequisites(tmpdir, profile, health)
+        assert len(findings) == 1
+        assert findings[0]["category"] == "quality_prereq_missing"
+
+
+def test_rule_quality_prereqs_after_quality():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        health = PipelineHealth()
+        health.stages_completed.append("quality")
+        profile = {"required_project_files": ("pyproject.toml",)}
+        findings = _make_watchdog()._rule_quality_prerequisites(tmpdir, profile, health)
+        assert findings == []
+
+
+# ── Rule: cross_module_consistency ─────────────────────────────────
+
+
+def test_rule_cross_module_files_exist():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        open(os.path.join(tmpdir, "main.py"), "w").close()
+        context = {"owned_files": ["main.py"]}
+        findings = _make_watchdog()._rule_cross_module_consistency(tmpdir, context)
+        assert findings == []
+
+
+def test_rule_cross_module_files_missing():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        context = {"owned_files": ["missing.py", "gone.py"]}
+        findings = _make_watchdog()._rule_cross_module_consistency(tmpdir, context)
+        assert len(findings) == 2
+        assert all(f["category"] == "owned_file_missing" for f in findings)
+
+
+def test_rule_cross_module_no_owned_files():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        context = {}
+        findings = _make_watchdog()._rule_cross_module_consistency(tmpdir, context)
+        assert findings == []
+
+
+# ── EventBus consumer ──────────────────────────────────────────────
+
+
+@patch("trust5.core.event_bus.get_bus", return_value=None)
+def test_start_event_consumer_no_bus(_mock_bus):
+    health = PipelineHealth()
+    thread, sub_q = _start_event_consumer(health)
+    assert thread is not None
+    assert thread.daemon is True
+    assert sub_q is None
+    thread.join(timeout=2)
+
+
+@patch("trust5.core.event_bus.get_bus")
+def test_start_event_consumer_with_bus(mock_get_bus):
+    import queue
+    mock_bus = MagicMock()
+    mock_q: queue.Queue = queue.Queue()
+    mock_bus.subscribe.return_value = mock_q
+    mock_get_bus.return_value = mock_bus
+    health = PipelineHealth()
+    thread, sub_q = _start_event_consumer(health)
+    assert thread is not None
+    assert thread.daemon is True
+    assert sub_q is mock_q
+    mock_q.put(None)
+    thread.join(timeout=2)
+
+
+# ── LLM Auditor ───────────────────────────────────────────────────
+
+
+def test_build_audit_prompt_contains_fields():
+    health = PipelineHealth(repair_attempts=2, jump_count=5)
+    health.stages_completed.append("implement")
+    profile = {"language": "python"}
+    rule_findings = [{"severity": "warning", "category": "repair_loop"}]
+    prompt = _build_audit_prompt(health, profile, rule_findings)
+    assert "python" in prompt
+    assert "implement" in prompt
+    assert "repair_loop" in prompt
+
+
+def test_should_trigger_audit_post_implement():
+    health = PipelineHealth()
+    health.stages_completed.append("implement")
+    trigger = _should_trigger_audit(health, [], set())
+    assert trigger == "post_implement"
+
+
+def test_should_trigger_audit_already_fired():
+    health = PipelineHealth()
+    health.stages_completed.append("implement")
+    trigger = _should_trigger_audit(health, [], {"post_implement"})
+    assert trigger != "post_implement"
+
+
+def test_should_trigger_audit_post_vfal():
+    health = PipelineHealth()
+    health.stages_failed.append("validate")
+    trigger = _should_trigger_audit(health, [], set())
+    assert trigger == "post_vfal"
+
+
+def test_should_trigger_audit_anomaly_high():
+    health = PipelineHealth()
+    findings = [{"severity": "error", "category": "garbled_file"}]
+    trigger = _should_trigger_audit(health, findings, set())
+    assert trigger == "anomaly_high"
+
+
+def test_should_trigger_audit_max_reached():
+    health = PipelineHealth(llm_audit_count=_MAX_LLM_AUDITS)
+    health.stages_completed.append("implement")
+    trigger = _should_trigger_audit(health, [], set())
+    assert trigger is None
+
+
+def test_should_trigger_audit_nothing():
+    health = PipelineHealth()
+    trigger = _should_trigger_audit(health, [], set())
+    assert trigger is None
+
+
+def test_run_llm_audit_max_reached():
+    health = PipelineHealth(llm_audit_count=_MAX_LLM_AUDITS)
+    result = _run_llm_audit(health, {}, [], "test")
+    assert result is None
+
+
+@patch("trust5.core.llm.LLM")
+def test_run_llm_audit_success(mock_llm_cls):
+    mock_instance = MagicMock()
+    mock_instance.chat.return_value = {
+        "message": {"role": "assistant", "content": json.dumps({"risk": "LOW", "concerns": [], "recommendations": []})},
+        "done": True,
+    }
+    mock_llm_cls.for_tier.return_value = mock_instance
+    health = PipelineHealth()
+    result = _run_llm_audit(health, {"language": "python"}, [], "post_implement")
+    assert result is not None
+    assert result["risk"] == "LOW"
+    assert result["trigger"] == "post_implement"
+    assert health.llm_audit_count == 1
+
+
+@patch("trust5.core.llm.LLM")
+def test_run_llm_audit_llm_failure(mock_llm_cls):
+    mock_llm_cls.for_tier.side_effect = RuntimeError("API unavailable")
+    health = PipelineHealth()
+    result = _run_llm_audit(health, {}, [], "test")
+    assert result is None
+
+
+# ── Enhanced report format ─────────────────────────────────────────
+
+
+def test_write_report_with_health_and_audits():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        health = PipelineHealth(repair_attempts=2, jump_count=5)
+        health.stages_completed.append("implement")
+        audits = [{"trigger": "post_implement", "risk": "MEDIUM", "concerns": ["slow"], "recommendations": []}]
+        WatchdogTask._write_report(tmpdir, [], 10, health=health, audit_summaries=audits)
+        report_path = os.path.join(tmpdir, ".trust5", "watchdog_report.json")
+        with open(report_path) as f:
+            data = json.load(f)
+        assert "pipeline_health" in data
+        assert data["pipeline_health"]["repair_attempts"] == 2
+        assert "audit_summaries" in data
+        assert data["audit_summaries"][0]["risk"] == "MEDIUM"
+
+
+def test_write_report_without_health():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        WatchdogTask._write_report(tmpdir, [], 1)
+        report_path = os.path.join(tmpdir, ".trust5", "watchdog_report.json")
+        with open(report_path) as f:
+            data = json.load(f)
+        assert "pipeline_health" not in data
+        assert "audit_summaries" not in data
+
+
+def test_load_watchdog_findings_with_audit_summaries():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        health = PipelineHealth(repair_attempts=1)
+        audits = [
+            {
+                "trigger": "post_implement",
+                "risk": "HIGH",
+                "concerns": ["Too many repairs"],
+                "recommendations": ["Reduce complexity"],
+            }
+        ]
+        findings = [{"severity": "warning", "category": "test", "file": "x.py", "message": "test msg"}]
+        WatchdogTask._write_report(tmpdir, findings, 5, health=health, audit_summaries=audits)
+        result = load_watchdog_findings(tmpdir)
+        assert "LLM Audit Summaries" in result
+        assert "HIGH" in result
+        assert "Too many repairs" in result
+        assert "Reduce complexity" in result
+
+
+# ── _run_rules integration ─────────────────────────────────────────
+
+
+@patch("trust5.tasks.watchdog_task.emit")
+def test_run_rules_aggregates_all_rules(_mock_emit):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        health = PipelineHealth(repair_attempts=4, jump_count=25, consecutive_readonly_turns=10)
+        health.stages_completed.append("implement")
+        profile = {
+            "tool_check_commands": ("nonexistent_xyz999 --version",),
+            "test_discovery_command": "pytest --collect-only",
+            "extensions": (".py",),
+            "manifest_validators": (),
+            "required_project_files": ("pyproject.toml",),
+        }
+        context: dict = {}
+        findings: list[dict[str, str]] = []
+        _make_watchdog()._run_rules(tmpdir, profile, context, health, findings)
+        categories = {f["category"] for f in findings}
+        assert "tool_missing" in categories
+        assert "no_tests" in categories
+        assert "repair_loop" in categories
+        assert "excessive_jumps" in categories
+        assert "idle_agent" in categories
+        assert "quality_prereq_missing" in categories
+
+
+# ── Constants ────────────────────────────────────────────────────
+
+
+def test_max_llm_audits_is_three():
+    assert _MAX_LLM_AUDITS == 3

@@ -34,6 +34,7 @@ GOOGLE_CONFIG = ProviderConfig(
         "best": "gemini-3-pro-preview",
         "good": "gemini-3-pro-preview",
         "fast": "gemini-3-flash-preview",
+        "watchdog": "gemini-3-flash-preview",
         "default": "gemini-3-pro-preview",
     },
     thinking_tiers={"best", "good"},

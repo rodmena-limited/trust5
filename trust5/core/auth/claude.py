@@ -31,6 +31,7 @@ CLAUDE_CONFIG = ProviderConfig(
         "best": "claude-opus-4-6",
         "good": "claude-opus-4-6",
         "fast": "claude-sonnet-4-5",
+        "watchdog": "claude-haiku-4-5",
         "default": "claude-opus-4-6",
     },
     thinking_tiers={"best", "good"},

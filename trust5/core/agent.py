@@ -299,8 +299,8 @@ class Agent:
             limit = _safe_int(args.get("limit"))
             if offset or limit:
                 o = offset or 1
-                l = limit or 0
-                return f"{path} (lines {o}-{o + l})"
+                lim = limit or 0
+                return f"{path} (lines {o}-{o + lim})"
             return path
         if name == "Write":
             return str(args.get("file_path", ""))

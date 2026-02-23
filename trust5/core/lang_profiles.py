@@ -30,6 +30,9 @@ class LanguageProfile:
     syntax_check_tool_names: tuple[str, ...] = ()  # tool names that are syntax-only (for lint dedup)
     dev_dependencies: tuple[str, ...] = ()  # packages auto-installed before lint/test if missing
     required_project_files: tuple[str, ...] = ()  # critical files that must exist in generated projects
+    tool_check_commands: tuple[str, ...] = ()      # commands to verify required tools are installed
+    manifest_validators: tuple[str, ...] = ()      # commands to validate manifest file syntax
+    test_discovery_command: str | None = None       # command to discover tests without running them
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,6 +59,9 @@ def _p(
     syntax_tool_names: tuple[str, ...] = (),
     dev_deps: tuple[str, ...] = (),
     required_files: tuple[str, ...] = (),
+    tool_checks: tuple[str, ...] = (),
+    manifest_vals: tuple[str, ...] = (),
+    test_disc: str | None = None,
 ) -> LanguageProfile:
     return LanguageProfile(
         language=lang,
@@ -78,6 +84,9 @@ def _p(
         syntax_check_tool_names=syntax_tool_names,
         dev_dependencies=dev_deps,
         required_project_files=required_files,
+        tool_check_commands=tool_checks,
+        manifest_validators=manifest_vals,
+        test_discovery_command=test_disc,
     )
 
 
@@ -115,6 +124,12 @@ PROFILES: dict[str, LanguageProfile] = {
         syntax_tool_names=("py_compile", "compileall"),
         dev_deps=("ruff", "pytest-timeout"),
         required_files=("pyproject.toml",),
+        tool_checks=("python3 -c 'import pytest'", "python3 -c 'import ruff'"),
+        manifest_vals=(
+            "python3 -c 'import tomllib,pathlib;"
+            " tomllib.loads(pathlib.Path(\"pyproject.toml\").read_text())'",
+        ),
+        test_disc="pytest --collect-only -q 2>/dev/null | tail -1",
     ),
     "go": _p(
         "go",
@@ -133,6 +148,9 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Gin", "Echo", "Fiber", "Chi"),
         lint_check=("gofmt -l .", "go vet ./... 2>&1"),
         required_files=("go.mod",),
+        tool_checks=("go version",),
+        manifest_vals=("go mod verify",),
+        test_disc="go test -list '.*' ./... 2>/dev/null | head -1",
     ),
     "typescript": _p(
         "typescript",
@@ -151,6 +169,9 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Next.js", "React", "NestJS", "Express"),
         lint_check=("npx eslint --format=unix .",),
         required_files=("package.json", "tsconfig.json"),
+        tool_checks=("npx --version",),
+        manifest_vals=("node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\"",),
+        test_disc="npx jest --listTests 2>/dev/null | wc -l",
     ),
     "javascript": _p(
         "javascript",
@@ -169,6 +190,9 @@ PROFILES: dict[str, LanguageProfile] = {
         ("React", "Vue", "Express", "Fastify"),
         lint_check=("npx eslint --format=unix .",),
         required_files=("package.json",),
+        tool_checks=("npx --version",),
+        manifest_vals=("node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\"",),
+        test_disc="npx jest --listTests 2>/dev/null | wc -l",
     ),
     "rust": _p(
         "rust",
@@ -187,6 +211,9 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Actix", "Axum", "Rocket"),
         lint_check=("cargo fmt --check 2>&1", "cargo clippy 2>&1"),
         required_files=("Cargo.toml",),
+        tool_checks=("cargo --version",),
+        manifest_vals=("cargo verify-project",),
+        test_disc="cargo test -- --list 2>/dev/null | tail -1",
     ),
     "java": _p(
         "java",
@@ -205,6 +232,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Spring Boot", "Quarkus"),
         lint_check=("mvn spotless:check -q 2>&1",),
         required_files=("pom.xml",),
+        tool_checks=("mvn --version",),
     ),
     "ruby": _p(
         "ruby",
@@ -223,6 +251,8 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Rails", "Sinatra"),
         lint_check=("bundle exec rubocop --format=emacs 2>&1",),
         required_files=("Gemfile",),
+        tool_checks=("bundle --version",),
+        test_disc="bundle exec rspec --dry-run 2>/dev/null | tail -1",
     ),
     "elixir": _p(
         "elixir",
@@ -241,6 +271,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Phoenix",),
         lint_check=("mix format --check-formatted 2>&1", "mix credo --strict --format=oneline 2>&1"),
         required_files=("mix.exs",),
+        tool_checks=("mix --version",),
     ),
     "cpp": _p(
         "cpp",
@@ -258,6 +289,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("cppcheck", "--enable=all", "--error-exitcode=1", "."),
         lint_check=("clang-format --dry-run --Werror **/*.cpp **/*.h 2>&1",),
         required_files=("CMakeLists.txt",),
+        tool_checks=("cmake --version",),
     ),
     "c": _p(
         "c",
@@ -275,6 +307,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("cppcheck", "--enable=all", "--error-exitcode=1", "."),
         lint_check=("clang-format --dry-run --Werror **/*.c **/*.h 2>&1",),
         required_files=("Makefile",),
+        tool_checks=("make --version",),
     ),
     "php": _p(
         "php",
@@ -293,6 +326,9 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Laravel", "Symfony"),
         lint_check=("vendor/bin/php-cs-fixer fix --dry-run --diff 2>&1",),
         required_files=("composer.json",),
+        tool_checks=("php --version",),
+        manifest_vals=("php -r \"json_decode(file_get_contents('composer.json'));\"",),
+        test_disc="vendor/bin/phpunit --list-tests 2>/dev/null | wc -l",
     ),
     "kotlin": _p(
         "kotlin",
@@ -311,6 +347,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Ktor", "Spring Boot"),
         lint_check=("gradle ktlintCheck 2>&1",),
         required_files=("build.gradle.kts",),
+        tool_checks=("gradle --version",),
     ),
     "swift": _p(
         "swift",
@@ -329,6 +366,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("SwiftUI", "Vapor"),
         lint_check=("swift-format lint -r . 2>&1",),
         required_files=("Package.swift",),
+        tool_checks=("swift --version",),
     ),
     "dart": _p(
         "dart",
@@ -347,6 +385,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Flutter",),
         lint_check=("dart analyze 2>&1",),
         required_files=("pubspec.yaml",),
+        tool_checks=("dart --version",),
     ),
     "scala": _p(
         "scala",
@@ -365,6 +404,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Akka", "Cats Effect", "ZIO"),
         lint_check=("sbt scalafmtCheckAll 2>&1",),
         required_files=("build.sbt",),
+        tool_checks=("sbt --version",),
     ),
     "haskell": _p(
         "haskell",
@@ -382,6 +422,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         lint_check=("ormolu --check **/*.hs 2>&1",),
         required_files=("package.yaml",),
+        tool_checks=("cabal --version",),
     ),
     "zig": _p(
         "zig",
@@ -398,6 +439,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         None,
         required_files=("build.zig",),
+        tool_checks=("zig version",),
     ),
     "r": _p(
         "r",
@@ -415,6 +457,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         ("Shiny",),
         required_files=("DESCRIPTION",),
+        tool_checks=("Rscript --version",),
     ),
     "csharp": _p(
         "csharp",
@@ -432,6 +475,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("dotnet", "tool", "run", "security-scan"),
         ("ASP.NET Core", "Blazor"),
         lint_check=("dotnet format --verify-no-changes 2>&1",),
+        tool_checks=("dotnet --version",),
     ),
     "lua": _p(
         "lua",
@@ -447,6 +491,7 @@ PROFILES: dict[str, LanguageProfile] = {
         "Language: Lua. busted for testing.",
         ("busted", "--coverage"),
         None,
+        tool_checks=("lua -v",),
     ),
     "html": _p(
         "html",
@@ -480,6 +525,9 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Nuxt",),
         lint_check=("npx eslint --format=unix .",),
         required_files=("package.json",),
+        tool_checks=("npx --version",),
+        manifest_vals=("node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\"",),
+        test_disc="npx vitest --list 2>/dev/null | wc -l",
     ),
     "svelte": _p(
         "svelte",
@@ -498,6 +546,9 @@ PROFILES: dict[str, LanguageProfile] = {
         ("SvelteKit",),
         lint_check=("npx eslint --format=unix .",),
         required_files=("package.json",),
+        tool_checks=("npx --version",),
+        manifest_vals=("node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\"",),
+        test_disc="npx vitest --list 2>/dev/null | wc -l",
     ),
 }
 

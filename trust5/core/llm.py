@@ -43,6 +43,7 @@ MODEL_TIERS = {
     "best": "qwen3-coder-next:cloud",
     "good": "kimi-k2.5:cloud",
     "fast": "nemotron-3-nano:30b-cloud",
+    "watchdog": "nemotron-3-nano:30b-cloud",
     "default": "qwen3-coder-next:cloud",
 }
 

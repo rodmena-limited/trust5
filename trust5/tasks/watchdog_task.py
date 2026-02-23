@@ -1,15 +1,28 @@
-"""Trust5 Watchdog — autonomous pipeline health monitor.
+"""Trust5 Watchdog — hybrid intelligent pipeline audit system.
+
+Three-layer architecture:
+  **Layer 1 (Rule Engine)**: EventBus subscription + deterministic rules (always-on, continuous).
+  **Layer 2 (LLM Auditor)**: Checkpoint-triggered LLM analysis (max 3 calls per pipeline).
+  **Layer 3 (Feedback)**: TUI events + atomic report writes + enhanced ``load_watchdog_findings()``.
 
 Runs periodic health checks and writes a structured report to
 ``.trust5/watchdog_report.json`` so downstream LLM agents can
 incorporate audit findings into their prompts.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
+import queue
 import re
+import shutil
+import subprocess
+import tempfile
+import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from stabilize import StageExecution, Task, TaskResult
@@ -17,6 +30,8 @@ from stabilize import StageExecution, Task, TaskResult
 from ..core.message import M, emit, emit_block
 
 logger = logging.getLogger(__name__)
+
+# ── Filesystem check patterns ────────────────────────────────────────
 
 # Garbled file pattern (shell redirect artifacts like "=3.0.0")
 _GARBLED_RE = re.compile(r"^=[0-9]")
@@ -96,6 +111,14 @@ _SOURCE_EXTS = frozenset(
     }
 )
 
+# ── Event codes for pipeline health tracking ─────────────────────────
+
+# Read-only tool codes (agent may be stuck if only these fire)
+_READONLY_TOOL_CODES = frozenset({"TRED", "TGLB", "TGRP"})
+# Write tool codes (reset idle counter)
+_WRITE_TOOL_CODES = frozenset({"TWRT", "TEDT", "TBSH"})
+
+# ── Sentinel ─────────────────────────────────────────────────────────
 
 _SENTINEL_NAME = "pipeline_complete"
 
@@ -116,34 +139,242 @@ def signal_pipeline_done(project_root: str) -> None:
         logger.debug("Failed to write pipeline-done sentinel")
 
 
-class WatchdogTask(Task):
-    """Autonomous pipeline health monitor.
-    and pipeline health problems.  Reports findings via TUI events
-    *and* writes them to ``.trust5/watchdog_report.json`` for
-    downstream LLM context injection.
+# ── Pipeline Health state machine ────────────────────────────────────
+
+
+@dataclass
+class PipelineHealth:
+    """In-memory state machine tracking pipeline behaviour from EventBus events."""
+
+    repair_attempts: int = 0
+    jump_count: int = 0
+    stages_completed: list[str] = field(default_factory=list)
+    stages_failed: list[str] = field(default_factory=list)
+    tool_calls_by_stage: dict[str, int] = field(default_factory=dict)
+    consecutive_readonly_turns: int = 0
+    llm_audit_count: int = 0
+    _current_stage: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repair_attempts": self.repair_attempts,
+            "jump_count": self.jump_count,
+            "stages_completed": list(self.stages_completed),
+            "stages_failed": list(self.stages_failed),
+            "tool_calls_by_stage": dict(self.tool_calls_by_stage),
+            "consecutive_readonly_turns": self.consecutive_readonly_turns,
+        }
+
+
+# ── EventBus consumer ────────────────────────────────────────────────
+
+
+def _start_event_consumer(health: PipelineHealth) -> tuple[threading.Thread, queue.Queue[Any] | None]:
+    """Subscribe to the EventBus and start a daemon thread that updates *health*.
+
+    Returns ``(thread, subscriber_queue)``.  If the bus is not initialized
+    the thread is a no-op and the queue is ``None``.
     """
+    from ..core.event_bus import get_bus
+
+    bus = get_bus()
+    if bus is None:
+        # No EventBus available — return a no-op thread.
+        dummy: threading.Thread = threading.Thread(target=lambda: None, name="watchdog-bus-noop", daemon=True)
+        dummy.start()
+        return dummy, None
+
+    sub_q = bus.subscribe()
+
+    def _consume() -> None:
+        while True:
+            try:
+                event = sub_q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if event is None:
+                break  # sentinel — bus shutting down
+
+            code = event.code
+            label = event.label
+
+            # Stage transitions
+            if code == "WJMP":
+                health.jump_count += 1
+            elif code == "RSTR":
+                health.repair_attempts += 1
+            elif code == "WSTG":
+                stage_name = label or event.msg
+                if stage_name:
+                    stage_name = stage_name.strip().lower()
+                    if stage_name and stage_name not in health.stages_completed:
+                        health.stages_completed.append(stage_name)
+                    health._current_stage = stage_name
+            elif code in {"VFAL", "WFAL", "QFAL"}:
+                stage_name = label or event.msg or ""
+                stage_name = stage_name.strip().lower()
+                if stage_name and stage_name not in health.stages_failed:
+                    health.stages_failed.append(stage_name)
+
+            # Tool call tracking
+            elif code in {"CTLC", "CTLR"}:
+                current = health._current_stage or "unknown"
+                health.tool_calls_by_stage[current] = health.tool_calls_by_stage.get(current, 0) + 1
+
+            # Read-only vs write tool tracking (idle detection)
+            if code in _READONLY_TOOL_CODES:
+                health.consecutive_readonly_turns += 1
+            elif code in _WRITE_TOOL_CODES:
+                health.consecutive_readonly_turns = 0
+
+    thread = threading.Thread(target=_consume, name="watchdog-bus-consumer", daemon=True)
+    thread.start()
+    return thread, sub_q
+
+
+# ── LLM Auditor (Layer 2) ───────────────────────────────────────────
+
+_MAX_LLM_AUDITS = 3
+
+
+def _build_audit_prompt(
+    health: PipelineHealth,
+    profile: dict[str, Any],
+    rule_findings: list[dict[str, str]],
+) -> str:
+    return (
+        "You are a pipeline health auditor for Trust5, a multi-language code generation system.\n"
+        f"Current language: {profile.get('language', 'unknown')}\n\n"
+        "Pipeline Health:\n"
+        f"- Stages completed: {health.stages_completed}\n"
+        f"- Stages failed: {health.stages_failed}\n"
+        f"- Repair attempts: {health.repair_attempts}\n"
+        f"- Jump count: {health.jump_count}\n"
+        f"- Tool calls by stage: {health.tool_calls_by_stage}\n\n"
+        "Rule Engine Findings:\n"
+        f"{json.dumps(rule_findings, indent=2)}\n\n"
+        "Analyze the pipeline health and provide:\n"
+        "1. Risk assessment (LOW/MEDIUM/HIGH/CRITICAL)\n"
+        "2. Specific concerns about the pipeline's behavior\n"
+        "3. Recommendations for downstream agents\n\n"
+        'Respond in JSON format:\n{"risk": "...", "concerns": [...], "recommendations": [...]}'
+    )
+
+
+def _run_llm_audit(
+    health: PipelineHealth,
+    profile: dict[str, Any],
+    rule_findings: list[dict[str, str]],
+    trigger: str,
+) -> dict[str, Any] | None:
+    """Perform a single LLM audit call.  Returns parsed audit dict or ``None`` on failure."""
+    if health.llm_audit_count >= _MAX_LLM_AUDITS:
+        return None
+
+    try:
+        from ..core.llm import LLM
+
+        llm = LLM.for_tier("watchdog")
+        prompt = _build_audit_prompt(health, profile, rule_findings)
+        response = llm.chat(messages=[{"role": "user", "content": prompt}])
+        health.llm_audit_count += 1
+
+        content = response.get("message", {}).get("content", "")
+        # Try to extract JSON from the response
+        try:
+            # Handle responses that may have markdown code fences
+            cleaned = content.strip()
+            if cleaned.startswith("```"):
+                lines = cleaned.split("\n")
+                # Remove first and last ``` lines
+                lines = [ln for ln in lines if not ln.strip().startswith("```")]
+                cleaned = "\n".join(lines)
+            audit_result: dict[str, Any] = json.loads(cleaned)
+        except (json.JSONDecodeError, ValueError):
+            # Fallback: extract any JSON object from the text
+            audit_result = {
+                "risk": "UNKNOWN",
+                "concerns": [f"LLM response could not be parsed: {content[:200]}"],
+                "recommendations": [],
+            }
+
+        audit_result["trigger"] = trigger
+        return audit_result
+
+    except Exception as exc:
+        logger.debug("LLM audit failed (trigger=%s): %s", trigger, exc)
+        return None
+
+
+def _should_trigger_audit(
+    health: PipelineHealth,
+    rule_findings: list[dict[str, str]],
+    previous_triggers: set[str],
+) -> str | None:
+    """Determine if an LLM audit should be triggered.  Returns trigger name or ``None``."""
+    if health.llm_audit_count >= _MAX_LLM_AUDITS:
+        return None
+
+    # After implement stage completes
+    if "implement" in health.stages_completed and "post_implement" not in previous_triggers:
+        return "post_implement"
+
+    # After validation failure
+    if any(s in health.stages_failed for s in ("validate", "validation")) and "post_vfal" not in previous_triggers:
+        return "post_vfal"
+
+    # After quality stage completes
+    if "quality" in health.stages_completed and "post_quality" not in previous_triggers:
+        return "post_quality"
+
+    # Anomaly: any HIGH-severity rule finding
+    if any(f.get("severity") == "error" for f in rule_findings) and "anomaly_high" not in previous_triggers:
+        return "anomaly_high"
+
+    return None
+
+
+# ── WatchdogTask ─────────────────────────────────────────────────────
+
+
+class WatchdogTask(Task):
+    """Autonomous pipeline health monitor with hybrid rule + LLM audit system.
+
+    Layers:
+      1. **Rule Engine** — Deterministic checks on filesystem and ``PipelineHealth``.
+      2. **LLM Auditor** — Checkpoint-triggered analysis (≤3 calls per pipeline).
+      3. **Feedback** — TUI events, atomic report writes, ``load_watchdog_findings()``.
+    """
+
     # How long to wait between check cycles (seconds)
     CHECK_INTERVAL = 12
     # Maximum runtime (prevent infinite running if pipeline hangs)
     MAX_RUNTIME = 7200  # 2 hours
     # How often to emit "all clear" (every Nth clean check)
     OK_EMIT_INTERVAL = 25  # ~5 minutes at 12s interval
+
     def execute(self, stage: StageExecution) -> TaskResult:
         project_root = stage.context.get("project_root", os.getcwd())
         language_profile = stage.context.get("language_profile", {})
+
         # Remove stale sentinel from a previous pipeline run.
         self._clear_sentinel(project_root)
 
+        # Start EventBus consumer (Layer 1 — real-time pipeline observability)
+        health = PipelineHealth()
+        consumer_thread, sub_q = _start_event_consumer(health)
+
         emit(M.WDST, "Watchdog started \u2014 monitoring pipeline health")
+
         start_time = time.monotonic()
         check_count = 0
         total_warnings = 0
         total_errors = 0
-        # Accumulate structured findings for the report file.
         all_findings: list[dict[str, str]] = []
-        # Track last emitted findings to avoid spamming the TUI with
-        # identical reports every 12 seconds.
         last_emitted_findings: list[dict[str, str]] = []
+        audit_summaries: list[dict[str, Any]] = []
+        audit_triggers_fired: set[str] = set()
+
         try:
             while True:
                 elapsed = time.monotonic() - start_time
@@ -159,32 +390,60 @@ class WatchdogTask(Task):
                     )
                     self._clear_sentinel(project_root)
                     break
+
                 check_count += 1
                 findings: list[dict[str, str]] = []
-                warnings, errors = self._run_checks(
-                    project_root,
-                    language_profile,
-                    stage.context,
-                    findings,
-                )
+
+                # ── Layer 1a: Deterministic rules ────────────────────
+                self._run_rules(project_root, language_profile, stage.context, health, findings)
+
+                # ── Layer 1b: Filesystem checks (existing) ──────────
+                warnings, errors = self._run_checks(project_root, language_profile, stage.context, findings)
                 total_warnings += warnings
                 total_errors += errors
+
+                # ── Layer 2: LLM audit triggers ─────────────────────
+                trigger = _should_trigger_audit(health, findings, audit_triggers_fired)
+                if trigger is not None:
+                    audit_result = _run_llm_audit(health, language_profile, findings, trigger)
+                    if audit_result is not None:
+                        audit_summaries.append(audit_result)
+                        audit_triggers_fired.add(trigger)
+
+                # ── Layer 3: Feedback ───────────────────────────────
                 if findings:
                     all_findings = findings
-                    self._write_report(project_root, all_findings, check_count)
-                    # Only emit to TUI if findings changed since last emission.
+                    self._write_report(project_root, all_findings, check_count, health, audit_summaries)
                     if findings != last_emitted_findings:
                         self._emit_findings_block(findings, check_count)
                         last_emitted_findings = [dict(f) for f in findings]
+
                 if warnings == 0 and errors == 0 and check_count % self.OK_EMIT_INTERVAL == 0:
                     emit(M.WDOK, f"Check #{check_count} \u2014 all clear ({elapsed:.0f}s elapsed)")
-                    # Clear the report file when everything is clean.
                     all_findings = []
-                    self._write_report(project_root, all_findings, check_count)
+                    self._write_report(project_root, all_findings, check_count, health, audit_summaries)
+
                 time.sleep(self.CHECK_INTERVAL)
+
         except Exception as e:
             emit(M.WDER, f"Watchdog crashed: {e}")
             logger.exception("Watchdog task crashed")
+
+        # ── Cleanup ─────────────────────────────────────────────────
+        # Unsubscribe from EventBus
+        if sub_q is not None:
+            try:
+                from ..core.event_bus import get_bus
+
+                bus = get_bus()
+                if bus is not None:
+                    bus.unsubscribe(sub_q)
+            except Exception:
+                pass
+
+        # Final report write
+        self._write_report(project_root, all_findings, check_count, health, audit_summaries)
+
         emit(M.WDST, f"Watchdog stopped after {check_count} checks ({total_warnings} warnings, {total_errors} errors)")
         return TaskResult.success(
             outputs={
@@ -194,25 +453,42 @@ class WatchdogTask(Task):
             }
         )
 
-    # ── Report persistence ────────────────────────────────────────────
+    # ── Report persistence (atomic writes) ────────────────────────────
 
     @staticmethod
     def _write_report(
         project_root: str,
         findings: list[dict[str, str]],
         check_count: int,
+        health: PipelineHealth | None = None,
+        audit_summaries: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Write structured findings to ``.trust5/watchdog_report.json``."""
+        """Write structured findings to ``.trust5/watchdog_report.json`` atomically."""
         trust5_dir = os.path.join(project_root, ".trust5")
         os.makedirs(trust5_dir, exist_ok=True)
         report_path = os.path.join(trust5_dir, "watchdog_report.json")
-        report = {
+        report: dict[str, Any] = {
             "check_number": check_count,
             "findings": findings,
         }
+        if health is not None:
+            report["pipeline_health"] = health.to_dict()
+        if audit_summaries:
+            report["audit_summaries"] = audit_summaries
+
+        # Atomic write: write to temp file then rename
         try:
-            with open(report_path, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2)
+            fd, tmp_path = tempfile.mkstemp(dir=trust5_dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(report, f, indent=2)
+                os.replace(tmp_path, report_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except OSError:
             logger.debug("Failed to write watchdog report to %s", report_path)
 
@@ -234,7 +510,7 @@ class WatchdogTask(Task):
         code = M.WDER if has_errors else M.WDWN
         emit_block(code, f"Watchdog Audit (check #{check_count})", content)
 
-    # ── Sentinel helpers ────────────────────────────────────────────
+    # ── Sentinel helpers ──────────────────────────────────────────────
 
     @staticmethod
     def _pipeline_done(project_root: str) -> bool:
@@ -250,7 +526,210 @@ class WatchdogTask(Task):
         except FileNotFoundError:
             pass
 
-    # ── Individual checks ─────────────────────────────────────────────
+    # ── Layer 1a: Deterministic rules ─────────────────────────────────
+
+    def _run_rules(
+        self,
+        project_root: str,
+        profile: dict[str, Any],
+        context: dict[str, Any],
+        health: PipelineHealth,
+        findings: list[dict[str, str]],
+    ) -> None:
+        """Execute all deterministic rules and append findings."""
+        findings.extend(self._rule_tool_availability(profile))
+        findings.extend(self._rule_test_discovery(project_root, profile, health))
+        findings.extend(self._rule_manifest_valid(project_root, profile))
+        findings.extend(self._rule_repair_loop(health))
+        findings.extend(self._rule_idle_agent(health))
+        findings.extend(self._rule_quality_prerequisites(project_root, profile, health))
+        findings.extend(self._rule_cross_module_consistency(project_root, context))
+
+    @staticmethod
+    def _rule_tool_availability(profile: dict[str, Any]) -> list[dict[str, str]]:
+        """Rule 1: Verify required tool binaries exist on PATH."""
+        findings: list[dict[str, str]] = []
+        for cmd in profile.get("tool_check_commands", ()):
+            binary = cmd.split()[0] if cmd else ""
+            if binary and shutil.which(binary) is None:
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "category": "tool_missing",
+                        "file": binary,
+                        "message": f"Required tool not found on PATH: {binary} (from command: {cmd})",
+                    }
+                )
+        return findings
+
+    @staticmethod
+    def _rule_test_discovery(
+        project_root: str,
+        profile: dict[str, Any],
+        health: PipelineHealth,
+    ) -> list[dict[str, str]]:
+        """Rule 2: After implement stage, check that test files exist."""
+        findings: list[dict[str, str]] = []
+        if "implement" not in health.stages_completed:
+            return findings
+        if not profile.get("test_discovery_command"):
+            return findings
+
+        extensions = set(profile.get("extensions", ()))
+        found_test = False
+        try:
+            for dirpath, dirnames, filenames in os.walk(project_root):
+                dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+                for fname in filenames:
+                    _, ext = os.path.splitext(fname)
+                    if ext.lower() not in extensions:
+                        continue
+                    lower = fname.lower()
+                    if lower.startswith("test_") or "_test" in lower:
+                        found_test = True
+                        break
+                if found_test:
+                    break
+        except OSError:
+            pass
+
+        if not found_test:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "category": "no_tests",
+                    "file": "",
+                    "message": "No test files found after implement stage — test discovery may fail",
+                }
+            )
+        return findings
+
+    @staticmethod
+    def _rule_manifest_valid(
+        project_root: str,
+        profile: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        """Rule 3: Run manifest validators and report failures."""
+        findings: list[dict[str, str]] = []
+        for cmd in profile.get("manifest_validators", ()):
+            try:
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    timeout=10,
+                    cwd=project_root,
+                )
+                if result.returncode != 0:
+                    stderr = result.stderr.decode("utf-8", errors="replace")[:200]
+                    findings.append(
+                        {
+                            "severity": "error",
+                            "category": "manifest_invalid",
+                            "file": cmd,
+                            "message": f"Manifest validation failed: {cmd} (exit {result.returncode}): {stderr}",
+                        }
+                    )
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "category": "manifest_check_failed",
+                        "file": cmd,
+                        "message": f"Manifest validation could not run: {cmd} ({exc})",
+                    }
+                )
+        return findings
+
+    @staticmethod
+    def _rule_repair_loop(health: PipelineHealth) -> list[dict[str, str]]:
+        """Rule 4: Detect excessive repair looping."""
+        findings: list[dict[str, str]] = []
+        if health.repair_attempts >= 3:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "category": "repair_loop",
+                    "file": "",
+                    "message": f"Pipeline has attempted {health.repair_attempts} repairs — may be stuck in repair loop",
+                }
+            )
+        if health.jump_count >= 20:
+            findings.append(
+                {
+                    "severity": "error",
+                    "category": "excessive_jumps",
+                    "file": "",
+                    "message": f"Pipeline has {health.jump_count} jumps — likely stuck in infinite loop",
+                }
+            )
+        return findings
+
+    @staticmethod
+    def _rule_idle_agent(health: PipelineHealth) -> list[dict[str, str]]:
+        """Rule 5: Detect agent stuck in read-only loop."""
+        findings: list[dict[str, str]] = []
+        if health.consecutive_readonly_turns >= 8:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "category": "idle_agent",
+                    "file": "",
+                    "message": (
+                        f"Agent appears stuck in read-only loop "
+                        f"({health.consecutive_readonly_turns} consecutive read-only tool calls)"
+                    ),
+                }
+            )
+        return findings
+
+    @staticmethod
+    def _rule_quality_prerequisites(
+        project_root: str,
+        profile: dict[str, Any],
+        health: PipelineHealth,
+    ) -> list[dict[str, str]]:
+        """Rule 6: Before quality gate, verify required project files exist."""
+        findings: list[dict[str, str]] = []
+        if "quality" in health.stages_completed:
+            return findings  # Already past quality — no point checking
+        for req in profile.get("required_project_files", ()):
+            full = os.path.join(project_root, req)
+            if not os.path.exists(full):
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "category": "quality_prereq_missing",
+                        "file": req,
+                        "message": f"Required project file missing before quality gate: {req}",
+                    }
+                )
+        return findings
+
+    @staticmethod
+    def _rule_cross_module_consistency(
+        project_root: str,
+        context: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        """Rule 7: Verify owned_files from context actually exist on disk."""
+        findings: list[dict[str, str]] = []
+        owned = context.get("owned_files")
+        if not owned or not isinstance(owned, (list, tuple, set)):
+            return findings
+        for fpath in owned:
+            full = os.path.join(project_root, fpath) if not os.path.isabs(fpath) else fpath
+            if not os.path.exists(full):
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "category": "owned_file_missing",
+                        "file": fpath,
+                        "message": f"Owned file does not exist on disk: {fpath}",
+                    }
+                )
+        return findings
+
+    # ── Layer 1b: Filesystem checks (preserved from original) ─────────
 
     def _run_checks(
         self,
@@ -259,11 +738,10 @@ class WatchdogTask(Task):
         context: dict[str, Any],
         findings: list[dict[str, str]],
     ) -> tuple[int, int]:
-        """Run all monitoring checks. Returns (warnings, errors)."""
+        """Run all filesystem monitoring checks. Returns (warnings, errors)."""
         warnings = 0
         errors = 0
 
-        # File system checks
         w, e = self._check_garbled_files(project_root, findings)
         warnings += w
         errors += e
@@ -280,7 +758,6 @@ class WatchdogTask(Task):
         warnings += w
         errors += e
 
-        # Context quality checks
         w, e = self._check_stub_files(project_root, findings)
         warnings += w
         errors += e
@@ -300,7 +777,6 @@ class WatchdogTask(Task):
                     msg = (
                         f"Garbled file detected: {entry.name} (likely shell redirect artifact \u2014 should be deleted)"
                     )
-
                     findings.append(
                         {
                             "severity": "error",
@@ -327,7 +803,6 @@ class WatchdogTask(Task):
             full = os.path.join(project_root, req)
             if not os.path.exists(full):
                 msg = f"Required project file missing: {req}"
-
                 findings.append(
                     {
                         "severity": "warning",
@@ -352,12 +827,10 @@ class WatchdogTask(Task):
                     continue
                 name = entry.name
                 if _DOUBLE_EXT_RE.search(name):
-                    # Check if it's a legitimate double extension
                     lower = name.lower()
                     if any(lower.endswith(legit) for legit in _LEGIT_DOUBLE_EXT):
                         continue
                     msg = f"Suspicious double extension: {name}"
-
                     findings.append(
                         {
                             "severity": "warning",
@@ -385,7 +858,6 @@ class WatchdogTask(Task):
                     _, ext = os.path.splitext(fname)
                     if ext.lower() not in _SOURCE_EXTS:
                         continue
-                    # __init__.py and similar can legitimately be empty
                     if fname in ("__init__.py", "mod.rs", "lib.rs"):
                         continue
                     full = os.path.join(dirpath, fname)
@@ -393,7 +865,6 @@ class WatchdogTask(Task):
                         if os.path.getsize(full) == 0:
                             rel = os.path.relpath(full, project_root)
                             msg = f"Empty source file: {rel}"
-
                             findings.append(
                                 {
                                     "severity": "warning",
@@ -429,7 +900,6 @@ class WatchdogTask(Task):
                     try:
                         size = os.path.getsize(full)
                         if size == 0 or size > 500:
-                            # Empty files caught above, large files are likely real
                             continue
                         with open(full, encoding="utf-8", errors="ignore") as f:
                             content = f.read(500)
@@ -437,7 +907,6 @@ class WatchdogTask(Task):
                         if any(indicator in lower for indicator in _STUB_INDICATORS):
                             rel = os.path.relpath(full, project_root)
                             msg = f"Stub file still present: {rel}"
-
                             findings.append(
                                 {
                                     "severity": "warning",
@@ -452,6 +921,9 @@ class WatchdogTask(Task):
         except OSError:
             pass
         return warnings, 0
+
+
+# ── Public API: load findings for LLM context injection ──────────────
 
 
 def load_watchdog_findings(project_root: str) -> str:
@@ -483,5 +955,17 @@ def load_watchdog_findings(project_root: str) -> str:
         file_name = finding.get("file", "")
         message = finding.get("message", "")
         lines.append(f"- **[{severity}]** ({category}) `{file_name}`: {message}")
+
+    # Include LLM audit summaries if present
+    audit_summaries = report.get("audit_summaries", [])
+    if audit_summaries:
+        lines.append("\n## LLM Audit Summaries\n")
+        for summary in audit_summaries:
+            lines.append(f"**Risk: {summary.get('risk', 'UNKNOWN')}** (trigger: {summary.get('trigger', '')})")
+            for concern in summary.get("concerns", []):
+                lines.append(f"- \u26a0\ufe0f {concern}")
+            for rec in summary.get("recommendations", []):
+                lines.append(f"- \U0001f4a1 {rec}")
+            lines.append("")
 
     return "\n".join(lines)

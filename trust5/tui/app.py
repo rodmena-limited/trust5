@@ -205,26 +205,23 @@ class Trust5App(App[None]):
 
     def _route_batch(self, events: list[Event | None]) -> None:
         """Route a batch of events. One bad event won't kill the TUI.
-
-        After processing the batch we explicitly refresh the header and
-        status-bar widgets.  Their reactive properties (stage_name, elapsed,
-        model_name, etc.) are set during routing but most lack ``watch_*``
-        methods, so Textual won't schedule a repaint on its own.  A single
-        refresh per batch is cheap and prevents the "frozen status bar" bug
-        where a resize / screenshot was required to force a full redraw.
+        Uses batch_update() to prevent intermediate layout passes.
+        Scroll-to-end is deferred here (once per batch) instead of per-write.
         """
-        for event in events:
-            if event is None:
-                continue
-            try:
-                self._route_event(event)
-            except Exception as exc:
-                logger.debug("TUI event routing error: %s", exc)
-
-        # Coalesced repaint — one refresh per batch, not per property change.
-        self._header.refresh()
-        self._sb1.refresh()
-        self._sb0.refresh()
+        with self.batch_update():
+            for event in events:
+                if event is None:
+                    continue
+                try:
+                    self._route_event(event)
+                except Exception as exc:
+                    logger.debug("TUI event routing error: %s", exc)
+            # Coalesced repaint — one refresh per batch, not per property change.
+            self._header.refresh()
+            self._sb1.refresh()
+            self._sb0.refresh()
+        if not self._trust5_log._user_scrolled:
+            self._trust5_log.scroll_end(animate=False)
 
     def _route_event(self, event: Event) -> None:
         """Dispatch a single event to the appropriate widget."""

@@ -150,17 +150,17 @@ def develop(request: str) -> None:
         get cleaned up before the thread terminates.
         """
         # Phase 1: Plan (with retry on empty output)
-        MAX_PLAN_ATTEMPTS = 3
+        max_plan_attempts = 3
         plan_output = ""
         plan_result = None
 
-        for plan_attempt in range(1, MAX_PLAN_ATTEMPTS + 1):
+        for plan_attempt in range(1, max_plan_attempts + 1):
             processor, orchestrator, store, _queue, db_path = setup_stabilize(use_tui=_USE_TUI)
             plan_wf = create_plan_only_workflow(request)
 
             store.store(plan_wf)
             orchestrator.start(plan_wf)
-            emit(M.WSTR, f"Plan started (attempt {plan_attempt}/{MAX_PLAN_ATTEMPTS}): {plan_wf.id}")
+            emit(M.WSTR, f"Plan started (attempt {plan_attempt}/{max_plan_attempts}): {plan_wf.id}")
             processor.start()
 
             try:
@@ -184,10 +184,10 @@ def develop(request: str) -> None:
             if plan_output and plan_output.strip():
                 break  # Got usable output
 
-            if plan_attempt < MAX_PLAN_ATTEMPTS:
+            if plan_attempt < max_plan_attempts:
                 emit(
                     M.SWRN,
-                    f"Plan phase produced no output (attempt {plan_attempt}/{MAX_PLAN_ATTEMPTS}) — retrying in 10s",
+                    f"Plan phase produced no output (attempt {plan_attempt}/{max_plan_attempts}) — retrying in 10s",
                 )
                 time.sleep(10)
             else:

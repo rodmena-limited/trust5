@@ -98,14 +98,13 @@ class HeaderWidget(Static):
         mc = self.module_count
         if mc > 0 and len(self._phase_modules[phase_key]) >= mc:
             self.completed_stages = self.completed_stages | {phase_key}
-        self.refresh()
+        # Refresh is handled by _route_batch() in app.py — no per-call refresh needed.
 
     def count_stage_done(self, stage_id: str) -> None:
         """Increment the progress counter (deduped by stage_id)."""
         if stage_id not in self._counted_stages:
             self._counted_stages.add(stage_id)
             self.stages_done = len(self._counted_stages)
-            self.refresh()
 
     def update_stage(
         self,
@@ -146,7 +145,7 @@ class HeaderWidget(Static):
         if new_idx >= cur_idx or allow_cycle:
             self.current_stage = key
 
-        self.refresh()
+        # Refresh is handled by _route_batch() in app.py — no per-call refresh needed.
 
     @staticmethod
     def _match_stage_key(ref: str) -> str | None:

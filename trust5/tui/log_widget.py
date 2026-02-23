@@ -2,7 +2,6 @@ import os
 from typing import Any
 
 from rich.box import ROUNDED
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
@@ -79,6 +78,7 @@ class Trust5Log(RichLog):
         # Disable Textual's auto_scroll — we handle it ourselves
         self.auto_scroll = False
         self._block_buffer: list[str] = []
+        self._in_json_comment = False
         self._block_label: str = ""
         self._block_code: str = ""
         self._in_block = False
@@ -109,11 +109,8 @@ class Trust5Log(RichLog):
         super().scroll_end(*args, **kwargs)
 
     def write(self, *args: Any, **kwargs: Any) -> Any:
-        """Write content, then scroll to bottom only if user hasn't scrolled up."""
-        result = super().write(*args, **kwargs)
-        if not self._user_scrolled:
-            self.scroll_end(animate=False)
-        return result
+        """Write content. Scroll is deferred to the batch dispatcher in app.py."""
+        return super().write(*args, **kwargs)
 
     def on_mouse_scroll_up(self, event: Any) -> None:
         """User scrolled up with mouse wheel — pause auto-scroll."""
@@ -181,6 +178,14 @@ class Trust5Log(RichLog):
             self._response_line_buffer += token
             while "\n" in self._response_line_buffer:
                 line, self._response_line_buffer = self._response_line_buffer.split("\n", 1)
+                # Filter out <!-- REVIEW_FINDINGS JSON ... --> blocks from streaming
+                if "<!-- REVIEW_FINDINGS" in line:
+                    self._in_json_comment = True
+                    continue
+                if self._in_json_comment:
+                    if "-->" in line:
+                        self._in_json_comment = False
+                    continue
                 if line.strip():
                     self.write(Text(f"    {line}", style=C_TEXT))
 
@@ -192,7 +197,7 @@ class Trust5Log(RichLog):
             if self._response_line_buffer.strip():
                 self.write(Text(f"    {self._response_line_buffer}", style=C_TEXT))
             self._response_line_buffer = ""
-            self.write(Text("  " + "\u2500" * 50, style=C_DIM))
+            self.write(Text("  " + "\u2500" * 50, style=C_CHROME))
             self._response_content = ""
 
         self._stream_code = ""
@@ -238,14 +243,10 @@ class Trust5Log(RichLog):
                 border_style=C_DIM,
                 box=ROUNDED,
             )
-        elif code in (M.RVRP, M.PPLN, M.ARSP, M.ASUM):
-            inner: Any
-            try:
-                inner = Markdown(content)
-            except Exception:
-                inner = Text(content)
+        elif code == M.RVRP:
+            # Review report: plain text in panel — Markdown collapses structured output
             renderable = Panel(
-                inner,
+                Text(content, style=C_TEXT),
                 title=f" {theme['title']} ",
                 border_style=theme["color"],
                 box=ROUNDED,
@@ -282,6 +283,7 @@ class Trust5Log(RichLog):
                 box=ROUNDED,
             )
 
+        self.write(Text(""))  # spacer before panel
         self.write(renderable)
 
     def _guess_lexer(self, label: str) -> str:

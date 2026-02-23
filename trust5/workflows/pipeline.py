@@ -344,6 +344,7 @@ def create_develop_workflow(user_request: str) -> Workflow:
         context={
             "project_root": project_root,
             "language_profile": profile_dict,
+            "model_tier": "watchdog",
         },
         requisite_stage_ref_ids=set(),
         tasks=[

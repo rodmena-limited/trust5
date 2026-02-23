@@ -145,7 +145,7 @@ def _parse_setup_commands(raw: str) -> list[str]:
 def _parse_quality_config(raw: str) -> dict[str, str]:
     block_lines = _extract_block(raw, "QUALITY_CONFIG:")
     # Strip potential markdown code block fences
-    clean_lines = [l for l in block_lines if not l.strip().startswith("```")]
+    clean_lines = [line for line in block_lines if not line.strip().startswith("```")]
     block = "\n".join(clean_lines)
 
     if not block.strip():
