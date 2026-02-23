@@ -109,6 +109,11 @@ THEME: dict[str, dict[str, Any]] = {
     M.LERR: {"marker": " !! ", "color": C_RED, "title": "Loop Error", "pill": True},
     M.LITR: {"marker": "LOOP", "color": C_DIM_LAVENDER, "title": "Iteration", "pill": False},
     M.LDIG: {"marker": " DX ", "color": C_DIM_LAVENDER, "title": "Diagnostics", "pill": False},
+    # Watchdog
+    M.WDST: {"marker": " W~ ", "color": C_TEAL, "title": "Watchdog", "pill": True},
+    M.WDOK: {"marker": " W. ", "color": C_DIM_GREEN, "title": "Watchdog OK", "pill": False},
+    M.WDWN: {"marker": " W! ", "color": C_AMBER, "title": "Watchdog", "pill": True},
+    M.WDER: {"marker": " W!!", "color": C_RED, "title": "Watchdog", "pill": True},
     # Blocked
     M.UASK: {"marker": "  ?", "color": C_AMBER, "title": "Question", "pill": True},
     M.UAUT: {"marker": "AUTO", "color": C_AMBER, "title": "Auto-Answer", "pill": True},

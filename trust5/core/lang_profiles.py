@@ -29,6 +29,7 @@ class LanguageProfile:
     path_env_var: str = ""  # env var for test runner (e.g. PYTHONPATH=src)
     syntax_check_tool_names: tuple[str, ...] = ()  # tool names that are syntax-only (for lint dedup)
     dev_dependencies: tuple[str, ...] = ()  # packages auto-installed before lint/test if missing
+    required_project_files: tuple[str, ...] = ()  # critical files that must exist in generated projects
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -54,6 +55,7 @@ def _p(
     path_var: str = "",
     syntax_tool_names: tuple[str, ...] = (),
     dev_deps: tuple[str, ...] = (),
+    required_files: tuple[str, ...] = (),
 ) -> LanguageProfile:
     return LanguageProfile(
         language=lang,
@@ -75,6 +77,7 @@ def _p(
         path_env_var=path_var,
         syntax_check_tool_names=syntax_tool_names,
         dev_dependencies=dev_deps,
+        required_project_files=required_files,
     )
 
 
@@ -111,6 +114,7 @@ PROFILES: dict[str, LanguageProfile] = {
         path_var="PYTHONPATH",
         syntax_tool_names=("py_compile", "compileall"),
         dev_deps=("ruff", "pytest-timeout"),
+        required_files=("pyproject.toml",),
     ),
     "go": _p(
         "go",
@@ -128,6 +132,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("gosec", "-fmt=json", "-quiet", "-exclude-dir=vendor", "./..."),
         ("Gin", "Echo", "Fiber", "Chi"),
         lint_check=("gofmt -l .", "go vet ./... 2>&1"),
+        required_files=("go.mod",),
     ),
     "typescript": _p(
         "typescript",
@@ -145,6 +150,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("npx", "audit-ci", "--moderate"),
         ("Next.js", "React", "NestJS", "Express"),
         lint_check=("npx eslint --format=unix .",),
+        required_files=("package.json", "tsconfig.json"),
     ),
     "javascript": _p(
         "javascript",
@@ -162,6 +168,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("npx", "audit-ci", "--moderate"),
         ("React", "Vue", "Express", "Fastify"),
         lint_check=("npx eslint --format=unix .",),
+        required_files=("package.json",),
     ),
     "rust": _p(
         "rust",
@@ -179,6 +186,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("cargo", "audit"),
         ("Actix", "Axum", "Rocket"),
         lint_check=("cargo fmt --check 2>&1", "cargo clippy 2>&1"),
+        required_files=("Cargo.toml",),
     ),
     "java": _p(
         "java",
@@ -196,6 +204,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("mvn", "spotbugs:check", "-q"),
         ("Spring Boot", "Quarkus"),
         lint_check=("mvn spotless:check -q 2>&1",),
+        required_files=("pom.xml",),
     ),
     "ruby": _p(
         "ruby",
@@ -213,6 +222,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("bundle", "exec", "brakeman", "-q", "--no-pager"),
         ("Rails", "Sinatra"),
         lint_check=("bundle exec rubocop --format=emacs 2>&1",),
+        required_files=("Gemfile",),
     ),
     "elixir": _p(
         "elixir",
@@ -230,6 +240,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("mix", "sobelow", "--format", "json"),
         ("Phoenix",),
         lint_check=("mix format --check-formatted 2>&1", "mix credo --strict --format=oneline 2>&1"),
+        required_files=("mix.exs",),
     ),
     "cpp": _p(
         "cpp",
@@ -246,6 +257,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("cmake", "--build", "build", "--target", "coverage"),
         ("cppcheck", "--enable=all", "--error-exitcode=1", "."),
         lint_check=("clang-format --dry-run --Werror **/*.cpp **/*.h 2>&1",),
+        required_files=("CMakeLists.txt",),
     ),
     "c": _p(
         "c",
@@ -262,6 +274,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         ("cppcheck", "--enable=all", "--error-exitcode=1", "."),
         lint_check=("clang-format --dry-run --Werror **/*.c **/*.h 2>&1",),
+        required_files=("Makefile",),
     ),
     "php": _p(
         "php",
@@ -279,6 +292,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,  # phpstan is a type checker, not a security scanner
         ("Laravel", "Symfony"),
         lint_check=("vendor/bin/php-cs-fixer fix --dry-run --diff 2>&1",),
+        required_files=("composer.json",),
     ),
     "kotlin": _p(
         "kotlin",
@@ -296,6 +310,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("gradle", "detekt"),
         ("Ktor", "Spring Boot"),
         lint_check=("gradle ktlintCheck 2>&1",),
+        required_files=("build.gradle.kts",),
     ),
     "swift": _p(
         "swift",
@@ -313,6 +328,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         ("SwiftUI", "Vapor"),
         lint_check=("swift-format lint -r . 2>&1",),
+        required_files=("Package.swift",),
     ),
     "dart": _p(
         "dart",
@@ -330,6 +346,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         ("Flutter",),
         lint_check=("dart analyze 2>&1",),
+        required_files=("pubspec.yaml",),
     ),
     "scala": _p(
         "scala",
@@ -347,6 +364,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         ("Akka", "Cats Effect", "ZIO"),
         lint_check=("sbt scalafmtCheckAll 2>&1",),
+        required_files=("build.sbt",),
     ),
     "haskell": _p(
         "haskell",
@@ -363,6 +381,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("cabal", "test", "--enable-coverage"),
         None,
         lint_check=("ormolu --check **/*.hs 2>&1",),
+        required_files=("package.yaml",),
     ),
     "zig": _p(
         "zig",
@@ -378,6 +397,7 @@ PROFILES: dict[str, LanguageProfile] = {
         "Language: Zig. Use std.testing. zig build.",
         None,
         None,
+        required_files=("build.zig",),
     ),
     "r": _p(
         "r",
@@ -394,6 +414,7 @@ PROFILES: dict[str, LanguageProfile] = {
         ("Rscript", "-e", "covr::package_coverage()"),
         None,
         ("Shiny",),
+        required_files=("DESCRIPTION",),
     ),
     "csharp": _p(
         "csharp",
@@ -458,6 +479,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         ("Nuxt",),
         lint_check=("npx eslint --format=unix .",),
+        required_files=("package.json",),
     ),
     "svelte": _p(
         "svelte",
@@ -475,6 +497,7 @@ PROFILES: dict[str, LanguageProfile] = {
         None,
         ("SvelteKit",),
         lint_check=("npx eslint --format=unix .",),
+        required_files=("package.json",),
     ),
 }
 

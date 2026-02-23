@@ -31,9 +31,10 @@ _FALLBACK_SKIP_DIRS = (
 # Shell metacharacters that indicate a command must be run via sh -c.
 _SHELL_METACHAR_RE = re.compile(r"[&|;><`$]")
 
-# Matches a lint-output line that starts with a file path followed by :line
-# e.g. "tests/test_foo.py:12:1: F401 ..."
-_LINT_FILE_LINE_RE = re.compile(r"^(\S+?):\d+")
+# Matches a lint-output line that starts with a file path followed by :line.
+# Handles BOTH concise format ("tests/test_foo.py:12:1: F401 ...")
+# and ruff rich format (" --> tests/test_foo.py:12:1").
+_LINT_FILE_LINE_RE = re.compile(r"^\s*(?:-->\s*)?([\S]+?):\d+", re.MULTILINE)
 
 # Matches FileNotFoundError / "can't open file" / "No such file" messages
 # that reference a missing source file.  Examples:
@@ -587,3 +588,108 @@ def detect_cross_module_failure(test_output: str) -> bool:
         "attributeerror:" in lower and "has no attribute" in lower,
         "importerror: cannot import name" in lower,
     ])
+
+
+# ── Exclude flags for common linters ────────────────────────────────
+# Maps language -> (linter substring, exclude flag template).
+# The template is appended to directory-style commands (e.g. `ruff check .`).
+_LINT_EXCLUDE_FLAGS: dict[str, list[tuple[str, str]]] = {
+    "python": [
+        ("ruff", "--extend-exclude 'test_*,*_test*,conftest*,tests/'"),
+    ],
+    "typescript": [
+        ("eslint",
+         "--ignore-pattern 'test_*' --ignore-pattern '*_test*'"
+         " --ignore-pattern '*.test.*' --ignore-pattern '*.spec.*'"),
+    ],
+    "javascript": [
+        ("eslint",
+         "--ignore-pattern 'test_*' --ignore-pattern '*_test*'"
+         " --ignore-pattern '*.test.*' --ignore-pattern '*.spec.*'"),
+    ],
+    # Rust tests are inline — no exclusion needed.
+    # Go gofmt/go vet don't support exclude flags — handled via file filtering.
+}
+
+
+def _exclude_test_files_from_lint_cmd(cmd_str: str, language: str) -> str:
+    """Modify a lint command string to exclude test files BEFORE execution.
+
+    Language-aware: uses the correct exclude flag syntax per linter.
+    For linters without exclude flags (gofmt, go vet), filters explicit
+    file paths using ``_matches_test_pattern()``.  Idempotent — safe to
+    call on commands that already have exclude flags.
+
+    Returns the modified command string.
+    """
+    if not cmd_str or not cmd_str.strip():
+        return cmd_str
+
+    # Process each &&-separated segment independently.
+    segments = cmd_str.split("&&")
+    result_segments: list[str] = []
+
+    for segment in segments:
+        result_segments.append(_exclude_segment(segment.strip(), language))
+
+    return " && ".join(result_segments)
+
+
+def _exclude_segment(segment: str, language: str) -> str:
+    """Exclude test files from a single lint command segment."""
+    if not segment:
+        return segment
+
+    tokens = segment.split()
+    if not tokens:
+        return segment
+
+    # Check if this segment has explicit file-path tokens (not directory `.`).
+    file_indices: list[int] = []
+    has_directory_target = False
+    for i, token in enumerate(tokens):
+        clean = token.strip("'\"")
+        _, ext = os.path.splitext(clean)
+        if ext.lower() in _SOURCE_EXTENSIONS:
+            file_indices.append(i)
+        elif clean in (".", "./") or clean.endswith("/..."):
+            has_directory_target = True
+
+    if file_indices:
+        # File-list command: filter out test file paths.
+        kept: list[str] = []
+        for i, token in enumerate(tokens):
+            if i in file_indices:
+                clean = token.strip("'\"")
+                if _matches_test_pattern(clean):
+                    continue
+            kept.append(token)
+        # If all file tokens were removed, return unchanged to avoid empty command.
+        kept_file_count = sum(1 for t in kept if os.path.splitext(t.strip("'\"'"))[1].lower() in _SOURCE_EXTENSIONS)
+        if kept_file_count == 0 and file_indices:
+            return segment
+        return " ".join(kept) if kept else segment
+
+    if has_directory_target:
+        # Directory-style command: inject language-specific exclude flags.
+        lang_flags = _LINT_EXCLUDE_FLAGS.get(language, [])
+        for linter_name, exclude_flag in lang_flags:
+            if linter_name in segment:
+                # Idempotent: don't add if already present.
+                if ("--exclude" in segment or "--extend-exclude" in segment) and linter_name == "ruff":
+                    return segment
+                if "--ignore-pattern" in segment and linter_name == "eslint":
+                    return segment
+                # Insert exclude flags before the trailing directory token.
+                parts = segment.split()
+                insert_idx = len(parts)
+                for j in range(len(parts) - 1, -1, -1):
+                    clean = parts[j].strip("'\"")
+                    if clean in (".", "./") or clean.endswith("/..."):
+                        insert_idx = j
+                        break
+                flag_tokens = exclude_flag.split()
+                new_parts = parts[:insert_idx] + flag_tokens + parts[insert_idx:]
+                return " ".join(new_parts)
+
+    return segment

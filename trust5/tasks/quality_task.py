@@ -336,6 +336,7 @@ class QualityTask(Task):
             security_command=(
                 _tup(data.get("security_command")) if "security_command" in data else base.security_command
             ),
+            required_project_files=tuple(data.get("required_project_files", base.required_project_files)),
         )
 
     @staticmethod

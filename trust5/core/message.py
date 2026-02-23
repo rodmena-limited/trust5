@@ -100,6 +100,13 @@ class M(StrEnum):
     LDIG = "LDIG"  # loop diagnostics count
     LERR = "LERR"  # loop error
 
+
+    # ── Watchdog ──
+    WDST = "WDST"  # watchdog started
+    WDOK = "WDOK"  # watchdog check passed (all clear)
+    WDWN = "WDWN"  # watchdog warning (potential issue detected)
+    WDER = "WDER"  # watchdog error (definite problem found)
+
     # ── User Interaction ──
     UASK = "UASK"  # question to user
     UANS = "UANS"  # answer from user

@@ -239,12 +239,24 @@ class AgentTask(Task):
                 )
             if denied_for_agent:
                 denied_list = "\n".join(f"- {f}" for f in denied_for_agent)
-                ownership_lines.append(
-                    f"## READ-ONLY Test Files{header}\n\n"
-                    f"These test files are READ-ONLY. Do NOT modify or delete them:\n"
-                    f"{denied_list}\n\n"
-                    f"Tests define the specification. Fix the implementation, NEVER the tests.\n\n"
-                )
+                if is_test_writer:
+                    # Test-writer is denied SOURCE files (owned_files)
+                    denied_label = f"## READ-ONLY Source Files{header}\n\n"
+                    denied_desc = (
+                        "These source files are READ-ONLY. Do NOT modify or create them.\n"
+                        f"{denied_list}\n\n"
+                        "Your job is to write TESTS only. The source code will be written later "
+                        "by the implementer agent based on your tests.\n\n"
+                    )
+                else:
+                    # Implementer/repairer is denied TEST files
+                    denied_label = f"## READ-ONLY Test Files{header}\n\n"
+                    denied_desc = (
+                        "These test files are READ-ONLY. Do NOT modify or delete them:\n"
+                        f"{denied_list}\n\n"
+                        "Tests define the specification. Fix the implementation, NEVER the tests.\n\n"
+                    )
+                ownership_lines.append(denied_label + denied_desc)
             user_input = "".join(ownership_lines) + user_input
             logger.debug(
                 "Module '%s': %d owned, %d denied file(s)",

@@ -9,7 +9,6 @@ from stabilize import StageExecution, TaskExecution, Workflow
 
 from ..core.config import ConfigManager  # noqa: F401
 from ..core.lang import detect_language, get_profile
-from ..tasks.validate_helpers import _SOURCE_EXTENSIONS
 from .module_spec import (
     ModuleSpec,
     _detect_dependency_cycle,
@@ -82,12 +81,32 @@ def _normalize_module_paths(modules: list[ModuleSpec], profile_dict: dict[str, o
         mod.test_files = [_ensure_ext(f, default_ext) for f in (mod.test_files or [])]
 
 
+# Non-source extensions that should never get a language extension appended.
+# These are config, manifest, data, and tooling files that happen to appear in
+# module.files because the planner includes them in the module's ownership.
+_NON_SOURCE_EXTENSIONS = frozenset((
+    ".toml", ".cfg", ".ini", ".yaml", ".yml", ".json", ".xml",
+    ".txt", ".md", ".rst", ".lock", ".mod", ".sum",
+    ".gradle", ".properties", ".sbt", ".cabal",
+    ".dockerfile", ".mk", ".cmake",
+    ".gitignore", ".editorconfig", ".env",
+    ".html", ".css", ".scss", ".less", ".svg",
+    ".sh", ".bash", ".zsh", ".fish", ".bat", ".ps1",
+))
+
+
 def _ensure_ext(path: str, default_ext: str) -> str:
-    """Append *default_ext* to *path* if it lacks a recognized source extension."""
+    """Append *default_ext* to *path* only when it has NO extension at all.
+    (.py, .go) or a config/manifest extension (.toml, .cfg, .json) — are returned
+    unchanged.  Only bare names like ``tests/test_task`` (no dot in the basename)
+    get the language default appended.  Dotfiles like ``.gitignore`` are never
+    modified.
+    """
+    basename = os.path.basename(path)
     _, ext = os.path.splitext(path)
-    if ext.lower() in _SOURCE_EXTENSIONS:
-        return path
-    return path + default_ext
+    if not ext and not basename.startswith("."):
+        return path + default_ext
+    return path
 
 
 def _scaffold_module_files(
@@ -258,6 +277,27 @@ def create_parallel_develop_workflow(
         ],
     )
     stages.append(setup)
+
+
+    watchdog = StageExecution(
+        ref_id="watchdog",
+        type="watchdog",
+        name="Watchdog (Pipeline Monitor)",
+        context={
+            "project_root": project_root,
+            "language_profile": profile_dict,
+        },
+        requisite_stage_ref_ids=set(),
+        tasks=[
+            TaskExecution.create(
+                name="Pipeline Health Monitor",
+                implementing_class="watchdog",
+                stage_start=True,
+                stage_end=True,
+            )
+        ],
+    )
+    stages.append(watchdog)
 
     validate_ref_ids: set[str] = set()
     repair_ref_ids: set[str] = set()

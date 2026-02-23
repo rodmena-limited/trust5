@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 
 from stabilize import StageExecution, Task, TaskResult
@@ -66,11 +67,40 @@ class SetupTask(Task):
         )
 
 
+def _quote_version_specifiers(cmd: str) -> str:
+    """Quote pip/uv version specifiers so the shell does not interpret >= as redirection.
+
+    Turns ``pip install flask>=3.0.0 pytest>=8.0`` into
+    ``pip install 'flask>=3.0.0' 'pytest>=8.0'`` while leaving other commands untouched.
+    """
+    # Only process pip/uv install commands
+    if not re.search(r'\bpip\b.*\binstall\b|\buv\b.*\binstall\b', cmd):
+        return cmd
+    # Quote whitespace-delimited tokens that contain version specifiers
+    # (>=, <=, ==, !=, ~=, <, >) but skip tokens already inside quotes.
+    def _quote_token(m: re.Match[str]) -> str:
+        token = m.group(0)
+        start = m.start()
+        if start > 0 and cmd[start - 1] in ("'", '"'):
+            return token
+        return f"'{token}'"
+    return re.sub(
+        r"(?<=\s)([a-zA-Z0-9_][a-zA-Z0-9_.\-\[\]]*(?:>=|<=|==|!=|~=|<|>)[^\s'\"]*)",
+        _quote_token,
+        cmd,
+    )
+
+
 def _run_setup_command(cmd: str, cwd: str) -> tuple[int, str]:
-    """Run a single shell command, returning (exit_code, combined_output)."""
+    """Run a single shell command, returning (exit_code, combined_output).
+
+    Version specifiers in pip/uv install commands are auto-quoted to prevent
+    the shell from interpreting ``>=`` as stdout redirection.
+    """
+    safe_cmd = _quote_version_specifiers(cmd)
     try:
         proc = subprocess.run(
-            cmd,
+            safe_cmd,
             shell=True,
             cwd=cwd,
             capture_output=True,

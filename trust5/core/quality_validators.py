@@ -8,6 +8,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
+from ..tasks.validate_helpers import _exclude_test_files_from_lint_cmd
 from .config import QualityConfig
 from .lang import LanguageProfile
 from .message import M, emit
@@ -15,6 +16,7 @@ from .quality_models import (
     _TEST_PATTERN,
     ALL_PRINCIPLES,
     MAX_FILE_LINES,
+    PRINCIPLE_COMPLETENESS,
     PRINCIPLE_READABLE,
     PRINCIPLE_SECURED,
     PRINCIPLE_TESTED,
@@ -188,7 +190,10 @@ class ReadableValidator(_ValidatorBase):
         else:
             cmds = self._profile.lint_check_commands or self._profile.lint_commands
 
+        lang = self._profile.language
         for cmd_str in cmds:
+            # Exclude test files from lint scan before execution
+            cmd_str = _exclude_test_files_from_lint_cmd(cmd_str, lang)
             rc, out = _run_command(("sh", "-c", cmd_str), self._root)
             if rc == 0:
                 continue
@@ -232,6 +237,9 @@ class UnderstandableValidator(_ValidatorBase):
                     f"/{d}/" in line or line.startswith(f"{d}/") or line.startswith(f"./{d}/") for d in skip
                 ):
                     continue
+                # Skip warnings from test files
+                if _TEST_PATTERN.search(line):
+                    continue
                 warnings += 1
 
         threshold = self._config.max_warnings
@@ -257,7 +265,7 @@ class UnderstandableValidator(_ValidatorBase):
         else:
             score += 1.0
 
-        doc_score = _check_doc_completeness(source_files, self._profile.language)
+        doc_score = _check_doc_completeness(non_test_files, self._profile.language)
         if doc_score < 0.5:
             result.issues.append(
                 Issue(
@@ -308,6 +316,8 @@ class SecuredValidator(_ValidatorBase):
         # Parse findings -- try JSON first, then minimal fallback
         findings = _parse_security_json(out)
         findings = _filter_excluded_findings(findings, self._profile.skip_dirs)
+        # Filter out test file findings — test code has different security standards
+        findings = [f for f in findings if not _TEST_PATTERN.search(os.path.basename(f.get("file", "")))]
         if not findings and rc != 0:
             # Only flag genuine CVE references -- avoid matching metric summaries
             # or JSON keys like "SEVERITY.HIGH": 0 which are NOT findings.
@@ -434,6 +444,60 @@ class TrackableValidator(_ValidatorBase):
         result.passed = len(bad_names) == 0 and (not non_test or len(test_files) > 0)
         return result
 
+# ── ProjectCompletenessValidator ──────────────────────────────────────
+
+
+class ProjectCompletenessValidator(_ValidatorBase):
+    """Validates project structure: required files exist, no garbled files."""
+
+    _GARBLED_FILE_RE = re.compile(r"^=[0-9]")
+
+    def name(self) -> str:
+        return PRINCIPLE_COMPLETENESS
+
+    def validate(self) -> PrincipleResult:
+        result = PrincipleResult(name=self.name(), passed=True, score=1.0)
+        issues_count = 0
+        checks = max(1, len(self._profile.required_project_files) + 1)
+        score = 0.0
+
+        # Check 1: Required project files exist
+        for req_file in self._profile.required_project_files:
+            full = os.path.join(self._root, req_file)
+            if os.path.exists(full):
+                score += 1.0
+            else:
+                issues_count += 1
+                result.issues.append(Issue(
+                    severity="error",
+                    message=f"required project file missing: {req_file}",
+                    rule="required-file-missing",
+                ))
+
+        # Check 2: No garbled files in project root (artifacts from shell redirect bugs)
+        garbled_count = 0
+        try:
+            for entry in os.scandir(self._root):
+                if entry.is_file() and self._GARBLED_FILE_RE.match(entry.name):
+                    garbled_count += 1
+                    result.issues.append(Issue(
+                        file=entry.name,
+                        severity="error",
+                        message=f"garbled file detected (likely shell redirect artifact): {entry.name}",
+                        rule="garbled-file",
+                    ))
+        except OSError:
+            pass
+
+        if garbled_count == 0:
+            score += 1.0
+        else:
+            issues_count += garbled_count
+
+        result.score = round(score / checks, 3)
+        result.passed = issues_count == 0
+        return result
+
 
 # ── TrustGate orchestrator ───────────────────────────────────────────
 
@@ -447,6 +511,7 @@ class TrustGate:
             UnderstandableValidator(project_root, profile, config),
             SecuredValidator(project_root, profile, config),
             TrackableValidator(project_root, profile, config),
+            ProjectCompletenessValidator(project_root, profile, config),
         ]
 
     def validate(self) -> QualityReport:
@@ -494,8 +559,12 @@ class TrustGate:
                     except (IndexError, ValueError):
                         pass
         score = round(total_score, 3)
+        # Completeness is a pass/fail gate (weight=0), not a scored pillar.
+        # If completeness fails, the report fails regardless of the score.
+        completeness_pr = results.get(PRINCIPLE_COMPLETENESS)
+        completeness_failed = completeness_pr is not None and not completeness_pr.passed
         return QualityReport(
-            passed=score >= self.config.pass_score_threshold and total_errors == 0,
+            passed=score >= self.config.pass_score_threshold and total_errors == 0 and not completeness_failed,
             score=score,
             principles=results,
             total_errors=total_errors,

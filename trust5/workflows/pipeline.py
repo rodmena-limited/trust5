@@ -337,7 +337,26 @@ def create_develop_workflow(user_request: str) -> Workflow:
         ],
     )
 
-    stages = [plan, setup]
+    watchdog = StageExecution(
+        ref_id="watchdog",
+        type="watchdog",
+        name="Watchdog (Pipeline Monitor)",
+        context={
+            "project_root": project_root,
+            "language_profile": profile_dict,
+        },
+        requisite_stage_ref_ids=set(),
+        tasks=[
+            TaskExecution.create(
+                name="Pipeline Health Monitor",
+                implementing_class="watchdog",
+                stage_start=True,
+                stage_end=True,
+            )
+        ],
+    )
+
+    stages = [plan, setup, watchdog]
     if use_tdd:
         stages.append(write_tests)
     stages.extend([implement, validate, repair])

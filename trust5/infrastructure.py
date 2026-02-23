@@ -36,6 +36,7 @@ from .tasks.repair_task import RepairTask
 from .tasks.review_task import ReviewTask
 from .tasks.setup_task import SetupTask
 from .tasks.validate_task import ValidateTask
+from .tasks.watchdog_task import WatchdogTask
 
 if TYPE_CHECKING:
     pass
@@ -66,6 +67,7 @@ def _build_task_registry() -> TaskRegistry:
     registry.register("quality", QualityTask)
     registry.register("review", ReviewTask)
     registry.register("shell", ShellTask)
+    registry.register("watchdog", WatchdogTask)
     return registry
 
 

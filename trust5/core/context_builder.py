@@ -172,6 +172,21 @@ def build_repair_prompt(
     if spec_id:
         spec_section = f"\n\nSPEC CONTEXT:\n{build_spec_context(spec_id, project_root)}"
 
+
+    # Inject acceptance criteria so the repairer knows WHAT was supposed to be built.
+    # Without this, the repairer only sees error output and has no specification context.
+    criteria_section = ""
+    if plan_config:
+        acceptance_criteria = plan_config.get("acceptance_criteria", [])
+        if acceptance_criteria:
+            numbered = "\n".join(f"  AC-{i + 1}. {c}" for i, c in enumerate(acceptance_criteria))
+            criteria_section = (
+                "\n\nACCEPTANCE CRITERIA (what the code MUST do):\n"
+                f"{numbered}\n"
+                "\nThese are the specification. If a test verifies one of these criteria, "
+                "the implementation must satisfy it \u2014 do NOT work around the test.\n"
+            )
+
     previous_section = ""
     if previous_failures and len(previous_failures) > 0:
         prev_summary = "\n---\n".join(previous_failures[-3:])
@@ -205,6 +220,7 @@ SOURCE FILES:
 TEST FILES:
 {test_section}
 {spec_section}
+{criteria_section}
 {previous_section}
 
 REPAIR RULES:

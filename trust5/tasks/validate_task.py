@@ -25,6 +25,7 @@ from .validate_helpers import (
     _count_tests,
     _derive_module_test_files,
     _discover_test_files,
+    _exclude_test_files_from_lint_cmd,
     _filter_test_file_lint,
     _normalize_owned_files,
     _parse_command,
@@ -251,12 +252,16 @@ class ValidateTask(Task):
             if owned:
                 plan_lint_cmd = _scope_lint_command(plan_lint_cmd, owned)
             plan_lint_cmd = _strip_nonexistent_files(plan_lint_cmd, project_root, owned_files=owned)
+            plan_lint_cmd = _exclude_test_files_from_lint_cmd(plan_lint_cmd, lang_name)
             lint_cmds = [_parse_command(plan_lint_cmd)]
         else:
             lint_check_raw = profile_data.get("lint_check_commands", ())
             if not lint_check_raw:
                 lint_check_raw = base_profile.lint_check_commands
-            lint_cmds = [_parse_command(c) for c in lint_check_raw] if lint_check_raw else []
+            lint_cmds = [
+                _parse_command(_exclude_test_files_from_lint_cmd(c, lang_name))
+                for c in lint_check_raw
+            ] if lint_check_raw else []
 
         # Detect source root layout and build env for subprocess calls.
         test_env = _build_test_env(project_root, profile_data)
