@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trust5"
-version = "0.6.1"
+version = "0.6.2"
 description = "AI-driven autonomous code generation with correctness guarantees"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    {name = "Farshid Ashouri", email = "farshid@rodmena.com"},
+    {name = "Farshid Ashouri", email = "farsheed.ashouri@gmail.com"},
 ]
 keywords = ["ai", "code-generation", "llm", "testing", "quality", "autonomous"]
 classifiers = [
