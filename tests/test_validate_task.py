@@ -28,7 +28,7 @@ _PYTHON_PROFILE = {
     "test_verify_command": 'Bash("pytest -v --tb=short")',
     "syntax_check_command": ("python3", "-m", "compileall", "-q", "."),
     "lint_check_commands": ("python3 -m ruff check --output-format=concise .",),
-    "skip_dirs": ("__pycache__", ".venv", "venv", ".moai", ".trust5"),
+    "skip_dirs": ("__pycache__", ".venv", "venv", ".trust5"),
 }
 
 
@@ -1010,7 +1010,7 @@ def test_validate_redetects_unknown_language(mock_detect, mock_run, mock_emit_bl
         "test_command": ("echo", "no default test command"),
         "test_verify_command": "echo 'no tests'",
         "syntax_check_command": None,
-        "skip_dirs": (".moai", ".trust5", ".git"),
+        "skip_dirs": (".trust5", ".git"),
     }
     stage = make_stage(
         {

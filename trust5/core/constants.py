@@ -1,59 +1,101 @@
 """Centralized timeout and limit constants for the Trust5 pipeline.
 
-Instead of magic numbers scattered across files, all configurable timeouts
-and limits are defined here with descriptive names.  These are defaults —
-many can be overridden via stage context at runtime.
+All values are read lazily from ``GlobalConfig`` (``~/.trust5/config.yaml``)
+via Python's module-level ``__getattr__`` hook.  This means:
+
+* No import-time side effects (config is read on first attribute access).
+* ``from trust5.core.constants import AGENT_MAX_TURNS`` returns an ``int``
+  — identical to the old hardcoded constants.
+* The returned value is always *current* (not cached at import time), so
+  hot-reloading the global config is transparently supported.
+
+Environment variable overrides (``TRUST5_AGENT_MAX_TURNS=30``) and
+per-project config are handled inside ``load_global_config()``.
 """
 
-# ── Agent execution ──────────────────────────────────────────────────────────
-AGENT_MAX_TURNS = 20
-AGENT_MAX_HISTORY_MESSAGES = 60
-AGENT_TOOL_RESULT_LIMIT = 8000
-AGENT_DEFAULT_TIMEOUT = 7200  # 2 hr wall-clock per agent run (large codebases may need full compile cycles)
-AGENT_PER_TURN_TIMEOUT = 1800  # 30 min ceiling per single LLM call (large codebases need more reasoning)
-AGENT_IDLE_WARN_TURNS = 5  # warn after N consecutive read-only turns
-AGENT_IDLE_MAX_TURNS = 10  # abort agent after N consecutive read-only turns
+from __future__ import annotations
 
-# ── Repair / validate loop ───────────────────────────────────────────────────
-MAX_REPAIR_ATTEMPTS = 5
-CONSECUTIVE_FAILURE_LIMIT = 3  # escalate to failed_continue after N identical failures
-MAX_REIMPLEMENTATIONS = 3
-TEST_OUTPUT_LIMIT = 4000
-REPAIR_AGENT_TIMEOUT = 1800  # 30 min per repair attempt (matches agent turn timeout)
-QUICK_TEST_TIMEOUT = 60  # pre/post-flight check
-PYTEST_PER_TEST_TIMEOUT = 30  # per-test timeout via pytest-timeout plugin
+from typing import Any
 
-# ── Quality gate ─────────────────────────────────────────────────────────────
-MAX_QUALITY_ATTEMPTS = 3
 
-# ── Workflow-level timeouts ──────────────────────────────────────────────────
-TIMEOUT_PLAN = 3600.0  # 1 hr for plan phase (complex multi-module plans need more time)
-TIMEOUT_DEVELOP = 864000.0  # 10 days for full develop pipeline (big projects run for days/weeks)
-TIMEOUT_RUN = 86400.0  # 1 day for run-from-spec
-TIMEOUT_LOOP = 86400.0  # 1 day for diagnostics loop
+def _cfg() -> Any:
+    """Return the global config singleton (lazy import to avoid cycles)."""
+    from .config import load_global_config
 
-# ── Subprocess execution ─────────────────────────────────────────────────────
-BASH_TIMEOUT = 600  # 10 min — LLM-invoked bash commands (compiling large projects)
-GREP_TIMEOUT = 60  # grep search
-SYNTAX_CHECK_TIMEOUT = 300  # 5 min — compileall / go vet on large codebases
-TEST_RUN_TIMEOUT = 600  # 10 min — pytest / go test for comprehensive suites
+    return load_global_config()
 
-# ── LLM streaming ───────────────────────────────────────────────────────────
-# Per-chunk read timeout varies by whether thinking mode is active.
-# Ollama with thinking=True can pause 3-5 min between chunks while reasoning.
-STREAM_READ_TIMEOUT_THINKING = 600  # 10 min per chunk (thinking models)
-STREAM_READ_TIMEOUT_STANDARD = 120  # 2 min per chunk (non-thinking)
-STREAM_TOTAL_TIMEOUT = 3600  # 1 hr total ceiling for any stream (matches agent turn increase)
 
-# ── MCP server ───────────────────────────────────────────────────────────────
-MCP_START_TIMEOUT = 30.0
-MCP_PROCESS_STOP_TIMEOUT = 5
+# ── Attribute map: constant name → (config section, field name) ──────────────
 
-# ── Event bus ────────────────────────────────────────────────────────────────
-EVENT_BUS_SOCKET_TIMEOUT = 5.0
-EVENT_QUEUE_BATCH_SIZE = 64
 
-# ── TUI ──────────────────────────────────────────────────────────────────────
-TUI_MAX_LOG_LINES = 5000
-TUI_SPINNER_INTERVAL = 0.08  # seconds between spinner frames
-TUI_ELAPSED_TICK = 1.0  # seconds between elapsed updates
+_ATTR_MAP: dict[str, tuple[str, str]] = {
+    # Agent execution
+    "AGENT_MAX_TURNS": ("agent", "max_turns"),
+    "AGENT_MAX_HISTORY_MESSAGES": ("agent", "max_history_messages"),
+    "AGENT_TOOL_RESULT_LIMIT": ("agent", "tool_result_limit"),
+    "AGENT_DEFAULT_TIMEOUT": ("agent", "default_timeout"),
+    "AGENT_PER_TURN_TIMEOUT": ("agent", "per_turn_timeout"),
+    "AGENT_IDLE_WARN_TURNS": ("agent", "idle_warn_turns"),
+    "AGENT_IDLE_MAX_TURNS": ("agent", "idle_max_turns"),
+    # Repair / validate loop
+    "MAX_REPAIR_ATTEMPTS": ("pipeline", "max_repair_attempts"),
+    "CONSECUTIVE_FAILURE_LIMIT": ("pipeline", "consecutive_failure_limit"),
+    "MAX_REIMPLEMENTATIONS": ("pipeline", "max_reimplementations"),
+    "TEST_OUTPUT_LIMIT": ("pipeline", "test_output_limit"),
+    "REPAIR_AGENT_TIMEOUT": ("pipeline", "repair_agent_timeout"),
+    "QUICK_TEST_TIMEOUT": ("pipeline", "quick_test_timeout"),
+    "PYTEST_PER_TEST_TIMEOUT": ("pipeline", "pytest_per_test_timeout"),
+    # Quality gate
+    "MAX_QUALITY_ATTEMPTS": ("pipeline", "max_quality_attempts"),
+    # Workflow-level timeouts
+    "TIMEOUT_PLAN": ("timeouts", "plan"),
+    "TIMEOUT_DEVELOP": ("timeouts", "develop"),
+    "TIMEOUT_RUN": ("timeouts", "run"),
+    "TIMEOUT_LOOP": ("timeouts", "loop"),
+    # Subprocess execution
+    "BASH_TIMEOUT": ("subprocess", "bash_timeout"),
+    "GREP_TIMEOUT": ("subprocess", "grep_timeout"),
+    "SYNTAX_CHECK_TIMEOUT": ("subprocess", "syntax_check_timeout"),
+    "TEST_RUN_TIMEOUT": ("subprocess", "test_run_timeout"),
+    # LLM streaming
+    "STREAM_READ_TIMEOUT_THINKING": ("stream", "read_timeout_thinking"),
+    "STREAM_READ_TIMEOUT_STANDARD": ("stream", "read_timeout_standard"),
+    "STREAM_TOTAL_TIMEOUT": ("stream", "total_timeout"),
+    "RETRY_DELAY_SERVER": ("stream", "retry_delay_server"),
+    # MCP server
+    "MCP_START_TIMEOUT": ("mcp", "start_timeout"),
+    "MCP_PROCESS_STOP_TIMEOUT": ("mcp", "process_stop_timeout"),
+    # Event bus
+    "EVENT_BUS_SOCKET_TIMEOUT": ("event_bus", "socket_timeout"),
+    "EVENT_QUEUE_BATCH_SIZE": ("event_bus", "queue_batch_size"),
+    # TUI
+    "TUI_MAX_LOG_LINES": ("tui", "max_log_lines"),
+    "TUI_SPINNER_INTERVAL": ("tui", "spinner_interval"),
+    "TUI_ELAPSED_TICK": ("tui", "elapsed_tick"),
+    # Watchdog
+    "WATCHDOG_CHECK_INTERVAL": ("watchdog", "check_interval"),
+    "WATCHDOG_MAX_RUNTIME": ("watchdog", "max_runtime"),
+    "WATCHDOG_OK_EMIT_INTERVAL": ("watchdog", "ok_emit_interval"),
+    "WATCHDOG_MAX_LLM_AUDITS": ("watchdog", "max_llm_audits"),
+    # Pipeline: additional
+    "SETUP_TIMEOUT": ("pipeline", "setup_timeout"),
+    "SUBPROCESS_TIMEOUT": ("pipeline", "subprocess_timeout"),
+    # LLM provider
+    "LLM_TIMEOUT_FAST": ("llm", "timeout_fast"),
+    "LLM_TIMEOUT_STANDARD": ("llm", "timeout_standard"),
+    "LLM_TIMEOUT_EXTENDED": ("llm", "timeout_extended"),
+    "LLM_CONNECT_TIMEOUT": ("llm", "connect_timeout"),
+    "LLM_TOKEN_REFRESH_MARGIN": ("llm", "token_refresh_margin"),
+    "LLM_RETRY_BUDGET_CONNECT": ("llm", "retry_budget_connect"),
+    "LLM_RETRY_BUDGET_SERVER": ("llm", "retry_budget_server"),
+    "LLM_RETRY_BUDGET_RATE": ("llm", "retry_budget_rate"),
+    "LLM_MAX_BACKOFF_DELAY": ("llm", "max_backoff_delay"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Module-level lazy attribute access — resolves constants from GlobalConfig."""
+    if name in _ATTR_MAP:
+        section, field = _ATTR_MAP[name]
+        return getattr(getattr(_cfg(), section), field)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

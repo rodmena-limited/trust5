@@ -279,7 +279,6 @@ def test_wait_for_completion_ignores_none_stop_event():
     assert result.status == WorkflowStatus.SUCCEEDED
 
 
-
 # ── Progressive polling tests ──────────────────────────────────────
 
 

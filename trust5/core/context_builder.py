@@ -1,6 +1,9 @@
 import glob
+import logging
 import os
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 MAX_FILE_CONTENT = 6000
 MAX_TOTAL_CONTEXT = 30000
@@ -19,7 +22,6 @@ def _read_file_safe(path: str, max_len: int = MAX_FILE_CONTENT) -> str:
 
 _FALLBACK_EXTENSIONS = (".py", ".go", ".ts", ".js", ".rs", ".java", ".rb")
 _FALLBACK_SKIP_DIRS = (
-    ".moai",
     ".trust5",
     ".git",
     "node_modules",
@@ -45,7 +47,7 @@ def _find_source_files(
 
 
 def build_spec_context(spec_id: str, project_root: str) -> str:
-    spec_dir = os.path.join(project_root, ".moai", "specs", spec_id)
+    spec_dir = os.path.join(project_root, ".trust5", "specs", spec_id)
     parts = []
     for fname in ["spec.md", "plan.md", "acceptance.md"]:
         fpath = os.path.join(spec_dir, fname)
@@ -237,7 +239,7 @@ REPAIR RULES:
 
 def build_project_context(project_root: str) -> str:
     parts = []
-    docs_pattern = os.path.join(project_root, ".moai", "project", "*.md")
+    docs_pattern = os.path.join(project_root, ".trust5", "project", "*.md")
     for file_path in glob.glob(docs_pattern):
         try:
             with open(file_path, encoding="utf-8") as f:
@@ -245,12 +247,12 @@ def build_project_context(project_root: str) -> str:
                 content = f.read()
                 parts.append(f"--- PROJECT: {filename} ---\n{content}")
         except Exception:
-            pass
+            logger.debug("Failed to read project doc %s", file_path, exc_info=True)
     return "\n\n".join(parts)
 
 
 def discover_latest_spec(project_root: str) -> str | None:
-    specs_dir = os.path.join(project_root, ".moai", "specs")
+    specs_dir = os.path.join(project_root, ".trust5", "specs")
     if not os.path.isdir(specs_dir):
         return None
 

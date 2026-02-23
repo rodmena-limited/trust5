@@ -53,6 +53,7 @@ def _docker_available() -> bool:
         )
         return result.returncode == 0
     except Exception:
+        logger.debug("Docker MCP gateway status check failed", exc_info=True)
         return False
 
 
@@ -62,7 +63,7 @@ def _stop_clients(clients: list[MCPClient | MCPSSEClient]) -> None:
         try:
             client.stop()
         except Exception:
-            pass
+            logger.debug("Failed to stop MCP client", exc_info=True)
 
 
 class MCPManager:

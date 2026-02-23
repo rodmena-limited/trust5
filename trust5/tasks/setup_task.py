@@ -15,11 +15,10 @@ import subprocess
 
 from stabilize import StageExecution, Task, TaskResult
 
+from ..core.constants import SETUP_TIMEOUT
 from ..core.message import M, emit
 
 logger = logging.getLogger(__name__)
-
-SETUP_TIMEOUT = 120
 
 
 class SetupTask(Task):

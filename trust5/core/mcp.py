@@ -60,11 +60,12 @@ class MCPClient:
             except ProcessLookupError:
                 pass  # Process already exited between poll() and kill()
             except Exception:
-                try:
-                    if self.process.poll() is None:
+                logger.debug("Failed to terminate MCP server %s", self.name, exc_info=True)
+                if self.process.poll() is None:
+                    try:
                         self.process.kill()
-                except ProcessLookupError:
-                    pass  # Race: process exited between poll() and kill()
+                    except ProcessLookupError:
+                        pass  # Race: process exited between poll() and kill()
             self.process = None
 
     def list_tools(self) -> list[dict[str, Any]]:
@@ -194,12 +195,12 @@ class MCPSSEClient:
             try:
                 self._sse_response.close()
             except Exception:
-                pass
+                logger.debug("Failed to close SSE response for %s", self.name, exc_info=True)
         if self._session:
             try:
                 self._session.close()
             except Exception:
-                pass
+                logger.debug("Failed to close SSE session for %s", self.name, exc_info=True)
         self._sse_response = None
         self._session = None
         self._message_url = None

@@ -1,6 +1,7 @@
 import difflib
 import glob
 import json
+import logging
 import os
 import re
 import shlex
@@ -10,6 +11,8 @@ from typing import Any
 from .init import ProjectInitializer
 from .message import M, emit, emit_block
 from .tool_definitions import build_ask_user_definition, build_tool_definitions
+
+logger = logging.getLogger(__name__)
 
 # Destructive command patterns blocked when executed by LLM agents.
 # These are regex patterns matched against the full command string.
@@ -119,6 +122,12 @@ def _matches_test_pattern(path: str) -> bool:
 
 
 class Tools:
+    """File system and shell tools available to LLM agents.
+
+    Provides Read, Write, Edit, Bash, Glob, Grep, and package installation.
+    Enforces file ownership (allowlist/denylist) and test-file write protection.
+    """
+
     _non_interactive: bool = False
 
     def __init__(
@@ -224,7 +233,7 @@ class Tools:
                     with open(real_path, encoding="utf-8") as f:
                         old_content = f.read()
                 except Exception:
-                    pass
+                    logger.debug("Failed to read existing file content at %s", real_path, exc_info=True)
 
             emit(M.TWRT, f"Writing {len(content)} chars to {real_path}")
             os.makedirs(os.path.dirname(real_path), exist_ok=True)

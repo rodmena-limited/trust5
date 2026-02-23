@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 
 class _ValidatorBase:
+    """Abstract base for TRUST 5 pillar validators.
+
+    Subclasses implement ``name()`` → pillar name and ``validate()`` → PrincipleResult.
+    """
+
     def __init__(self, project_root: str, profile: LanguageProfile, config: QualityConfig):
         self._root = project_root
         self._profile = profile
@@ -60,6 +65,8 @@ class _ValidatorBase:
 
 
 class TestedValidator(_ValidatorBase):
+    """Validates the *Tested* pillar: test pass rate, type errors, coverage, assertion density."""
+
     def name(self) -> str:
         return PRINCIPLE_TESTED
 
@@ -217,6 +224,8 @@ class ReadableValidator(_ValidatorBase):
 
 
 class UnderstandableValidator(_ValidatorBase):
+    """Validates the *Understandable* pillar: warnings, file sizes, documentation completeness."""
+
     def name(self) -> str:
         return PRINCIPLE_UNDERSTANDABLE
 
@@ -287,6 +296,8 @@ class UnderstandableValidator(_ValidatorBase):
 
 
 class SecuredValidator(_ValidatorBase):
+    """Validates the *Secured* pillar: runs security scanners and classifies findings."""
+
     def name(self) -> str:
         return PRINCIPLE_SECURED
 
@@ -382,6 +393,8 @@ class SecuredValidator(_ValidatorBase):
 
 
 class TrackableValidator(_ValidatorBase):
+    """Validates the *Trackable* pillar: file naming, test structure, commit conventions."""
+
     _CONVENTIONAL_RE = re.compile(
         r"^(feat|fix|build|chore|ci|docs|style|refactor|perf|test)" r"(\([a-zA-Z0-9_./-]+\))?!?: .+$"
     )
@@ -508,6 +521,12 @@ class ProjectCompletenessValidator(_ValidatorBase):
 
 
 class TrustGate:
+    """Orchestrates all TRUST 5 validators and produces a weighted QualityReport.
+
+    Runs validators concurrently via a thread pool and aggregates results
+    using the configured pillar weights.
+    """
+
     def __init__(self, config: QualityConfig, profile: LanguageProfile, project_root: str):
         self.config = config
         self._validators = [

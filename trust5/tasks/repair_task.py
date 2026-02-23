@@ -1,8 +1,10 @@
 import logging
 import os
 import subprocess
+from datetime import timedelta
 from typing import Any
 
+from resilient_circuit import ExponentialDelay
 from stabilize import StageExecution, Task, TaskResult
 from stabilize.errors import TransientError
 
@@ -17,6 +19,20 @@ from ..core.message import M, emit
 from .watchdog_task import check_rebuild_signal, clear_rebuild_signal
 
 logger = logging.getLogger(__name__)
+
+# Outer (Stabilize-level) retry backoff for LLM errors.
+_OUTER_BACKOFF_CONNECTION = ExponentialDelay(
+    min_delay=timedelta(seconds=120),
+    max_delay=timedelta(seconds=300),
+    factor=2,
+    jitter=0.3,
+)
+_OUTER_BACKOFF_DEFAULT = ExponentialDelay(
+    min_delay=timedelta(seconds=60),
+    max_delay=timedelta(seconds=300),
+    factor=2,
+    jitter=0.3,
+)
 
 REPAIR_SYSTEM_PROMPT_FILE = "repairer.md"
 
@@ -44,7 +60,6 @@ class RepairTask(Task):
                 error="Jump limit exceeded — validate/repair loop ran too long",
                 outputs={"tests_passed": False, "jump_limit_reached": True},
             )
-
 
         # ── Watchdog rebuild signal ───────────────────────────────────
         rebuild_signaled, rebuild_reason = check_rebuild_signal(project_root)
@@ -330,10 +345,15 @@ class RepairTask(Task):
 
             except LLMError as e:
                 if e.is_auth_error or e.retryable or e.is_network_error:
-                    retry_after = 120.0 if e.is_auth_error else (e.retry_after or (60 if e.is_network_error else 30))
+                    outer_attempt = stage.context.get("_transient_retry_count", 0) + 1
+                    stage.context["_transient_retry_count"] = outer_attempt
+                    if e.is_auth_error or e.is_network_error:
+                        retry_after = _OUTER_BACKOFF_CONNECTION.for_attempt(outer_attempt)
+                    else:
+                        retry_after = max(e.retry_after, _OUTER_BACKOFF_DEFAULT.for_attempt(outer_attempt))
                     emit(
                         M.RFAL,
-                        f"Repair LLM transient failure, retrying in {retry_after}s: {e}",
+                        f"Repair LLM transient failure, retrying in {retry_after:.0f}s: {e}",
                     )
                     raise TransientError(
                         f"LLM failed during repair: {e}",
@@ -434,6 +454,7 @@ class RepairTask(Task):
             with open(prompt_path, encoding="utf-8") as f:
                 content = f.read()
         except Exception:
+            logger.debug("Failed to read repairer prompt file", exc_info=True)
             return self._default_repairer_prompt(profile_data)
 
         if content.startswith("---\n"):

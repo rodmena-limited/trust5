@@ -8,7 +8,7 @@ from typing import Any
 
 import requests
 
-from .constants import STREAM_TOTAL_TIMEOUT
+from .constants import RETRY_DELAY_SERVER, STREAM_TOTAL_TIMEOUT
 from .llm_errors import LLMError
 from .message import M, emit, emit_stream_end, emit_stream_start, emit_stream_token
 
@@ -23,7 +23,6 @@ MODEL_CONTEXT_WINDOW: dict[str, int] = {
 }
 
 RETRY_DELAY_CONNECT = 5
-RETRY_DELAY_SERVER = 30
 
 
 class LLMStreamsMixin:

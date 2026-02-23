@@ -1,9 +1,30 @@
+"""Trust5 configuration system with 3-tier precedence.
+
+Precedence (highest wins):
+  1. Environment variables (TRUST5_<SECTION>_<KEY>, e.g. TRUST5_AGENT_MAX_TURNS=30)
+  2. Project config  (.trust5/config/sections/*.yaml)
+  3. Global config   (~/.trust5/config.yaml)
+  4. Pydantic defaults (hardcoded in this module)
+"""
+
 import logging
 import os
+import threading
+from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
+
+_log = logging.getLogger(__name__)
+
+# ── Global config location ───────────────────────────────────────────────────
+
+GLOBAL_CONFIG_DIR = os.path.join(Path.home(), ".trust5")
+GLOBAL_CONFIG_PATH = os.path.join(GLOBAL_CONFIG_DIR, "config.yaml")
+
+
+# ── Sub-models (unchanged from previous) ─────────────────────────────────────
 
 
 class PlanGateConfig(BaseModel):
@@ -72,6 +93,9 @@ class SimplicityPrinciple(BaseModel):
 class ReportGeneration(BaseModel):
     enabled: bool = True
     auto_create: bool = True
+
+
+# ── Quality config ───────────────────────────────────────────────────────────
 
 
 class QualityConfig(BaseModel):
@@ -173,6 +197,9 @@ class QualityConfig(BaseModel):
     report_generation: ReportGeneration = Field(default_factory=ReportGeneration)
 
 
+# ── Project-level section configs ────────────────────────────────────────────
+
+
 class GitStrategyConfig(BaseModel):
     auto_branch: bool = True
     branch_prefix: str = "feature/"
@@ -206,14 +233,254 @@ class MoaiConfig(BaseModel):
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
 
 
+# ── Global config: runtime tunables ──────────────────────────────────────────
+
+
+class AgentConfig(BaseModel):
+    """Agent execution limits."""
+
+    max_turns: int = 20
+    max_history_messages: int = 60
+    tool_result_limit: int = 8000
+    default_timeout: int = 7200  # 2 hr wall-clock per agent run
+    per_turn_timeout: int = 1800  # 30 min per LLM call
+    idle_warn_turns: int = 5
+    idle_max_turns: int = 10
+
+
+class PipelineConfig(BaseModel):
+    """Repair/validate loop tunables."""
+
+    consecutive_failure_limit: int = 3
+    max_repair_attempts: int = 5
+    max_reimplementations: int = 3
+    test_output_limit: int = 4000
+    repair_agent_timeout: int = 1800
+    quick_test_timeout: int = 60
+    pytest_per_test_timeout: int = 30
+    max_quality_attempts: int = 3
+    setup_timeout: int = 120
+    subprocess_timeout: int = 120
+
+
+class WorkflowTimeoutConfig(BaseModel):
+    """Workflow-level timeouts in seconds."""
+
+    plan: float = 3600.0  # 1 hr
+    develop: float = 864000.0  # 10 days
+    run: float = 86400.0  # 1 day
+    loop: float = 86400.0  # 1 day
+
+
+class SubprocessConfig(BaseModel):
+    """Subprocess execution timeouts in seconds."""
+
+    bash_timeout: int = 600  # 10 min
+    grep_timeout: int = 60
+    syntax_check_timeout: int = 300  # 5 min
+    test_run_timeout: int = 600  # 10 min
+
+
+class StreamConfig(BaseModel):
+    """LLM streaming timeouts in seconds."""
+
+    read_timeout_thinking: int = 600
+    read_timeout_standard: int = 120
+    total_timeout: int = 3600
+    retry_delay_server: int = 30
+
+
+class MCPConfig(BaseModel):
+    """MCP server settings."""
+
+    start_timeout: float = 30.0
+    process_stop_timeout: int = 5
+
+
+class EventBusConfig(BaseModel):
+    """Event bus settings."""
+
+    socket_timeout: float = 5.0
+    queue_batch_size: int = 64
+
+
+class TUIConfig(BaseModel):
+    """TUI display settings."""
+
+    max_log_lines: int = 5000
+    spinner_interval: float = 0.08
+    elapsed_tick: float = 1.0
+
+
+class WatchdogConfig(BaseModel):
+    """Watchdog task settings."""
+
+    check_interval: int = 12
+    max_runtime: int = 7200  # 2 hours
+    ok_emit_interval: int = 25
+    max_llm_audits: int = 3
+
+
+class LLMConfig(BaseModel):
+    """LLM provider retry and timeout settings."""
+
+    timeout_fast: int = 120
+    timeout_standard: int = 300
+    timeout_extended: int = 600
+    connect_timeout: int = 10
+    token_refresh_margin: int = 300
+    retry_budget_connect: int = 3600
+    retry_budget_server: int = 1800
+    retry_budget_rate: int = 3600
+    max_backoff_delay: float = 300.0
+
+
+class GlobalConfig(BaseModel):
+    """Top-level global configuration for Trust5.
+
+    Written to ``~/.trust5/config.yaml`` on first run.
+    Values here are defaults for ALL projects.  Per-project overrides
+    go in ``.trust5/config/sections/*.yaml``.
+    """
+
+    agent: AgentConfig = Field(default_factory=AgentConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    timeouts: WorkflowTimeoutConfig = Field(default_factory=WorkflowTimeoutConfig)
+    subprocess: SubprocessConfig = Field(default_factory=SubprocessConfig)
+    stream: StreamConfig = Field(default_factory=StreamConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
+    event_bus: EventBusConfig = Field(default_factory=EventBusConfig)
+    tui: TUIConfig = Field(default_factory=TUIConfig)
+    watchdog: WatchdogConfig = Field(default_factory=WatchdogConfig)
+
+
+# ── Singleton: the resolved global config ────────────────────────────────────
+
+_global_config: GlobalConfig | None = None
+_config_lock: threading.Lock = threading.Lock()
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge *override* into *base* (override wins)."""
+    merged = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
+    """Apply TRUST5_<SECTION>_<KEY>=<value> environment variables.
+
+    For example:
+        TRUST5_AGENT_MAX_TURNS=30  → data["agent"]["max_turns"] = 30
+        TRUST5_TIMEOUTS_DEVELOP=100000 → data["timeouts"]["develop"] = 100000.0
+    """
+    prefix = "TRUST5_"
+    for env_key, env_val in os.environ.items():
+        if not env_key.startswith(prefix):
+            continue
+        parts = env_key[len(prefix) :].lower().split("_", 1)
+        if len(parts) != 2:
+            continue
+        section, field = parts
+        if section not in data:
+            data[section] = {}
+        if not isinstance(data[section], dict):
+            continue
+        # Coerce to the right type by trying int, then float, then string
+        coerced: Any
+        try:
+            coerced = int(env_val)
+        except ValueError:
+            try:
+                coerced = float(env_val)
+            except ValueError:
+                coerced = env_val
+        data[section][field] = coerced
+    return data
+
+
+def load_global_config(force_reload: bool = False) -> GlobalConfig:
+    """Load and cache the global config with 3-tier precedence.
+
+    1. Pydantic defaults
+    2. ``~/.trust5/config.yaml`` (global, written on first run)
+    3. Environment variables ``TRUST5_<SECTION>_<KEY>``
+
+    Project-level config is merged separately in ``ConfigManager.load_config()``.
+    """
+    global _global_config
+    with _config_lock:
+        if _global_config is not None and not force_reload:
+            return _global_config
+
+        data: dict[str, Any] = {}
+        # Layer 1: Read global config file
+        if os.path.exists(GLOBAL_CONFIG_PATH):
+            try:
+                with open(GLOBAL_CONFIG_PATH, encoding="utf-8") as f:
+                    file_data = yaml.safe_load(f)
+                    if isinstance(file_data, dict):
+                        data = file_data
+            except Exception as exc:
+                _log.warning("Failed to read global config %s: %s", GLOBAL_CONFIG_PATH, exc)
+        data = _apply_env_overrides(data)
+        try:
+            _global_config = GlobalConfig(**data)
+        except (ValueError, TypeError) as exc:
+            _log.warning("Invalid global config, using defaults: %s", exc)
+            _global_config = GlobalConfig()
+        return _global_config
+
+
+def ensure_global_config() -> None:
+    """Write the default global config to ``~/.trust5/config.yaml`` if it doesn't exist.
+
+    Called on first run (``trust5 init``, ``trust5 develop``, etc.).
+    """
+    if os.path.exists(GLOBAL_CONFIG_PATH):
+        return
+
+    os.makedirs(GLOBAL_CONFIG_DIR, exist_ok=True)
+
+    defaults = GlobalConfig()
+    # Use model_dump to get a clean dict, then write as YAML
+    data = defaults.model_dump()
+
+    try:
+        with open(GLOBAL_CONFIG_PATH, "w", encoding="utf-8") as f:
+            f.write("# Trust5 Global Configuration\n")
+            f.write("# Edit values below to customize Trust5 behavior across ALL projects.\n")
+            f.write("# Per-project overrides go in <project>/.trust5/config/sections/*.yaml\n")
+            f.write("# Environment variables: TRUST5_<SECTION>_<KEY>=<value>\n\n")
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        _log.info("Wrote default global config to %s", GLOBAL_CONFIG_PATH)
+    except OSError as exc:
+        _log.warning("Failed to write global config to %s: %s", GLOBAL_CONFIG_PATH, exc)
+
+
+# ── ConfigManager: project-level config with global fallback ─────────────────
+
+
 class ConfigManager:
+    """Load project-level configuration from ``.trust5/config/sections/*.yaml``.
+
+    Project config is merged on top of the global config for shared fields
+    (quality section).  Use ``get_global()`` to access runtime tunables.
+    """
+
     def __init__(self, project_root: str = "."):
         self.project_root = project_root
-        self.config_dir = os.path.join(project_root, ".moai", "config")
+        self.config_dir = os.path.join(project_root, ".trust5", "config")
         self.sections_dir = os.path.join(self.config_dir, "sections")
         self.config = MoaiConfig()
 
     def load_config(self) -> MoaiConfig:
+        """Load project config from YAML sections, falling back to defaults."""
         quality_path = os.path.join(self.sections_dir, "quality.yaml")
         git_path = os.path.join(self.sections_dir, "git-strategy.yaml")
         lang_path = os.path.join(self.sections_dir, "language.yaml")
@@ -224,7 +491,6 @@ class ConfigManager:
         lang_data = self._unwrap(self._load_yaml(lang_path), "language")
         workflow_data = self._unwrap(self._load_yaml(workflow_path), "workflow")
 
-        _log = logging.getLogger(__name__)
         if quality_data:
             quality_data = self._flatten_lsp_gates(quality_data)
             try:
@@ -249,6 +515,11 @@ class ConfigManager:
                 _log.warning("Invalid workflow config, using defaults: %s", e)
 
         return self.config
+
+    @staticmethod
+    def get_global() -> GlobalConfig:
+        """Return the resolved global config (cached singleton)."""
+        return load_global_config()
 
     @staticmethod
     def _flatten_lsp_gates(data: dict[str, Any]) -> dict[str, Any]:
@@ -276,7 +547,7 @@ class ConfigManager:
                 result: dict[str, Any] = yaml.safe_load(f) or {}
                 return result
         except Exception as e:
-            logging.getLogger(__name__).warning("Failed to load config %s: %s", path, e)
+            _log.warning("Failed to load config %s: %s", path, e)
             return {}
 
     def get_config(self) -> MoaiConfig:

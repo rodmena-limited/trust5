@@ -67,6 +67,13 @@ def _truncate(text: str, max_len: int = MAX_TOOL_RESULT_LENGTH) -> str:
 
 
 class Agent:
+    """LLM conversation agent that executes a prompt via tool-augmented chat.
+
+    Runs a turn-based loop: send messages to the LLM, execute any tool calls
+    returned, feed results back, and repeat until the LLM produces a final
+    text response or the turn/time budget is exhausted.
+    """
+
     def __init__(
         self,
         name: str,
@@ -113,6 +120,16 @@ class Agent:
                 emit(M.SWRN, f"[{self.name}] Failed to load MCP tools: {e}")
 
     def run(self, user_input: str, max_turns: int = 20, timeout_seconds: float | None = None) -> str:
+        """Run the agent loop and return the final text response.
+
+        Args:
+            user_input: The task description or follow-up message.
+            max_turns: Maximum number of LLM round-trips before forced stop.
+            timeout_seconds: Wall-clock deadline; ``None`` means no limit.
+
+        Returns:
+            The LLM's final text response after all tool calls are resolved.
+        """
         deadline = (time.monotonic() + timeout_seconds) if timeout_seconds else None
         self.history.append({"role": "user", "content": user_input})
         messages = [{"role": "system", "content": self.system_prompt}] + self.history
@@ -283,6 +300,7 @@ class Agent:
                 emit(M.TRES, f"[{self.name}] {name} (MCP) -> {len(mcp_result)} chars")
                 return mcp_result
             except Exception:
+                logger.debug("MCP tool call failed for %s", name, exc_info=True)
                 continue
 
         emit(M.AERR, f"[{self.name}] Unknown tool: {name}")

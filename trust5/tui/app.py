@@ -157,6 +157,7 @@ class Trust5App(App[None]):
             except queue.Empty:
                 continue
             except Exception:
+                logger.debug("consume_events error", exc_info=True)
                 consecutive_errors += 1
                 if consecutive_errors >= 10:
                     logger.debug("consume_events: %d consecutive errors, stopping", consecutive_errors)

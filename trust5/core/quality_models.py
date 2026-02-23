@@ -10,6 +10,8 @@ import subprocess
 
 from pydantic import BaseModel, Field
 
+from .constants import SUBPROCESS_TIMEOUT
+
 # ── Principle names and weights ──────────────────────────────────────
 
 PRINCIPLE_TESTED = "tested"
@@ -28,7 +30,7 @@ PRINCIPLE_WEIGHTS: dict[str, float] = {
 }
 ALL_PRINCIPLES = list(PRINCIPLE_WEIGHTS.keys())
 PASS_SCORE_THRESHOLD = 0.70
-SUBPROCESS_TIMEOUT = 120
+
 MAX_FILE_LINES = 500  # fallback; prefer QualityConfig.max_file_lines
 
 # Test file detection patterns -- these are specification, not output.
@@ -54,6 +56,8 @@ _SKIP_SIZE_CHECK = frozenset(
 
 
 class Issue(BaseModel):
+    """A single quality issue found during validation (lint error, type error, etc.)."""
+
     file: str = ""
     line: int = 0
     severity: str = "error"
@@ -62,6 +66,8 @@ class Issue(BaseModel):
 
 
 class PrincipleResult(BaseModel):
+    """Result of a single TRUST 5 quality pillar (Tested, Readable, etc.)."""
+
     name: str
     passed: bool = False
     score: float = 0.0
@@ -69,6 +75,8 @@ class PrincipleResult(BaseModel):
 
 
 class QualityReport(BaseModel):
+    """Aggregate quality gate report with per-pillar scores and overall pass/fail."""
+
     passed: bool = False
     score: float = 0.0
     principles: dict[str, PrincipleResult] = Field(default_factory=dict)

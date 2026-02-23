@@ -22,9 +22,9 @@ TERMINAL_STATUSES: frozenset[WorkflowStatus] = frozenset(
     }
 )
 
-POLL_INTERVAL_FAST: float = 0.5      # first 60 seconds
+POLL_INTERVAL_FAST: float = 0.5  # first 60 seconds
 POLL_INTERVAL_MODERATE: float = 2.0  # 1-5 minutes
-POLL_INTERVAL_SLOW: float = 5.0     # beyond 5 minutes
+POLL_INTERVAL_SLOW: float = 5.0  # beyond 5 minutes
 POLL_INTERVAL: float = POLL_INTERVAL_FAST  # backward compat alias
 
 
@@ -185,7 +185,11 @@ def run_workflow(
     label: str,
     db_path: str = "",
 ) -> Workflow:
-    """Run a workflow to completion with signal handling and status finalization."""
+    """Submit, execute, and finalize a workflow with SIGINT handling.
+    Stores the workflow, starts orchestration and queue processing,
+    waits for completion (with progressive polling), and calls
+    ``finalize_status`` to detect hidden stage failures.
+    """
     store.store(workflow)
     orchestrator.start(workflow)
 

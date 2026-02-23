@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 # The execute() method always resolves the real profile and passes explicit values.
 _FALLBACK_EXTENSIONS = (".py", ".go", ".ts", ".js", ".rs", ".java", ".rb")
 _FALLBACK_SKIP_DIRS = (
-    ".moai",
     ".trust5",
     ".git",
     "node_modules",

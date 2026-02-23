@@ -5,6 +5,9 @@ import socket
 import sys
 import threading
 import time
+from datetime import timedelta
+
+from resilient_circuit import ExponentialDelay
 
 # ── SQLite safety: disable mmap to prevent fork+mmap corruption on macOS ──
 # subprocess.run() forks the process; mmap'd SQLite pages in the child can
@@ -22,10 +25,8 @@ import typer
 from stabilize import Workflow
 
 from .commands.resume_cmd import resume_logic
-from .core.constants import TIMEOUT_DEVELOP as _TIMEOUT_DEVELOP
-from .core.constants import TIMEOUT_LOOP as _TIMEOUT_LOOP
-from .core.constants import TIMEOUT_PLAN as _TIMEOUT_PLAN
-from .core.constants import TIMEOUT_RUN as _TIMEOUT_RUN
+from .core import constants
+from .core.config import ensure_global_config
 from .core.git import GitManager
 from .core.init import ProjectInitializer
 from .core.message import M, emit
@@ -61,11 +62,6 @@ logger = logging.getLogger(__name__)
 app = typer.Typer()
 
 _USE_TUI = True
-
-TIMEOUT_PLAN = _TIMEOUT_PLAN
-TIMEOUT_DEVELOP = _TIMEOUT_DEVELOP
-TIMEOUT_RUN = _TIMEOUT_RUN
-TIMEOUT_LOOP = _TIMEOUT_LOOP
 
 
 def _silence_logging_for_tui() -> None:
@@ -123,6 +119,7 @@ def _global_options(
 
     if _USE_TUI:
         _silence_logging_for_tui()
+    ensure_global_config()
 
 
 # ── CLI Commands ─────────────────────────────────────────────────────────
@@ -133,7 +130,16 @@ def plan(request: str) -> None:
     Tools.set_non_interactive(True)
     processor, orchestrator, store, _queue, db_path = setup_stabilize(use_tui=_USE_TUI)
     workflow = create_plan_workflow(request)
-    _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_PLAN, "Plan", db_path, use_tui=_USE_TUI)
+    _run_workflow_dispatch(
+        processor,
+        orchestrator,
+        store,
+        workflow,
+        constants.TIMEOUT_PLAN,
+        "Plan",
+        db_path,
+        use_tui=_USE_TUI,
+    )
 
 
 @app.command()
@@ -151,6 +157,12 @@ def develop(request: str) -> None:
         """
         # Phase 1: Plan (with retry on empty output)
         max_plan_attempts = 3
+        _plan_backoff = ExponentialDelay(
+            min_delay=timedelta(seconds=10),
+            max_delay=timedelta(seconds=60),
+            factor=2,
+            jitter=0.3,
+        )
         plan_output = ""
         plan_result = None
 
@@ -167,7 +179,7 @@ def develop(request: str) -> None:
                 plan_result = wait_for_completion(
                     store,
                     plan_wf.id,
-                    TIMEOUT_PLAN,
+                    constants.TIMEOUT_PLAN,
                     stop_event=shutdown,
                 )
             finally:
@@ -189,7 +201,7 @@ def develop(request: str) -> None:
                     M.SWRN,
                     f"Plan phase produced no output (attempt {plan_attempt}/{max_plan_attempts}) — retrying in 10s",
                 )
-                time.sleep(10)
+                time.sleep(_plan_backoff.for_attempt(plan_attempt))
             else:
                 emit(M.WFAL, "Plan phase produced no output after all attempts — cannot proceed.")
                 return None
@@ -240,7 +252,7 @@ def develop(request: str) -> None:
             impl_result = wait_for_completion(
                 p2_store,
                 impl_wf.id,
-                TIMEOUT_DEVELOP,
+                constants.TIMEOUT_DEVELOP,
                 stop_event=shutdown,
             )
         finally:
@@ -264,11 +276,21 @@ def run(spec_id: str) -> None:
     Tools.set_non_interactive(True)
     processor, orchestrator, store, _queue, db_path = setup_stabilize(use_tui=_USE_TUI)
     workflow = create_run_workflow(spec_id)
-    _run_workflow_dispatch(processor, orchestrator, store, workflow, TIMEOUT_RUN, "Run", db_path, use_tui=_USE_TUI)
+    _run_workflow_dispatch(
+        processor,
+        orchestrator,
+        store,
+        workflow,
+        constants.TIMEOUT_RUN,
+        "Run",
+        db_path,
+        use_tui=_USE_TUI,
+    )
 
 
 @app.command()
 def init(path: str = ".") -> None:
+    ensure_global_config()
     initializer = ProjectInitializer(path)
     initializer.run_wizard()
     GitManager(path).init_repo()
@@ -333,7 +355,7 @@ def loop() -> None:
     processor, orchestrator, store, _queue, db_path = setup_stabilize(use_tui=_USE_TUI)
     workflow = create_loop_workflow()
     _run_workflow_dispatch(
-        processor, orchestrator, store, workflow, TIMEOUT_LOOP, "Ralph Loop", db_path, use_tui=_USE_TUI
+        processor, orchestrator, store, workflow, constants.TIMEOUT_LOOP, "Ralph Loop", db_path, use_tui=_USE_TUI
     )
 
 

@@ -16,6 +16,8 @@ from ..core.message import M, emit
 
 
 class RalphLoop:
+    """Continuous LSP-driven diagnostics loop that fixes issues iteratively via LLM agents."""
+
     def __init__(self, project_root: str):
         self.project_root = project_root
         self.config_manager = ConfigManager(project_root)
@@ -140,6 +142,8 @@ class RalphLoop:
 
 
 class LoopTask(Task):
+    """Stabilize task wrapper that runs a single RalphLoop to completion."""
+
     def execute(self, stage: StageExecution) -> TaskResult:
         loop = RalphLoop(os.getcwd())
         loop.start_loop()

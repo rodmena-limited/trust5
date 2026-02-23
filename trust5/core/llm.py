@@ -10,6 +10,15 @@ from resilient_circuit import CircuitProtectorPolicy, ExponentialDelay
 from resilient_circuit.exceptions import ProtectedCallError
 
 from .constants import (
+    LLM_CONNECT_TIMEOUT,
+    LLM_MAX_BACKOFF_DELAY,
+    LLM_RETRY_BUDGET_CONNECT,
+    LLM_RETRY_BUDGET_RATE,
+    LLM_RETRY_BUDGET_SERVER,
+    LLM_TIMEOUT_EXTENDED,
+    LLM_TIMEOUT_FAST,
+    LLM_TIMEOUT_STANDARD,
+    LLM_TOKEN_REFRESH_MARGIN,
     STREAM_READ_TIMEOUT_STANDARD,
     STREAM_READ_TIMEOUT_THINKING,
 )
@@ -20,31 +29,30 @@ from .message import M, emit
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT_FAST = 120
-TIMEOUT_STANDARD = 300
-TIMEOUT_EXTENDED = 600
+TIMEOUT_FAST = LLM_TIMEOUT_FAST
+TIMEOUT_STANDARD = LLM_TIMEOUT_STANDARD
+TIMEOUT_EXTENDED = LLM_TIMEOUT_EXTENDED
 
-CONNECT_TIMEOUT = 10  # TCP connect timeout (fail fast, then retry)
-TOKEN_REFRESH_MARGIN = 300  # refresh token if it expires within 5 min
-
+CONNECT_TIMEOUT = LLM_CONNECT_TIMEOUT
+TOKEN_REFRESH_MARGIN = LLM_TOKEN_REFRESH_MARGIN
 # Retry budgets (total seconds per error class before giving up)
-RETRY_BUDGET_CONNECT = 3600   # 1 hour: long-running pipelines need extended patience
-RETRY_BUDGET_SERVER = 1800    # 30 min: 5xx errors, overloaded backends
-RETRY_BUDGET_RATE = 3600      # 1 hour: rate limiting (uses server's Retry-After)
-RETRY_DELAY_CONNECT = 5       # quick retries — network may recover any moment (unchanged)
-RETRY_DELAY_SERVER = 10       # lower initial base — Full Jitter handles growth
-MAX_BACKOFF_DELAY = 300.0     # 5 minute ceiling for exponential backoff
+RETRY_BUDGET_CONNECT = LLM_RETRY_BUDGET_CONNECT
+RETRY_BUDGET_SERVER = LLM_RETRY_BUDGET_SERVER
+RETRY_BUDGET_RATE = LLM_RETRY_BUDGET_RATE
+RETRY_DELAY_CONNECT = 5  # quick retries — network may recover any moment (unchanged)
+RETRY_DELAY_SERVER = 10  # lower initial base — Full Jitter handles growth
+MAX_BACKOFF_DELAY = LLM_MAX_BACKOFF_DELAY
 
 # Backoff strategies per error class (using resilient-circuit)
 _BACKOFF_CONNECT = ExponentialDelay(
-    min_delay=timedelta(seconds=5),      # RETRY_DELAY_CONNECT
-    max_delay=timedelta(seconds=300),    # MAX_BACKOFF_DELAY
+    min_delay=timedelta(seconds=5),  # RETRY_DELAY_CONNECT
+    max_delay=timedelta(seconds=300),  # MAX_BACKOFF_DELAY
     factor=2,
     jitter=1.0,  # Full-spread jitter: delay ∈ [0, 2 × base × 2^(attempt-1)]
 )
 _BACKOFF_SERVER = ExponentialDelay(
-    min_delay=timedelta(seconds=10),     # RETRY_DELAY_SERVER
-    max_delay=timedelta(seconds=300),    # MAX_BACKOFF_DELAY
+    min_delay=timedelta(seconds=10),  # RETRY_DELAY_SERVER
+    max_delay=timedelta(seconds=300),  # MAX_BACKOFF_DELAY
     factor=2,
     jitter=1.0,
 )
@@ -127,6 +135,13 @@ def _resolve_thinking_level(
 
 
 class LLM(LLMBackendsMixin, LLMStreamsMixin):
+    """Multi-provider LLM client with streaming, retry, and circuit breaker.
+
+    Supports Anthropic (Claude), Google (Gemini), and Ollama backends.
+    Includes automatic model fallback, exponential backoff on failures,
+    and per-chunk abort signaling for watchdog integration.
+    """
+
     def __init__(
         self,
         model: str = "glm-4.7:cloud",
@@ -475,9 +490,15 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
         if token_data is None:
             return False
 
-        delays = (2, 4, 8)
+        _refresh_backoff = ExponentialDelay(
+            min_delay=timedelta(seconds=2),
+            max_delay=timedelta(seconds=15),
+            factor=2,
+            jitter=0.2,
+        )
+        max_refresh_attempts = 3
         last_exc: Exception | None = None
-        for attempt, delay in enumerate(delays):
+        for attempt in range(1, max_refresh_attempts + 1):
             try:
                 new_token = provider.refresh(token_data)
                 store.save(self._provider_name, new_token)
@@ -485,16 +506,16 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
                     self._session.headers[self._auth_header] = f"Bearer {new_token.access_token}"
                 else:
                     self._session.headers[self._auth_header] = new_token.access_token
-                logger.info("Token refreshed mid-pipeline for %s (attempt %d)", self._provider_name, attempt + 1)
+                logger.info("Token refreshed mid-pipeline for %s (attempt %d)", self._provider_name, attempt)
                 return True
             except requests.exceptions.ConnectionError as e:
                 last_exc = e
-                logger.debug("Transient refresh error (attempt %d): %s", attempt + 1, e)
-                time.sleep(delay)
+                logger.debug("Transient refresh error (attempt %d): %s", attempt, e)
+                time.sleep(_refresh_backoff.for_attempt(attempt))
             except requests.exceptions.Timeout as e:
                 last_exc = e
-                logger.debug("Transient refresh error (attempt %d): %s", attempt + 1, e)
-                time.sleep(delay)
+                logger.debug("Transient refresh error (attempt %d): %s", attempt, e)
+                time.sleep(_refresh_backoff.for_attempt(attempt))
             except requests.exceptions.HTTPError as e:
                 # Permanent errors (invalid_grant, bad client credentials) — stop immediately
                 logger.warning("Permanent refresh error for %s: %s", self._provider_name, e)

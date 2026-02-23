@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-_COMMON_SKIP = (".moai", ".trust5", ".git")
+_COMMON_SKIP = (".trust5", ".git")
 
 
 @dataclass(frozen=True)
@@ -614,7 +614,6 @@ def _build_ext_map() -> None:
 _SKIP_DIRS_DETECT = frozenset(
     {
         ".git",
-        ".moai",
         ".trust5",
         "node_modules",
         "vendor",

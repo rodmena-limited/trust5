@@ -10,14 +10,16 @@ console = Console()
 
 
 class ProjectInitializer:
+    """Interactive wizard that scaffolds a new Trust5 project directory."""
+
     def __init__(self, project_root: str = "."):
         self.project_root = project_root
         self.config_manager = ConfigManager(project_root)
 
     def run_wizard(self) -> None:
-        console.print("[bold blue]MoAI-ADK Project Initialization Wizard[/bold blue]")
+        console.print("[bold blue]Trust5 Project Initialization Wizard[/bold blue]")
 
-        if os.path.exists(os.path.join(self.project_root, ".moai")):
+        if os.path.exists(os.path.join(self.project_root, ".trust5", "config", "sections")):
             console.print("[yellow]Project already initialized.[/yellow]")
             return
 
@@ -36,38 +38,32 @@ class ProjectInitializer:
 
     def _setup_structure(self) -> None:
         dirs = [
-            ".moai/config/sections",
-            ".moai/specs",
-            ".moai/project",
-            ".moai/memory/checkpoints",
-            ".moai/cache/loop-snapshots",
-            ".trust5",
+            ".trust5/config/sections",
+            ".trust5/specs",
+            ".trust5/project",
+            ".trust5/memory/checkpoints",
+            ".trust5/cache/loop-snapshots",
         ]
         for d in dirs:
             os.makedirs(os.path.join(self.project_root, d), exist_ok=True)
 
         self._create_file(
-            ".moai/project/product.md",
+            ".trust5/project/product.md",
             "# Product Requirements\n\nTODO: Describe product vision.",
         )
         self._create_file(
-            ".moai/project/structure.md",
+            ".trust5/project/structure.md",
             "# System Architecture\n\nTODO: Describe system structure.",
         )
-        self._create_file(".moai/project/tech.md", "# Technology Stack\n\nTODO: Describe tech stack.")
-        # Create legacy config.json for compatibility with older prompts if needed
-        # But better to fix prompts. We are fixing prompts.
-        # However, let's create a symlink or dummy json if agents are hardcoded.
-        # manager-spec looked for .moai/config.json explicitly.
-
-        # Create a combined config.json for convenience/compatibility
+        self._create_file(".trust5/project/tech.md", "# Technology Stack\n\nTODO: Describe tech stack.")
+        # Legacy config.json for compatibility — sits inside .trust5/
         import json
 
         config_data = {
             "quality": {"development_mode": "hybrid"},
-            "project": {"name": "Correcto Project"},
-        }  # Default
-        self._create_file(".moai/config.json", json.dumps(config_data, indent=2))
+            "project": {"name": "Trust5 Project"},
+        }
+        self._create_file(".trust5/config.json", json.dumps(config_data, indent=2))
 
         # Default MCP config:
         # - stabilize: Stabilize workflow engine (remote SSE, always available)
@@ -94,7 +90,7 @@ class ProjectInitializer:
                 f.write(content)
 
     def _write_default_config(self, language: str) -> None:
-        config_path = os.path.join(self.project_root, ".moai/config/sections")
+        config_path = os.path.join(self.project_root, ".trust5/config/sections")
 
         with open(os.path.join(config_path, "quality.yaml"), "w") as f:
             f.write("""development_mode: hybrid

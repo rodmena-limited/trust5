@@ -1,9 +1,12 @@
+import logging
 import os
 
 from stabilize import StageExecution, TaskExecution, Workflow
 
 from ..core.config import ConfigManager
 from ..core.lang import detect_language, get_profile
+
+logger = logging.getLogger(__name__)
 
 
 def create_plan_workflow(user_request: str) -> Workflow:
@@ -19,6 +22,7 @@ def create_plan_workflow(user_request: str) -> Workflow:
     try:
         dev_mode = config.quality.development_mode
     except Exception:
+        logger.debug("Failed to load development mode, defaulting to 'hybrid'", exc_info=True)
         dev_mode = "hybrid"
     return Workflow.create(
         application="trust5",

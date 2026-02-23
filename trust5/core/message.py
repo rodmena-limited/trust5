@@ -162,22 +162,23 @@ TOOL_CODE_MAP = {
 
 _enabled = True
 _print_fallback = True
+_msg_lock = threading.Lock()
 
 
 def set_enabled(value: bool) -> None:
     global _enabled
-    _enabled = value
+    with _msg_lock:
+        _enabled = value
 
 
 def set_print_fallback(value: bool) -> None:
     """Disable print fallback when TUI is active.
-
-    When Textual owns the terminal, any print() to stdout/stderr corrupts
     the layout. Call set_print_fallback(False) before starting the TUI so
     emit functions silently drop events when the bus isn't ready yet.
     """
     global _print_fallback
-    _print_fallback = value
+    with _msg_lock:
+        _print_fallback = value
 
 
 def _ts() -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 
 from .claude import ClaudeProvider
@@ -17,18 +18,21 @@ _PROVIDERS: dict[str, Callable[[], AuthProvider]] = {
 
 _store_instance: TokenStore | None = None
 _provider_override: str | None = None
+_registry_lock = threading.Lock()
 
 
 def _get_store() -> TokenStore:
     global _store_instance
-    if _store_instance is None:
-        _store_instance = TokenStore()
-    return _store_instance
+    with _registry_lock:
+        if _store_instance is None:
+            _store_instance = TokenStore()
+        return _store_instance
 
 
 def set_provider_override(name: str | None) -> None:
     global _provider_override
-    _provider_override = name
+    with _registry_lock:
+        _provider_override = name
 
 
 def register_provider(name: str, factory: Callable[[], AuthProvider]) -> None:

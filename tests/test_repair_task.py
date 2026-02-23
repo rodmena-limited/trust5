@@ -476,7 +476,7 @@ def test_repair_redetects_unknown_language(mock_get_profile, mock_detect, mock_e
         "test_command": ("echo", "no default test command"),
         "test_verify_command": "echo 'no tests'",
         "syntax_check_command": None,
-        "skip_dirs": (".moai", ".trust5", ".git"),
+        "skip_dirs": (".trust5", ".git"),
     }
     stage = make_stage(
         {
@@ -505,7 +505,7 @@ def test_repair_keeps_unknown_when_detection_fails(mock_detect, mock_emit):
         "test_command": ("echo", "no default test command"),
         "test_verify_command": "echo 'no tests'",
         "syntax_check_command": None,
-        "skip_dirs": (".moai", ".trust5", ".git"),
+        "skip_dirs": (".trust5", ".git"),
     }
     stage = make_stage(
         {

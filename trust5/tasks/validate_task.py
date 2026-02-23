@@ -113,7 +113,6 @@ class ValidateTask(Task):
                 outputs={"tests_passed": False, "jump_limit_reached": True},
             )
 
-
         # ── Watchdog rebuild signal ───────────────────────────────────
         rebuild_signaled, rebuild_reason = check_rebuild_signal(project_root)
         if rebuild_signaled:

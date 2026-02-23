@@ -175,4 +175,4 @@ def _cancel_stale_workflows() -> None:
             wf.status = WorkflowStatus.CANCELED
             store.update_status(wf)
     except Exception:
-        pass  # best-effort — don't block exit
+        logger.debug("Best-effort stale workflow cleanup failed", exc_info=True)

@@ -6,6 +6,7 @@ to headless mode, and print final summaries after TUI exit.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -18,6 +19,8 @@ from .core.event_bus import init_bus
 from .core.message import M, emit
 from .core.runner import finalize_status, run_workflow
 from .infrastructure import _cancel_stale_workflows
+
+logger = logging.getLogger(__name__)
 
 
 def _suppress_print_fallback() -> None:
@@ -237,7 +240,7 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
         _suppress_print_fallback()
         tui_app.run()
     except Exception:
-        pass
+        logger.debug("TUI app exited with error", exc_info=True)
     finally:
         bus.unsubscribe(eq)
 

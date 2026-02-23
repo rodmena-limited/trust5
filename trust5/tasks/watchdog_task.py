@@ -75,7 +75,6 @@ _STUB_INDICATORS = (
 
 _SKIP_DIRS = frozenset(
     {
-        ".moai",
         ".trust5",
         ".git",
         "node_modules",
@@ -139,8 +138,6 @@ def signal_pipeline_done(project_root: str) -> None:
         logger.debug("Failed to write pipeline-done sentinel")
 
 
-
-
 # ── Rebuild sentinel ─────────────────────────────────────────────────
 
 _REBUILD_SENTINEL = "watchdog_rebuild"
@@ -183,6 +180,8 @@ def clear_rebuild_signal(project_root: str) -> None:
         os.remove(sentinel)
     except FileNotFoundError:
         pass
+
+
 # ── Pipeline Health state machine ────────────────────────────────────
 
 
@@ -512,7 +511,7 @@ class WatchdogTask(Task):
                 if bus is not None:
                     bus.unsubscribe(sub_q)
             except Exception:
-                pass
+                logger.debug("Failed to unsubscribe watchdog from event bus", exc_info=True)
 
         # Final report write
         self._write_report(project_root, all_findings, check_count, health, audit_summaries)
@@ -557,6 +556,7 @@ class WatchdogTask(Task):
                     json.dump(report, f, indent=2)
                 os.replace(tmp_path, report_path)
             except Exception:
+                logger.debug("Failed to write watchdog report, cleaning up temp file", exc_info=True)
                 try:
                     os.unlink(tmp_path)
                 except OSError:
@@ -805,7 +805,6 @@ class WatchdogTask(Task):
                 )
         return findings
 
-
     @staticmethod
     def _rule_regression(health: PipelineHealth) -> list[dict[str, str]]:
         """Rule 8: Detect declining test pass rate (regression)."""
@@ -912,6 +911,7 @@ class WatchdogTask(Task):
             )
             return True
         return False
+
     # ── Layer 1b: Filesystem checks (preserved from original) ─────────
 
     def _run_checks(

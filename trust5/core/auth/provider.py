@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 @dataclass
 class TokenData:
+    """Holds OAuth / API-key credentials with expiry and refresh metadata."""
+
     access_token: str
     refresh_token: str | None = None
     expires_at: float = 0.0
@@ -33,6 +35,8 @@ class TokenData:
 
 @dataclass
 class ProviderConfig:
+    """Static configuration for an LLM provider (API base, models, fallback chain)."""
+
     name: str
     display_name: str
     api_base_url: str
@@ -44,6 +48,11 @@ class ProviderConfig:
 
 
 class AuthProvider(ABC):
+    """Abstract base for provider authentication (login / refresh / validate).
+
+    Subclasses: ``ClaudeProvider``, ``GoogleProvider``, ``OllamaProvider``.
+    """
+
     def __init__(self, config: ProviderConfig):
         self.config = config
 

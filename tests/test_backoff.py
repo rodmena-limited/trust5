@@ -96,7 +96,6 @@ def test_chat_skips_open_circuit(mock_emit):
 
     llm = LLM(model="primary-model", fallback_models=["fallback-model"])
 
-
     primary_circuit = _get_model_circuit("primary-model")
     for _ in range(5):
         primary_circuit._status.mark_failure()
@@ -110,7 +109,6 @@ def test_chat_skips_open_circuit(mock_emit):
             assert result == {"message": {"role": "assistant", "content": "ok"}}
 
             assert mock_retry.call_args[0][2] == "fallback-model"
-
 
         afbk_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "AFBK"]
         assert any("Circuit open" in str(c) for c in afbk_calls)
@@ -143,7 +141,6 @@ def test_chat_all_circuits_open_raises(mock_emit):
     from trust5.core.llm import LLM, LLMError
 
     llm = LLM(model="all-open-primary", fallback_models=["all-open-fallback"])
-
 
     for model_name in ("all-open-primary", "all-open-fallback"):
         cb = _get_model_circuit(model_name)

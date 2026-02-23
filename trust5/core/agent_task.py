@@ -155,7 +155,15 @@ _TDD_GREEN_PHASE_INSTRUCTIONS = (
 
 
 class AgentTask(Task):
+    """Stabilize task that runs an LLM agent with configurable prompt and tools.
+
+    Reads stage context for agent_name, prompt_file, user_input, model_tier,
+    max_turns, and non_interactive flag. Supports rebuild signals from the
+    watchdog and handles LLM/connection errors with resilient-circuit backoff.
+    """
+
     def execute(self, stage: StageExecution) -> TaskResult:
+        """Execute the agent task within the Stabilize workflow."""
         start_time = time.monotonic()
         agent_name: str | None = stage.context.get("agent_name")
         prompt_file: str | None = stage.context.get("prompt_file")
@@ -550,7 +558,7 @@ def _load_skills(skills: list[str], assets_path: str) -> str:
                 _, body = _parse_frontmatter(content)
                 loaded.append(f"--- SKILL: {skill_name} ---\n{body}\n")
             except Exception:
-                pass
+                logger.debug("Failed to load skill %s", skill_name, exc_info=True)
     return "\n".join(loaded)
 
 

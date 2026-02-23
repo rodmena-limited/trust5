@@ -56,7 +56,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "http://trust5.rodmena.ai/"
+Homepage = "http://trust5.net/"
 Repository = "https://github.com/rodmena-limited/trust5"
 Issues = "https://github.com/rodmena-limited/trust5/issues"
 

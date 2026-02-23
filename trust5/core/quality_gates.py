@@ -19,6 +19,8 @@ PILLAR_WARNING_THRESHOLD = 0.50
 
 @dataclass
 class DiagnosticSnapshot:
+    """Snapshot of project diagnostics at a point in time for regression detection."""
+
     errors: int = 0
     warnings: int = 0
     type_errors: int = 0
@@ -28,6 +30,8 @@ class DiagnosticSnapshot:
 
 
 class PillarStatus:
+    """Enum-like class mapping pillar scores to PASS / WARNING / CRITICAL status."""
+
     PASS = "pass"
     WARNING = "warning"
     CRITICAL = "critical"
@@ -43,6 +47,8 @@ class PillarStatus:
 
 @dataclass
 class PillarAssessment:
+    """Assessment result for a single TRUST 5 pillar."""
+
     pillar: str
     score: float
     status: str
@@ -50,6 +56,8 @@ class PillarAssessment:
 
 
 class Assessment:
+    """Aggregated assessment across all TRUST 5 pillars for a QualityReport."""
+
     def __init__(self, report: QualityReport) -> None:
         self.pillars: dict[str, PillarAssessment] = {}
         for name, pr in report.principles.items():
@@ -72,10 +80,12 @@ class Assessment:
 
 
 def is_conventional_commit(msg: str) -> bool:
+    """Return True if *msg* matches Conventional Commits format."""
     return bool(CONVENTIONAL_COMMIT_RE.match(msg.strip().split("\n")[0]))
 
 
 def validate_plan_phase(snapshot: DiagnosticSnapshot) -> list[Issue]:
+    """Check diagnostics against plan-phase baseline thresholds."""
     issues: list[Issue] = []
     if snapshot.errors > 0:
         issues.append(
@@ -97,6 +107,7 @@ def validate_plan_phase(snapshot: DiagnosticSnapshot) -> list[Issue]:
 
 
 def validate_run_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> list[Issue]:
+    """Check diagnostics against run-phase error/lint/type thresholds."""
     issues: list[Issue] = []
     gate = config.run_gate
     if snapshot.errors > gate.max_errors:
@@ -127,6 +138,7 @@ def validate_run_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> l
 
 
 def validate_sync_phase(snapshot: DiagnosticSnapshot, config: QualityConfig) -> list[Issue]:
+    """Check diagnostics against sync-phase error and warning thresholds."""
     issues: list[Issue] = []
     gate = config.sync_gate
     if snapshot.errors > gate.max_errors:
@@ -153,6 +165,7 @@ def validate_phase(
     snapshot: DiagnosticSnapshot,
     config: QualityConfig,
 ) -> list[Issue]:
+    """Dispatch to the correct phase validator based on *phase* name."""
     if phase == "plan":
         return validate_plan_phase(snapshot)
     if phase == "run":
@@ -167,6 +180,7 @@ def detect_regression(
     current: DiagnosticSnapshot,
     config: QualityConfig,
 ) -> list[Issue]:
+    """Compare *current* snapshot to *baseline* and flag regressions."""
     issues: list[Issue] = []
     reg = config.regression
 
@@ -208,6 +222,8 @@ def detect_regression(
 
 @dataclass
 class MethodologyContext:
+    """Context for methodology-specific validation (DDD, TDD, hybrid)."""
+
     characterization_tests_exist: bool = False
     preserve_step_completed: bool = False
     behavior_snapshot_regressed: bool = False
@@ -228,6 +244,7 @@ def validate_methodology(
     ctx: MethodologyContext,
     config: QualityConfig,
 ) -> list[Issue]:
+    """Validate development methodology constraints and Oracle Problem mitigations."""
     if mode == "ddd":
         issues = _validate_ddd(ctx, config)
     elif mode == "tdd":
@@ -369,6 +386,7 @@ def _validate_oracle_mitigations(ctx: MethodologyContext, config: QualityConfig)
 
 
 def build_snapshot_from_report(report: QualityReport) -> DiagnosticSnapshot:
+    """Build a DiagnosticSnapshot from a completed QualityReport."""
     snap = DiagnosticSnapshot()
     for pr in report.principles.values():
         for issue in pr.issues:

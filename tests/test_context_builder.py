@@ -86,7 +86,7 @@ def test_repair_prompt_includes_spec_section():
     """Spec section appears when spec_id is provided and spec files exist."""
     with tempfile.TemporaryDirectory() as tmpdir:
         _make_source_file(tmpdir, "app.py", "x = 1\n")
-        spec_dir = os.path.join(tmpdir, ".moai", "specs", "SPEC-001")
+        spec_dir = os.path.join(tmpdir, ".trust5", "specs", "SPEC-001")
         os.makedirs(spec_dir)
         with open(os.path.join(spec_dir, "spec.md"), "w") as f:
             f.write("# Test Spec\nBuild a calculator.")

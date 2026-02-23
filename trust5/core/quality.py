@@ -55,18 +55,21 @@ from .quality_validators import (  # noqa: F401
 
 
 def meets_quality_gate(report: QualityReport, config: QualityConfig) -> bool:
+    """Return True if *report* meets quality thresholds in *config*."""
     if not report.passed or report.total_errors > config.max_errors:
         return False
     return not (report.coverage_pct >= 0 and report.coverage_pct < config.coverage_threshold)
 
 
 def is_improved(prev: dict[str, Any] | None, curr: QualityReport) -> bool:
+    """Return True if *curr* report improved over *prev* (higher score or fewer errors)."""
     if prev is None:
         return False
     return bool(curr.score > prev.get("score", 0.0) or curr.total_errors < prev.get("total_errors", 999))
 
 
 def is_stagnant(prev: dict[str, Any] | None, curr: QualityReport) -> bool:
+    """Return True if *curr* report is identical to *prev* (no progress between attempts)."""
     if prev is None:
         return False
     return bool(
