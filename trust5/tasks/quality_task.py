@@ -130,12 +130,18 @@ class QualityTask(Task):
         acceptance_criteria = plan_config.get("acceptance_criteria", [])
         if acceptance_criteria and config.spec_compliance_enabled:
             from ..core.compliance import check_compliance
+            from ..core.llm import LLM
 
+            try:
+                compliance_llm = LLM.for_tier("fast", thinking_level=None)
+            except Exception:
+                compliance_llm = None
             compliance_report = check_compliance(
                 acceptance_criteria,
                 project_root,
                 extensions=profile.extensions,
                 skip_dirs=profile.skip_dirs,
+                llm=compliance_llm,
             )
             emit(
                 M.QRUN,
@@ -226,7 +232,9 @@ class QualityTask(Task):
                 },
             )
 
-        if is_stagnant(prev_report, report):
+        quality_gate_ok = meets_quality_gate(report, config) and not has_phase_blockers
+        compliance_is_only_blocker = quality_gate_ok and not compliance_passed
+        if is_stagnant(prev_report, report) and not compliance_is_only_blocker:
             emit(
                 M.QFAL,
                 "Quality stagnant — no improvement between attempts. Accepting partial.",

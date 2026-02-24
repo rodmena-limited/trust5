@@ -27,7 +27,7 @@ MAX_HISTORY_MESSAGES = AGENT_MAX_HISTORY_MESSAGES
 _WRITE_TOOLS = frozenset({"Write", "Edit", "Bash"})
 
 # Map tool names to specific TUI message codes for visual distinction.
-_TOOL_EMIT_CODE: dict[str, str] = {
+_TOOL_EMIT_CODE: dict[str, M] = {
     "Bash": M.TBSH,
     "Read": M.TRED,
     "ReadFiles": M.TRED,

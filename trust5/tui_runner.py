@@ -23,6 +23,26 @@ from .infrastructure import _cancel_stale_workflows
 logger = logging.getLogger(__name__)
 
 
+# Grace period before force-killing the process.  Python's atexit handler
+# for concurrent.futures.ThreadPoolExecutor joins worker threads, which can
+# block indefinitely if a Stabilize queue-poll loop is still running.
+_FORCE_EXIT_TIMEOUT = 3.0
+
+
+def _schedule_force_exit() -> None:
+    """Start a daemon thread that force-exits after a grace period.
+
+    If the process exits cleanly before the timeout, the daemon thread is
+    killed automatically.  If atexit handlers hang (ThreadPoolExecutor join),
+    the watchdog calls os._exit(0) to prevent a stuck terminal.
+    """
+
+    def _watchdog() -> None:
+        threading.Event().wait(timeout=_FORCE_EXIT_TIMEOUT)
+        os._exit(0)
+
+    threading.Thread(target=_watchdog, daemon=True).start()
+
 def _suppress_print_fallback() -> None:
     """Disable emit() print fallback just before TUI takes over the terminal."""
     from .core.message import set_print_fallback
@@ -94,20 +114,7 @@ def _print_final_summary(result: Workflow, changed_files: set[str] | None = None
     sys.stdout.flush()
     sys.stderr.flush()
 
-    # Start a cancellable watchdog to force-kill if atexit handlers hang.
-    # QueueProcessor uses concurrent.futures.ThreadPoolExecutor internally;
-    # Python's _python_exit() atexit handler joins those threads and can block
-    # indefinitely if a worker is stuck on SQLite queue polling.
-    watchdog_event = threading.Event()
-
-    def _watchdog() -> None:
-        if not watchdog_event.wait(timeout=5.0):
-            os._exit(0)
-
-    threading.Thread(target=_watchdog, daemon=True).start()
-    # Caller should call watchdog_event.set() when no longer needed, but since
-    # this runs at the end of the process, the daemon thread will be killed
-    # naturally if the process exits cleanly before the timeout.
+    _schedule_force_exit()
 
 
 def _wait_with_tui(
@@ -246,24 +253,25 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
 
     # TUI exited (user pressed q/Ctrl+C) — restore stdout for final summary
     _restore_stdout_after_tui()
-
     # Signal background to stop and wait for graceful shutdown.
     # The stop_event causes wait_for_completion() to return immediately,
     # allowing _pipeline()'s finally blocks to clean up QueueProcessors.
     stop_event.set()
     t.join(timeout=5.0)
-
-    result = result_holder[0]
-    if result is not None:
+    pipeline_result = result_holder[0]
+    if pipeline_result is not None:
         tui_changed: set[str] = getattr(tui_app, "_changed_files", set())
-        _print_final_summary(result, changed_files=tui_changed)
+        _print_final_summary(pipeline_result, changed_files=tui_changed)
     else:
         # Pipeline didn't complete — mark RUNNING workflows as CANCELED
         # so 'trust5 resume' can find and restart them.
         _cancel_stale_workflows()
         print("\nPipeline interrupted. Run 'trust5 resume' to continue.")  # TUI runner output
-
-    return result
+    # Python's atexit handler joins those threads and can block indefinitely
+    # if a worker is stuck on SQLite queue polling.  Force-exit after a short
+    # grace period so the user never sees a hung terminal.
+    _schedule_force_exit()
+    return pipeline_result
 
 
 def _run_workflow_dispatch(

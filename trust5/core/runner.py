@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import os
 import signal
-import sys
 import threading
 import time
 from typing import Any
@@ -181,7 +181,7 @@ def run_workflow(
         emit(M.WINT, f"Interrupted. Workflow {workflow.id} state preserved in {db_path}.")
         processor.request_stop()
         processor.stop(wait=False)
-        sys.exit(130)
+        os._exit(130)
 
     original_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, handle_signal)

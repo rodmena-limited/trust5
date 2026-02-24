@@ -20,6 +20,7 @@ HeaderWidget {
 /* ─── Main Log ────────────────────────────────────────────────────── */
 Trust5Log {
     height: 1fr;
+    max-width: 120;
     background: #0c0a08;
     color: #e8ddd0;
     border: none;
@@ -29,7 +30,7 @@ Trust5Log {
     scrollbar-color: #3a322c;
     scrollbar-color-hover: #d4a054;
     scrollbar-color-active: #d4a054;
-    padding: 0 2;
+    padding: 0 1;
 }
 
 /* ─── Status Bars ─────────────────────────────────────────────────── */

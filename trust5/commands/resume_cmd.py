@@ -6,8 +6,8 @@ failed stage, preserving context and using stabilize's recovery mechanism.
 
 from __future__ import annotations
 
+import os
 import signal
-import sys
 from typing import Any
 
 import typer
@@ -166,7 +166,7 @@ def resume_logic(use_tui: bool) -> None:
         )
         processor.request_stop()
         processor.stop(wait=False)
-        sys.exit(130)
+        os._exit(130)
 
     original_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, handle_signal)

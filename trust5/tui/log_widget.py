@@ -74,6 +74,8 @@ class Trust5Log(RichLog):
     MAX_BLOCK_LINES = TUI_MAX_BLOCK_LINES
     MAX_THINKING_LINES = TUI_MAX_THINKING_LINES
 
+
+    _PANEL_MAX_WIDTH = 116
     _SCROLL_BOTTOM_THRESHOLD = 3
 
     def __init__(self, **kwargs: Any) -> None:
@@ -237,6 +239,7 @@ class Trust5Log(RichLog):
                 title=f" {theme['title']} ",
                 border_style=C_CHROME,
                 box=ROUNDED,
+                width=self._PANEL_MAX_WIDTH,
             )
         elif code == M.VTST:
             # Test output: subdued — reference info, not what the user needs to focus on
@@ -245,6 +248,7 @@ class Trust5Log(RichLog):
                 title=f" {theme['title']} ",
                 border_style=C_DIM,
                 box=ROUNDED,
+                width=self._PANEL_MAX_WIDTH,
             )
         elif code == M.RVRP:
             # Review report: LLM-generated content — render as Markdown
@@ -253,6 +257,7 @@ class Trust5Log(RichLog):
                 title=f" {theme['title']} ",
                 border_style=theme["color"],
                 box=ROUNDED,
+                width=self._PANEL_MAX_WIDTH,
             )
         elif code == M.QRPT:
             # Quality report: plain text, not Markdown — contains lint output
@@ -262,6 +267,7 @@ class Trust5Log(RichLog):
                 title=f" {theme['title']} ",
                 border_style=theme["color"],
                 box=ROUNDED,
+                width=self._PANEL_MAX_WIDTH,
             )
         elif code == M.TBSH:
             renderable = Panel(
@@ -269,6 +275,7 @@ class Trust5Log(RichLog):
                 title=" Shell ",
                 border_style=C_CHROME,
                 box=ROUNDED,
+                width=self._PANEL_MAX_WIDTH,
             )
         elif code in (M.WDWN, M.WDER):
             border = C_RED if code == M.WDER else C_PURPLE
@@ -277,6 +284,7 @@ class Trust5Log(RichLog):
                 title=f" {theme['title']} ",
                 border_style=border,
                 box=ROUNDED,
+                width=self._PANEL_MAX_WIDTH,
             )
         else:
             renderable = Panel(
@@ -284,6 +292,7 @@ class Trust5Log(RichLog):
                 title=f" {theme['title']} ",
                 border_style=C_CHROME,
                 box=ROUNDED,
+                width=self._PANEL_MAX_WIDTH,
             )
 
         self.write(Text(""))  # spacer before panel
