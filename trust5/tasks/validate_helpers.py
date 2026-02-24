@@ -83,6 +83,8 @@ def _filter_test_file_lint(raw_output: str, owned_files: list[str] | None = None
 
     Returns the filtered output (may be empty if all fixable errors were removed).
     """
+    if not raw_output:
+        return ""
     # Normalize owned_files paths for comparison (strip leading ./ etc.)
     owned_set: set[str] | None = None
     if owned_files:
