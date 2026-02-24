@@ -291,111 +291,92 @@ def _start_event_consumer(health: PipelineHealth) -> tuple[threading.Thread, que
     return thread, sub_q
 
 
-# ── LLM Auditor (Layer 2) ───────────────────────────────────────────
-
-_MAX_LLM_AUDITS = 3
+# ── LLM Narrator (Layer 2) ─────────────────────────────────────────
 
 
-def _build_audit_prompt(
+def _build_narrative_prompt(
     health: PipelineHealth,
     profile: dict[str, Any],
     rule_findings: list[dict[str, str]],
+    elapsed_seconds: float,
+    check_number: int,
+    previous_narrative: str,
 ) -> str:
+    """Build a rich prompt for the LLM narrator with full pipeline context."""
+    lang = profile.get('language', 'unknown')
+    elapsed_min = elapsed_seconds / 60
+
+    findings_text = "None" if not rule_findings else "\n".join(
+        f"  - [{f.get('severity', 'warning').upper()}] {f.get('category', '')}: "
+        f"{f.get('message', '')}"
+        for f in rule_findings
+    )
+
+    test_history = health.test_pass_history
+    test_summary = "No test runs yet"
+    if test_history:
+        passes = sum(1 for t in test_history if t)
+        fails = len(test_history) - passes
+        recent = test_history[-5:]
+        recent_str = " ".join("✓" if t else "✗" for t in recent)
+        test_summary = f"{passes} passed, {fails} failed (recent: {recent_str})"
     return (
-        "You are a pipeline health auditor for Trust5, a multi-language code generation system.\n"
-        f"Current language: {profile.get('language', 'unknown')}\n\n"
-        "Pipeline Health:\n"
-        f"- Stages completed: {health.stages_completed}\n"
-        f"- Stages failed: {health.stages_failed}\n"
-        f"- Repair attempts: {health.repair_attempts}\n"
-        f"- Jump count: {health.jump_count}\n"
-        f"- Tool calls by stage: {health.tool_calls_by_stage}\n\n"
-        "Rule Engine Findings:\n"
-        f"{json.dumps(rule_findings, indent=2)}\n\n"
-        "Analyze the pipeline health and provide:\n"
-        "1. Risk assessment (LOW/MEDIUM/HIGH/CRITICAL)\n"
-        "2. Specific concerns about the pipeline's behavior\n"
-        "3. Recommendations for downstream agents\n\n"
-        'Respond in JSON format:\n{"risk": "...", "concerns": [...], "recommendations": [...]}'
+        "You are the Trust5 Pipeline Watchdog — an intelligent observer that provides\n"
+        "clear, concise status narratives for the user watching a code generation pipeline.\n\n"
+        f"Language: {lang}\n"
+        f"Elapsed: {elapsed_min:.1f} minutes (check #{check_number})\n\n"
+        "PIPELINE STATE:\n"
+        f"  Stages completed: {', '.join(health.stages_completed) or 'none yet'}\n"
+        f"  Stages failed: {', '.join(health.stages_failed) or 'none'}\n"
+        f"  Repair attempts: {health.repair_attempts}\n"
+        f"  Jump count: {health.jump_count}\n"
+        f"  Test results: {test_summary}\n"
+        f"  Tool calls by stage: {health.tool_calls_by_stage}\n\n"
+        f"AUTOMATED CHECK FINDINGS:\n{findings_text}\n\n"
+        f"PREVIOUS NARRATIVE:\n{previous_narrative or '(first check)'}\n\n"
+        "INSTRUCTIONS:\n"
+        "Write a 2-4 sentence narrative summary of the pipeline's current state.\n"
+        "- Tell the user what's happening RIGHT NOW and what to expect next\n"
+        "- If there are problems, explain what they mean in plain language\n"
+        "- If things are going well, say so briefly\n"
+        "- If the pipeline is stuck or regressing, warn clearly\n"
+        "- Include specific file names or error types when relevant\n"
+        "- Do NOT use JSON. Write plain text only.\n"
+        "- Do NOT repeat the raw findings — interpret them for the user.\n"
+        "- Be direct and useful, not verbose.\n"
     )
 
 
-def _run_llm_audit(
+def _run_llm_narrative(
     health: PipelineHealth,
     profile: dict[str, Any],
     rule_findings: list[dict[str, str]],
-    trigger: str,
-    max_audits: int = _MAX_LLM_AUDITS,
-) -> dict[str, Any] | None:
-    """Perform a single LLM audit call.  Returns parsed audit dict or ``None`` on failure."""
-    if health.llm_audit_count >= max_audits:
-        return None
-
+    elapsed_seconds: float,
+    check_number: int,
+    previous_narrative: str,
+) -> str | None:
+    """Call the LLM for a narrative pipeline summary.  Returns text or ``None`` on failure."""
     try:
         from ..core.llm import LLM
-
-        llm = LLM.for_tier("watchdog")
-        prompt = _build_audit_prompt(health, profile, rule_findings)
+        prompt = _build_narrative_prompt(
+            health, profile, rule_findings, elapsed_seconds, check_number, previous_narrative,
+        )
         response = llm.chat(messages=[{"role": "user", "content": prompt}])
         health.llm_audit_count += 1
+        # Strip any markdown fences the LLM might add
+        cleaned = content.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [ln for ln in lines if not ln.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
 
-        content = response.get("message", {}).get("content", "")
-        # Try to extract JSON from the response
-        try:
-            # Handle responses that may have markdown code fences
-            cleaned = content.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                # Remove first and last ``` lines
-                lines = [ln for ln in lines if not ln.strip().startswith("```")]
-                cleaned = "\n".join(lines)
-            audit_result: dict[str, Any] = json.loads(cleaned)
-        except (json.JSONDecodeError, ValueError):
-            # Fallback: extract any JSON object from the text
-            audit_result = {
-                "risk": "UNKNOWN",
-                "concerns": [f"LLM response could not be parsed: {content[:200]}"],
-                "recommendations": [],
-            }
-
-        audit_result["trigger"] = trigger
-        return audit_result
-
+        return cleaned if cleaned else None
     except Exception as exc:
-        logger.debug("LLM audit failed (trigger=%s): %s", trigger, exc)
+        logger.debug("LLM narrative failed: %s", exc)
         return None
 
 
-def _should_trigger_audit(
-    health: PipelineHealth,
-    rule_findings: list[dict[str, str]],
-    previous_triggers: set[str],
-    max_audits: int = _MAX_LLM_AUDITS,
-) -> str | None:
-    """Determine if an LLM audit should be triggered.  Returns trigger name or ``None``."""
-    if health.llm_audit_count >= max_audits:
-        return None
-
-    # After implement stage completes
-    if "implement" in health.stages_completed and "post_implement" not in previous_triggers:
-        return "post_implement"
-
-    # After validation failure
-    if any(s in health.stages_failed for s in ("validate", "validation")) and "post_vfal" not in previous_triggers:
-        return "post_vfal"
-
-    # After quality stage completes
-    if "quality" in health.stages_completed and "post_quality" not in previous_triggers:
-        return "post_quality"
-
-    # Anomaly: any HIGH-severity rule finding
-    if any(f.get("severity") == "error" for f in rule_findings) and "anomaly_high" not in previous_triggers:
-        return "anomaly_high"
-
-    return None
-
-
-# ── WatchdogTask ─────────────────────────────────────────────────────
+# ── WatchdogTask ─────────────────────────────────────────────
 
 
 class WatchdogTask(Task):

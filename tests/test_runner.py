@@ -37,7 +37,7 @@ def test_check_stage_failures_detects_test_failure():
     ]
     workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
 
-    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+    has_test, has_quality, has_review, has_compliance, details = check_stage_failures(workflow)
 
     assert has_test is True
     assert has_quality is False
@@ -53,7 +53,7 @@ def test_check_stage_failures_detects_quality_failure():
     ]
     workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
 
-    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+    has_test, has_quality, has_review, has_compliance, details = check_stage_failures(workflow)
 
     assert has_test is False
     assert has_quality is True
@@ -73,7 +73,7 @@ def test_check_stage_failures_detects_terminal_test_failure():
     ]
     workflow = make_workflow(WorkflowStatus.TERMINAL, stages)
 
-    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+    has_test, has_quality, has_review, has_compliance, details = check_stage_failures(workflow)
 
     assert has_test is True
     assert len(details) >= 1
@@ -91,7 +91,7 @@ def test_check_stage_failures_detects_reimplementation_error():
     ]
     workflow = make_workflow(WorkflowStatus.TERMINAL, stages)
 
-    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+    has_test, has_quality, has_review, has_compliance, details = check_stage_failures(workflow)
 
     assert has_test is True
 
@@ -105,7 +105,7 @@ def test_check_stage_failures_ignores_succeeded():
     ]
     workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
 
-    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+    has_test, has_quality, has_review, has_compliance, details = check_stage_failures(workflow)
 
     assert has_test is False
     assert has_quality is False
@@ -119,7 +119,7 @@ def test_check_stage_failures_detects_tests_partial():
     ]
     workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
 
-    has_test, has_quality, has_compliance, details = check_stage_failures(workflow)
+    has_test, has_quality, has_review, has_compliance, details = check_stage_failures(workflow)
 
     assert has_test is True
 

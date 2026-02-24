@@ -115,37 +115,26 @@ class HeaderWidget(Static):
         key = self._match_stage_key(ref)
         if key is None:
             return
-
-        new_idx = self._stage_index(key)
         cur_idx = self._stage_index(self.current_stage)
-
-        if status == "success":
             self.completed_stages = self.completed_stages | {key}
         elif status == "failed":
-            pass  # Don't mark complete; just update current_stage below
+            # Un-checkmark this stage if it was previously marked complete
+            # (e.g. quality gate failed after a retry cycle).
+            if key in self.completed_stages:
+                self.completed_stages = self.completed_stages - {key}
         elif status == "running":
-            # A new stage started — mark all preceding stages as done.
-            preceding: set[str] = set()
-            for k, _ in self.STAGES:
-                if k == key:
-                    break
-                preceding.add(k)
-            if preceding - self.completed_stages:
-                self.completed_stages = self.completed_stages | preceding
+            # DO NOT auto-complete preceding stages.  Stages are only
+            # completed via explicit success events (VPAS, QPAS, RVPS).
+            # Auto-completion caused false checkmarks during repair/quality
+            # loops where preceding stages cycle between running and failed.
+            pass
 
-        # Only advance the active indicator forward, never backward.
-        # In parallel pipelines, later modules may start earlier stages
-        # (e.g. test-writer for module 2) while the header has already
-        # moved past them (e.g. validate for module 1).
-        #
-        # Exception: validate and repair cycle during the repair loop.
-        # Allow backward transition from repair to validate so the
-        # header reflects the active phase.
-        allow_cycle = self.current_stage == "repair" and key == "validate"
-        if new_idx >= cur_idx or allow_cycle:
+        # Allow the active indicator to move both forward and backward.
+        # During quality→repair→validate cycles, the header must track
+        # the actual active phase, not just advance forward.
+        allow_backward = key in ("validate", "repair", "review", "quality")
+        if new_idx >= cur_idx or allow_backward:
             self.current_stage = key
-
-        # Refresh is handled by _route_batch() in app.py — no per-call refresh needed.
 
     @staticmethod
     def _match_stage_key(ref: str) -> str | None:

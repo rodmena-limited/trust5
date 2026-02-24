@@ -28,6 +28,17 @@ _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bcurl\b.*\|\s*(?:bash|sh|zsh)\b"),  # curl | bash
     re.compile(r"\bwget\b.*\|\s*(?:bash|sh|zsh)\b"),  # wget | bash
     re.compile(r"\bsqlite3\s+.*\.trust5/"),  # Accessing trust5 internal DB crashes pipeline
+    # Block ANY write operation targeting .trust5/ directory.
+    # This is CRITICAL: an LLM redirect like `> .trust5/trust5.db` truncates the
+    # pipeline database to 0 bytes, causing unrecoverable corruption.
+    re.compile(r">+\s*\.trust5/"),  # Redirect to .trust5/ (> or >>)
+    re.compile(r">+\s*[^\s]*\.trust5/"),  # Redirect with path prefix
+    re.compile(r"\btee\b.*\.trust5/"),  # tee to .trust5/
+    re.compile(r"\bmv\b.*\.trust5/"),  # mv into .trust5/
+    re.compile(r"\bcp\b.*\.trust5/"),  # cp into .trust5/
+    re.compile(r"\brm\b.*\.trust5/"),  # rm inside .trust5/
+    re.compile(r"\btruncate\b.*\.trust5/"),  # truncate .trust5/ files
+    re.compile(r"\bcat\b.*>.*\.trust5/"),  # cat > .trust5/
 ]
 
 # Safe compound command patterns that override blocked checks.
@@ -35,13 +46,40 @@ _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
 # level but are safe in context (e.g., find -exec rm only deletes matched files,
 # find -delete only removes found entries).
 _SAFE_COMMAND_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\bfind\b\s+.+--exec\s+rm\b"),  # find ... -exec rm ... is scoped
-    re.compile(r"\bfind\b\s+.+--delete\b"),  # find ... -delete is scoped
+    re.compile(r"\bfind\b\s+.+-exec\s+rm\b"),  # find ... -exec rm ... is scoped
+    re.compile(r"\bfind\b\s+.+-delete\b"),  # find ... -delete is scoped
+    re.compile(r"\bfind\b\s+.+-name\b.*-delete\b"),  # find . -name '*.pyc' -delete
+    re.compile(r"\bfind\b\s+.+-type\s+\w\s+-exec\s+rm"),  # find . -type d -exec rm -rf {} +
 ]
 
 # Regex for validating Python package names (allows extras and version specifiers)
 _VALID_PACKAGE_RE = re.compile(r"^[a-zA-Z0-9._-]+[a-zA-Z0-9._\-\[\]>=<,! ]*$")
 
+
+
+# ── .trust5/ directory protection ─────────────────────────────────────
+# Path segments that indicate the file is inside the Trust5 internal
+# state directory.  Used by both Write/Edit tools and Bash tool to
+# prevent LLM agents from accidentally (or intentionally) corrupting
+# the pipeline database.
+_TRUST5_DIR_MARKERS = (
+    f"{os.sep}.trust5{os.sep}",
+    f"{os.sep}.trust5",  # path ending with .trust5 (the directory itself)
+)
+
+
+def _is_trust5_internal_path(path: str) -> bool:
+    """Return True if *path* resolves inside a ``.trust5/`` directory.
+
+    Checks both the raw path and its normalized form to catch symlink
+    bypasses (e.g. ``/tmp`` -> ``/private/tmp`` on macOS).
+    """
+    # Normalize to absolute for reliable matching
+    normalized = os.path.normpath(os.path.abspath(path))
+    for marker in _TRUST5_DIR_MARKERS:
+        if marker in normalized or normalized.endswith(marker):
+            return True
+    return False
 
 def _is_project_scoped_rm(command: str, workdir: str) -> bool:
     """Allow ``rm -rf`` when ALL targets resolve within the project directory.
@@ -154,7 +192,19 @@ class Tools:
 
     def _check_write_allowed(self, file_path: str) -> str | None:
         real_path = os.path.realpath(file_path)
-
+        # Layer 0: .trust5/ directory protection — ABSOLUTE block.
+        # The .trust5/ directory contains the pipeline database, logs,
+        # and event socket.  An LLM agent writing here (even accidentally)
+        # can truncate the database to 0 bytes, causing unrecoverable
+        # pipeline corruption.  This check uses BOTH path forms to prevent
+        # symlink-based bypasses (e.g. /tmp -> /private/tmp on macOS).
+        if _is_trust5_internal_path(file_path) or _is_trust5_internal_path(real_path):
+            emit(M.SWRN, f"BLOCKED write to Trust5 internal path: {file_path}")
+            return (
+                f"BLOCKED: Write to {file_path} denied — this path is inside the .trust5/ "
+                "directory which contains the pipeline database and internal state. "
+                "Writing here would corrupt the running pipeline."
+            )
         # Layer 1: Explicit denylist — hard block, checked first
         if self._denied_files and real_path in self._denied_files:
             return (

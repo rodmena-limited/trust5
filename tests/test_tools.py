@@ -11,6 +11,7 @@ from trust5.core.tools import (
     _VALID_PACKAGE_RE,
     Tools,
     _is_project_scoped_rm,
+    _is_trust5_internal_path,
     _matches_test_pattern,
 )
 
@@ -92,7 +93,7 @@ def test_run_bash_blocks_wget_pipe_sh(tools: Tools):
 @patch("trust5.core.tools.os.path.isdir", return_value=False)
 @patch("trust5.core.tools.subprocess.run")
 def test_run_bash_allows_safe_commands(mock_run: MagicMock, mock_isdir: MagicMock, tools: Tools):
-
+    """Normal commands such as ls, echo, pytest must NOT be blocked."""
     """Normal commands such as ls, echo, pytest must NOT be blocked."""
     mock_run.return_value = MagicMock(stdout="ok\n", stderr="", returncode=0)
 
@@ -771,3 +772,99 @@ def test_matches_jest_and_nested_test_dir():
     assert _matches_test_pattern("utils.test.ts")
     assert _matches_test_pattern("api.test.js")
     assert _matches_test_pattern("test/integration/foo.go")
+
+
+# ---------------------------------------------------------------------------
+# .trust5/ directory protection — database corruption prevention
+# ---------------------------------------------------------------------------
+
+
+def test_is_trust5_internal_path_detects_trust5_dir():
+    """Paths inside .trust5/ must be detected as internal."""
+    assert _is_trust5_internal_path("/tmp/project/.trust5/trust5.db")
+    assert _is_trust5_internal_path("/tmp/project/.trust5/events.sock")
+    assert _is_trust5_internal_path(".trust5/trust5.db")
+    assert _is_trust5_internal_path(".trust5/watchdog_report.json")
+
+
+def test_is_trust5_internal_path_allows_normal_paths():
+    """Normal project paths must NOT be flagged as .trust5/ internal."""
+    assert not _is_trust5_internal_path("/tmp/project/src/main.py")
+    assert not _is_trust5_internal_path("src/core.py")
+    assert not _is_trust5_internal_path("/tmp/project/README.md")
+
+
+def test_write_file_blocks_trust5_dir(tmp_path):
+    """Write to any file inside .trust5/ must be blocked."""
+    trust5_dir = tmp_path / ".trust5"
+    trust5_dir.mkdir()
+    db_file = trust5_dir / "trust5.db"
+    db_file.write_text("original", encoding="utf-8")
+
+    t = Tools()
+    result = t.write_file(str(db_file), "corrupted")
+    assert "blocked" in result.lower()
+    # Original content must be preserved
+    assert db_file.read_text(encoding="utf-8") == "original"
+
+
+def test_edit_file_blocks_trust5_dir(tmp_path):
+    """Edit to any file inside .trust5/ must be blocked."""
+    trust5_dir = tmp_path / ".trust5"
+    trust5_dir.mkdir()
+    db_file = trust5_dir / "config.json"
+    db_file.write_text('{"key": "value"}', encoding="utf-8")
+
+    t = Tools()
+    result = t.edit_file(str(db_file), '"value"', '"hacked"')
+    assert "blocked" in result.lower()
+    assert db_file.read_text(encoding="utf-8") == '{"key": "value"}'
+
+
+def test_run_bash_blocks_redirect_to_trust5(tools: Tools):
+    """Shell redirects to .trust5/ files must be blocked."""
+    result = tools.run_bash("echo hack > .trust5/trust5.db")
+    assert "blocked" in result.lower()
+
+
+def test_run_bash_blocks_append_to_trust5(tools: Tools):
+    """Append redirects to .trust5/ must be blocked."""
+    result = tools.run_bash("echo hack >> .trust5/trust5.db")
+    assert "blocked" in result.lower()
+
+
+def test_run_bash_blocks_tee_to_trust5(tools: Tools):
+    """tee writing to .trust5/ must be blocked."""
+    result = tools.run_bash("echo data | tee .trust5/trust5.db")
+    assert "blocked" in result.lower()
+
+
+def test_run_bash_blocks_rm_trust5(tools: Tools):
+    """rm inside .trust5/ must be blocked."""
+    result = tools.run_bash("rm .trust5/trust5.db")
+    assert "blocked" in result.lower()
+
+
+def test_run_bash_blocks_mv_to_trust5(tools: Tools):
+    """mv into .trust5/ must be blocked."""
+    result = tools.run_bash("mv malicious.db .trust5/trust5.db")
+    assert "blocked" in result.lower()
+
+
+def test_run_bash_blocks_cp_to_trust5(tools: Tools):
+    """cp into .trust5/ must be blocked."""
+    result = tools.run_bash("cp /dev/null .trust5/trust5.db")
+    assert "blocked" in result.lower()
+
+
+def test_run_bash_blocks_cat_redirect_trust5(tools: Tools):
+    """cat > .trust5/ redirect must be blocked."""
+    result = tools.run_bash("cat /dev/null > .trust5/trust5.db")
+    assert "blocked" in result.lower()
+
+
+def test_run_bash_blocks_truncate_trust5(tools: Tools):
+    """truncate command on .trust5/ files must be blocked."""
+    result = tools.run_bash("truncate -s 0 .trust5/trust5.db")
+    assert "blocked" in result.lower()
+

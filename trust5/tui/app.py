@@ -326,9 +326,12 @@ class Trust5App(App[None]):
 
         elif code == M.QFAL:
             self._header.update_stage("quality", "failed")
-
-        elif code == M.QJMP:
-            self._sb1.stage_name = "quality -> repair"
+            # Quality gate jumped back to repair — un-checkmark quality and review
+            # so the header accurately reflects we're cycling back.
+            self._header.update_stage("quality", "failed")
+            self._header.update_stage("review", "failed")
+            self._header.update_stage("repair", "running")
+            self._sb1.stage_name = "quality → repair"
 
         # Per-stage success events.
         elif code == M.VPAS:

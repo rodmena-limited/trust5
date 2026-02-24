@@ -1,7 +1,10 @@
 """Infrastructure setup for Trust5 pipeline.
-
 Provides Stabilize workflow engine bootstrapping: task registry, DB paths,
 event sourcing, viewer initialization, and stale-workflow cleanup.
+    The .trust5/ directory is protected from LLM agent writes by the
+    Bash blocklist and Write/Edit tool guards in ``core/tools.py``.
+    Stabilize manages SQLite connections with its own journal mode
+    and threading strategy.
 """
 
 from __future__ import annotations
@@ -53,7 +56,6 @@ def _resolve_db_path() -> str:
     db_dir = os.path.join(os.path.abspath(os.getcwd()), ".trust5")
     os.makedirs(db_dir, exist_ok=True)
     return os.path.join(db_dir, "trust5.db")
-
 
 def _build_task_registry() -> TaskRegistry:
     registry = TaskRegistry()
