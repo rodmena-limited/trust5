@@ -75,22 +75,22 @@ def _print_final_summary(result: Workflow, changed_files: set[str] | None = None
         color, icon = "\033[33m", status_name
     reset = "\033[0m"
 
-    print()
-    print(f"{color}{'=' * 60}{reset}")
-    print(f"{color}  Trust5 Pipeline: {icon}{reset}")
-    print(f"{color}{'=' * 60}{reset}")
+    print()  # TUI runner output
+    print(f"{color}{'=' * 60}{reset}")  # TUI runner output
+    print(f"{color}  Trust5 Pipeline: {icon}{reset}")  # TUI runner output
+    print(f"{color}{'=' * 60}{reset}")  # TUI runner output
     for line in stage_lines:
-        print(line)
+        print(line)  # TUI runner output
 
     if changed_files:
         cwd = os.path.abspath(os.getcwd())
-        print()
-        print(f"  Files changed ({len(changed_files)}):")
+        print()  # TUI runner output
+        print(f"  Files changed ({len(changed_files)}):")  # TUI runner output
         for fpath in sorted(changed_files):
             rel = os.path.relpath(fpath, cwd) if fpath.startswith("/") else fpath
-            print(f"    {rel}")
+            print(f"    {rel}")  # TUI runner output
 
-    print()
+    print()  # TUI runner output
     sys.stdout.flush()
     sys.stderr.flush()
 
@@ -130,7 +130,7 @@ def _wait_with_tui(
     try:
         _suppress_print_fallback()
         tui_app.run()
-    except Exception as e:
+    except Exception as e:  # Intentional broad catch: TUI crash fallback to headless
         # Capture changed files before entering fallback (Fix 7: preserve on crash)
         changed: set[str] = getattr(tui_app, "_changed_files", set())
 
@@ -229,7 +229,7 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
     def _background() -> None:
         try:
             result_holder[0] = run_fn(stop_event)
-        except Exception as e:
+        except Exception as e:  # Intentional broad catch: background pipeline runner
             if not stop_event.is_set():
                 emit(M.SERR, f"Pipeline failed: {e}")
 
@@ -239,7 +239,7 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
     try:
         _suppress_print_fallback()
         tui_app.run()
-    except Exception:
+    except Exception:  # Intentional broad catch: TUI top-level runner
         logger.debug("TUI app exited with error", exc_info=True)
     finally:
         bus.unsubscribe(eq)
@@ -261,7 +261,7 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
         # Pipeline didn't complete — mark RUNNING workflows as CANCELED
         # so 'trust5 resume' can find and restart them.
         _cancel_stale_workflows()
-        print("\nPipeline interrupted. Run 'trust5 resume' to continue.")
+        print("\nPipeline interrupted. Run 'trust5 resume' to continue.")  # TUI runner output
 
     return result
 

@@ -6,6 +6,8 @@ from urllib.parse import parse_qs
 
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
+    """HTTP request handler that captures OAuth authorization codes from redirects."""
+
     def do_GET(self) -> None:
         query = self.path.split("?", 1)[-1] if "?" in self.path else ""
         params = parse_qs(query)
@@ -29,6 +31,8 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
 
 
 class OAuthCallbackServer(HTTPServer):
+    """Local HTTP server that receives OAuth callback with authorization code."""
+
     auth_code: str | None = None
     auth_error: str | None = None
 

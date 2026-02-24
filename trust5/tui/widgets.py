@@ -116,6 +116,7 @@ class HeaderWidget(Static):
         if key is None:
             return
         cur_idx = self._stage_index(self.current_stage)
+        if status == "success":
             self.completed_stages = self.completed_stages | {key}
         elif status == "failed":
             # Un-checkmark this stage if it was previously marked complete
@@ -128,10 +129,10 @@ class HeaderWidget(Static):
             # Auto-completion caused false checkmarks during repair/quality
             # loops where preceding stages cycle between running and failed.
             pass
-
         # Allow the active indicator to move both forward and backward.
         # During quality→repair→validate cycles, the header must track
         # the actual active phase, not just advance forward.
+        new_idx = self._stage_index(key)
         allow_backward = key in ("validate", "repair", "review", "quality")
         if new_idx >= cur_idx or allow_backward:
             self.current_stage = key

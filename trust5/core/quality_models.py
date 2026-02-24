@@ -10,7 +10,7 @@ import subprocess
 
 from pydantic import BaseModel, Field
 
-from .constants import SUBPROCESS_TIMEOUT
+from .constants import QUALITY_PASS_THRESHOLD, SUBPROCESS_TIMEOUT
 
 # ── Principle names and weights ──────────────────────────────────────
 
@@ -29,7 +29,7 @@ PRINCIPLE_WEIGHTS: dict[str, float] = {
     PRINCIPLE_COMPLETENESS: 0.0,  # pass/fail gate, not a scored pillar
 }
 ALL_PRINCIPLES = list(PRINCIPLE_WEIGHTS.keys())
-PASS_SCORE_THRESHOLD = 0.70
+PASS_SCORE_THRESHOLD = QUALITY_PASS_THRESHOLD
 
 MAX_FILE_LINES = 500  # fallback; prefer QualityConfig.max_file_lines
 
@@ -99,7 +99,7 @@ def _run_command(cmd: tuple[str, ...] | None, cwd: str, timeout: int = SUBPROCES
         return 127, f"command not found: {cmd[0]}"
     except subprocess.TimeoutExpired:
         return 124, f"command timed out after {timeout}s"
-    except Exception as e:
+    except OSError as e:  # subprocess: OS-level spawn errors
         return 1, str(e)
 
 

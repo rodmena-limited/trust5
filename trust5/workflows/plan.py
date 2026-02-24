@@ -21,7 +21,7 @@ def create_plan_workflow(user_request: str) -> Workflow:
 
     try:
         dev_mode = config.quality.development_mode
-    except Exception:
+    except (AttributeError, KeyError):  # config attribute access errors
         logger.debug("Failed to load development mode, defaulting to 'hybrid'", exc_info=True)
         dev_mode = "hybrid"
     return Workflow.create(

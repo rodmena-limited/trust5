@@ -244,7 +244,7 @@ def _load_development_mode(project_root: str) -> str:
         mgr = ConfigManager(project_root)
         cfg = mgr.load_config()
         return cfg.quality.development_mode
-    except Exception:
+    except (OSError, ValueError, KeyError):  # config loading errors
         logger.debug("Failed to load development mode, defaulting to 'hybrid'", exc_info=True)
         return "hybrid"
 

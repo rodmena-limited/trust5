@@ -235,8 +235,6 @@ def test_finalize_status_both_test_and_quality_failures(mock_emit):
     assert "quality" in failure_msg
 
 
-
-
 @patch("trust5.core.runner.emit")
 def test_finalize_status_compliance_failure_overrides_to_terminal(mock_emit):
     """SPEC compliance failure overrides SUCCEEDED to TERMINAL (resumable)."""
@@ -266,6 +264,7 @@ def test_finalize_status_compliance_failure_overrides_to_terminal(mock_emit):
     wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
     assert len(wfal_calls) >= 2  # FAILED message + SPEC COMPLIANCE FAILURE message
     assert "SPEC compliance" in wfal_calls[0][0][1]
+
 
 # ── wait_for_completion tests ──
 

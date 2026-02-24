@@ -21,6 +21,8 @@ _MODULES_RE = re.compile(r"<!--\s*MODULES\s*\n(.*?)\n\s*-->", re.DOTALL)
 
 @dataclass
 class ModuleSpec:
+    """Module definition for parallel pipeline execution with file ownership."""
+
     id: str
     name: str
     files: list[str] = field(default_factory=list)

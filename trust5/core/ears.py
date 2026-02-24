@@ -7,6 +7,8 @@ from enum import StrEnum
 
 
 class RequirementType(StrEnum):
+    """EARS requirement classification types."""
+
     UBIQUITOUS = "ubiquitous"
     EVENT_DRIVEN = "event_driven"
     UNWANTED = "unwanted_behavior"
@@ -16,6 +18,8 @@ class RequirementType(StrEnum):
 
 @dataclass(frozen=True)
 class EARSTemplate:
+    """Frozen template for an EARS requirement pattern."""
+
     type: RequirementType
     name: str
     template: str
@@ -58,6 +62,8 @@ TEMPLATES: dict[RequirementType, EARSTemplate] = {
 
 @dataclass
 class Requirement:
+    """Single EARS requirement with acceptance criteria."""
+
     type: RequirementType
     id: str
     description: str
@@ -75,6 +81,8 @@ class Requirement:
 
 
 class RequirementSet:
+    """Indexed collection of validated EARS requirements."""
+
     def __init__(self) -> None:
         self._requirements: list[Requirement] = []
         self._index: dict[str, int] = {}

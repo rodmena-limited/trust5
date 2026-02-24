@@ -1,13 +1,11 @@
-"""Trust5 Watchdog — hybrid intelligent pipeline audit system.
-
+"""Trust5 Watchdog — hybrid intelligent pipeline monitoring system.
 Three-layer architecture:
   **Layer 1 (Rule Engine)**: EventBus subscription + deterministic rules (always-on, continuous).
-  **Layer 2 (LLM Auditor)**: Checkpoint-triggered LLM analysis (max 3 calls per pipeline).
-  **Layer 3 (Feedback)**: TUI events + atomic report writes + enhanced ``load_watchdog_findings()``.
-
+  **Layer 2 (LLM Narrator)**: Every-cycle LLM narrative summary of pipeline state.
+  **Layer 3 (Feedback)**: TUI events + atomic report writes + ``load_watchdog_findings()``.
 Runs periodic health checks and writes a structured report to
 ``.trust5/watchdog_report.json`` so downstream LLM agents can
-incorporate audit findings into their prompts.
+incorporate the watchdog narrative and findings into their prompts.
 """
 
 from __future__ import annotations
@@ -303,13 +301,16 @@ def _build_narrative_prompt(
     previous_narrative: str,
 ) -> str:
     """Build a rich prompt for the LLM narrator with full pipeline context."""
-    lang = profile.get('language', 'unknown')
+    lang = profile.get("language", "unknown")
     elapsed_min = elapsed_seconds / 60
 
-    findings_text = "None" if not rule_findings else "\n".join(
-        f"  - [{f.get('severity', 'warning').upper()}] {f.get('category', '')}: "
-        f"{f.get('message', '')}"
-        for f in rule_findings
+    findings_text = (
+        "None"
+        if not rule_findings
+        else "\n".join(
+            f"  - [{f.get('severity', 'warning').upper()}] {f.get('category', '')}: {f.get('message', '')}"
+            for f in rule_findings
+        )
     )
 
     test_history = health.test_pass_history
@@ -358,20 +359,32 @@ def _run_llm_narrative(
     """Call the LLM for a narrative pipeline summary.  Returns text or ``None`` on failure."""
     try:
         from ..core.llm import LLM
+
+        llm = LLM.for_tier("watchdog", thinking_level=None)
         prompt = _build_narrative_prompt(
-            health, profile, rule_findings, elapsed_seconds, check_number, previous_narrative,
+            health,
+            profile,
+            rule_findings,
+            elapsed_seconds,
+            check_number,
+            previous_narrative,
         )
-        response = llm.chat(messages=[{"role": "user", "content": prompt}])
+        response = llm.chat(
+            messages=[{"role": "user", "content": prompt}],
+            timeout=30,
+        )
         health.llm_audit_count += 1
+        content = response.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(block.get("text", "") for block in content if isinstance(block, dict))
+        cleaned = str(content).strip()
         # Strip any markdown fences the LLM might add
-        cleaned = content.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
             lines = [ln for ln in lines if not ln.strip().startswith("```")]
             cleaned = "\n".join(lines).strip()
-
         return cleaned if cleaned else None
-    except Exception as exc:
+    except (OSError, ValueError, RuntimeError, KeyError) as exc:  # LLM narrative: non-critical failures
         logger.debug("LLM narrative failed: %s", exc)
         return None
 
@@ -384,13 +397,14 @@ class WatchdogTask(Task):
 
     Layers:
       1. **Rule Engine** — Deterministic checks on filesystem and ``PipelineHealth``.
-      2. **LLM Auditor** — Checkpoint-triggered analysis (≤3 calls per pipeline).
+      2. **LLM Narrator** — Every-cycle LLM narrative summary of pipeline state.
       3. **Feedback** — TUI events, atomic report writes, ``load_watchdog_findings()``.
     """
 
     CHECK_INTERVAL = 12
     MAX_RUNTIME = 7200
     OK_EMIT_INTERVAL = 25
+
     def execute(self, stage: StageExecution) -> TaskResult:
         project_root = stage.context.get("project_root", os.getcwd())
         language_profile = stage.context.get("language_profile", {})
@@ -402,7 +416,7 @@ class WatchdogTask(Task):
         max_runtime = stage.context.get("workflow_timeout", gcfg.get("max_runtime", self.MAX_RUNTIME))
         check_interval = gcfg.get("check_interval", self.CHECK_INTERVAL)
         ok_emit_interval = gcfg.get("ok_emit_interval", self.OK_EMIT_INTERVAL)
-        max_llm_audits = gcfg.get("max_llm_audits", _MAX_LLM_AUDITS)
+        consumer_thread, sub_q = _start_event_consumer(health)
         consumer_thread, sub_q = _start_event_consumer(health)
 
         emit(M.WDST, "Watchdog started \u2014 monitoring pipeline health")
@@ -413,8 +427,7 @@ class WatchdogTask(Task):
         total_errors = 0
         all_findings: list[dict[str, str]] = []
         last_emitted_findings: list[dict[str, str]] = []
-        audit_summaries: list[dict[str, Any]] = []
-        audit_triggers_fired: set[str] = set()
+        previous_narrative: str = ""
 
         try:
             while True:
@@ -445,27 +458,28 @@ class WatchdogTask(Task):
                 total_warnings += warnings
                 total_errors += errors
 
-                # ── Layer 2: LLM audit triggers ─────────────────────
-                max_audits = max(max_llm_audits, int(elapsed / 3600 / 2))  # ~1 audit per 2 hours
-                trigger = _should_trigger_audit(health, findings, audit_triggers_fired, max_audits)
-                if trigger is not None:
-                    audit_result = _run_llm_audit(health, language_profile, findings, trigger, max_audits)
-                    if audit_result is not None:
-                        audit_summaries.append(audit_result)
-                        audit_triggers_fired.add(trigger)
-
+                # ── Layer 2: LLM Narrative ──────────────────────────
+                narrative = _run_llm_narrative(
+                    health,
+                    language_profile,
+                    findings,
+                    elapsed,
+                    check_count,
+                    previous_narrative,
+                )
+                if narrative:
+                    previous_narrative = narrative
                 # ── Layer 3: Feedback ───────────────────────────────
-                if findings:
+                if findings or narrative:
                     all_findings = findings
-                    self._write_report(project_root, all_findings, check_count, health, audit_summaries)
-                    if findings != last_emitted_findings:
-                        self._emit_findings_block(findings, check_count)
+                    self._write_report(project_root, all_findings, check_count, health, previous_narrative)
+                    if findings != last_emitted_findings or narrative:
+                        self._emit_findings_block(findings, check_count, previous_narrative)
                         last_emitted_findings = [dict(f) for f in findings]
-
-                if warnings == 0 and errors == 0 and check_count % ok_emit_interval == 0:
+                if warnings == 0 and errors == 0 and not findings and check_count % ok_emit_interval == 0:
                     emit(M.WDOK, f"Check #{check_count} \u2014 all clear ({elapsed:.0f}s elapsed)")
                     all_findings = []
-                    self._write_report(project_root, all_findings, check_count, health, audit_summaries)
+                    self._write_report(project_root, all_findings, check_count, health, previous_narrative)
 
                 # Progressive interval: tighter at start, relaxed for long runs
                 if elapsed < 3600:
@@ -476,7 +490,7 @@ class WatchdogTask(Task):
                     interval = 60  # beyond 6 hours
                 time.sleep(interval)
 
-        except Exception as e:
+        except (OSError, RuntimeError) as e:  # watchdog main loop: I/O and runtime errors
             emit(M.WDER, f"Watchdog crashed: {e}")
             logger.exception("Watchdog task crashed")
 
@@ -489,11 +503,11 @@ class WatchdogTask(Task):
                 bus = get_bus()
                 if bus is not None:
                     bus.unsubscribe(sub_q)
-            except Exception:
+            except (OSError, RuntimeError):  # unsubscribe: bus cleanup errors
                 logger.debug("Failed to unsubscribe watchdog from event bus", exc_info=True)
 
         # Final report write
-        self._write_report(project_root, all_findings, check_count, health, audit_summaries)
+        self._write_report(project_root, all_findings, check_count, health, previous_narrative)
 
         emit(M.WDST, f"Watchdog stopped after {check_count} checks ({total_warnings} warnings, {total_errors} errors)")
         return TaskResult.success(
@@ -512,7 +526,7 @@ class WatchdogTask(Task):
         findings: list[dict[str, str]],
         check_count: int,
         health: PipelineHealth | None = None,
-        audit_summaries: list[dict[str, Any]] | None = None,
+        narrative: str = "",
     ) -> None:
         """Write structured findings to ``.trust5/watchdog_report.json`` atomically."""
         trust5_dir = os.path.join(project_root, ".trust5")
@@ -524,8 +538,8 @@ class WatchdogTask(Task):
         }
         if health is not None:
             report["pipeline_health"] = health.to_dict()
-        if audit_summaries:
-            report["audit_summaries"] = audit_summaries
+        if narrative:
+            report["narrative"] = narrative
 
         # Atomic write: write to temp file then rename
         try:
@@ -534,7 +548,7 @@ class WatchdogTask(Task):
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(report, f, indent=2)
                 os.replace(tmp_path, report_path)
-            except Exception:
+            except OSError:  # report write: filesystem errors
                 logger.debug("Failed to write watchdog report, cleaning up temp file", exc_info=True)
                 try:
                     os.unlink(tmp_path)
@@ -548,19 +562,34 @@ class WatchdogTask(Task):
     def _emit_findings_block(
         findings: list[dict[str, str]],
         check_count: int,
+        narrative: str = "",
     ) -> None:
-        """Emit findings as a block event so the TUI renders them in a panel."""
-        severity_icon = {"error": "\u274c", "warning": "\u26a0\ufe0f"}
+        """Emit findings as a block event so the TUI renders them in a panel.
+
+        The LLM narrative is shown prominently at the top, with rule findings
+        as supporting detail below.
+        """
         lines: list[str] = []
-        for f in findings:
-            icon = severity_icon.get(f.get("severity", "warning"), "\u26a0\ufe0f")
-            lines.append(f"{icon}  [{f.get('severity', 'warning').upper()}] {f.get('category', '')}")
-            lines.append(f"   {f.get('file', '')} \u2014 {f.get('message', '')}")
+        # Lead with the LLM narrative if available
+        if narrative:
+            lines.append(narrative)
             lines.append("")
+        # Append rule-based findings as detail
+        if findings:
+            severity_icon = {"error": "\u274c", "warning": "\u26a0\ufe0f"}
+            if narrative:
+                lines.append("\u2500" * 40)
+            for f in findings:
+                icon = severity_icon.get(f.get("severity", "warning"), "\u26a0\ufe0f")
+                lines.append(f"{icon}  [{f.get('severity', 'warning').upper()}] {f.get('category', '')}")
+                lines.append(f"   {f.get('file', '')} \u2014 {f.get('message', '')}")
+                lines.append("")
         content = "\n".join(lines).rstrip()
+        if not content:
+            return
         has_errors = any(f.get("severity") == "error" for f in findings)
         code = M.WDER if has_errors else M.WDWN
-        emit_block(code, f"Watchdog Audit (check #{check_count})", content)
+        emit_block(code, f"Watchdog (check #{check_count})", content)
 
     # ── Sentinel helpers ──────────────────────────────────────────────
 
@@ -582,14 +611,14 @@ class WatchdogTask(Task):
     def _load_watchdog_config() -> dict[str, int]:
         try:
             from ..core.config import load_global_config
+
             cfg = load_global_config().watchdog
             return {
                 "max_runtime": cfg.max_runtime,
                 "check_interval": cfg.check_interval,
                 "ok_emit_interval": cfg.ok_emit_interval,
-                "max_llm_audits": cfg.max_llm_audits,
             }
-        except Exception:
+        except (OSError, ValueError, KeyError):  # config loading errors
             logger.debug("Failed to load watchdog config from GlobalConfig", exc_info=True)
             return {}
 
@@ -1108,9 +1137,11 @@ class WatchdogTask(Task):
 
 def load_watchdog_findings(project_root: str) -> str:
     """Load the latest watchdog report and format it for LLM context injection.
-
-    Returns an empty string if no report exists or no findings are present.
+    Returns an empty string if no report exists or no actionable content is present.
     Called by ``agent_task.py`` and ``repair_task.py`` when building system prompts.
+    The output includes:
+    - The LLM narrative summary (human-readable pipeline status)
+    - Rule-based findings (specific issues detected by the watchdog)
     """
     report_path = os.path.join(project_root, ".trust5", "watchdog_report.json")
     if not os.path.exists(report_path):
@@ -1120,32 +1151,27 @@ def load_watchdog_findings(project_root: str) -> str:
             report = json.load(f)
     except (OSError, json.JSONDecodeError):
         return ""
-
     findings = report.get("findings", [])
-    if not findings:
+    narrative = report.get("narrative", "")
+
+    if not findings and not narrative:
         return ""
 
-    lines = ["## Watchdog Audit Findings (auto-injected)", ""]
-    lines.append("The Trust5 Watchdog has detected the following issues in the project.")
-    lines.append("You MUST address these if they relate to files you are modifying.\n")
+    lines = ["## Watchdog Pipeline Status (auto-injected)", ""]
 
-    for finding in findings:
-        severity = finding.get("severity", "warning").upper()
-        category = finding.get("category", "unknown")
-        file_name = finding.get("file", "")
-        message = finding.get("message", "")
-        lines.append(f"- **[{severity}]** ({category}) `{file_name}`: {message}")
-
-    # Include LLM audit summaries if present
-    audit_summaries = report.get("audit_summaries", [])
-    if audit_summaries:
-        lines.append("\n## LLM Audit Summaries\n")
-        for summary in audit_summaries:
-            lines.append(f"**Risk: {summary.get('risk', 'UNKNOWN')}** (trigger: {summary.get('trigger', '')})")
-            for concern in summary.get("concerns", []):
-                lines.append(f"- \u26a0\ufe0f {concern}")
-            for rec in summary.get("recommendations", []):
-                lines.append(f"- \U0001f4a1 {rec}")
-            lines.append("")
-
+    # Lead with the LLM narrative — gives the downstream agent situational awareness
+    if narrative:
+        lines.append("### Current Pipeline Assessment")
+        lines.append(narrative)
+        lines.append("")
+    # Append specific findings the agent should address
+    if findings:
+        lines.append("### Detected Issues")
+        lines.append("You MUST address these if they relate to files you are modifying.\n")
+        for finding in findings:
+            severity = finding.get("severity", "warning").upper()
+            category = finding.get("category", "unknown")
+            file_name = finding.get("file", "")
+            message = finding.get("message", "")
+            lines.append(f"- **[{severity}]** ({category}) `{file_name}`: {message}")
     return "\n".join(lines)

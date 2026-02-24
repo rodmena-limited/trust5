@@ -75,7 +75,7 @@ def _detect_by_extensions(project_root: str) -> str:
 
     if not counts:
         return "unknown"
-    return max(counts, key=counts.get)  # type: ignore[arg-type]
+    return max(counts, key=lambda k: counts[k])
 
 
 def detect_framework(project_root: str) -> str | None:

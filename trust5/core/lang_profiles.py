@@ -10,6 +10,8 @@ _COMMON_SKIP = (".trust5", ".git")
 
 @dataclass(frozen=True)
 class LanguageProfile:
+    """Language-specific tooling profile defining test, lint, and build commands."""
+
     language: str
     extensions: tuple[str, ...]
     test_command: tuple[str, ...]

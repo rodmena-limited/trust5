@@ -52,7 +52,7 @@ def _docker_available() -> bool:
             timeout=10,
         )
         return result.returncode == 0
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):  # docker: subprocess errors
         logger.debug("Docker MCP gateway status check failed", exc_info=True)
         return False
 
@@ -62,7 +62,7 @@ def _stop_clients(clients: list[MCPClient | MCPSSEClient]) -> None:
     for client in clients:
         try:
             client.stop()
-        except Exception:
+        except (OSError, RuntimeError):  # client stop: process/connection errors
             logger.debug("Failed to stop MCP client", exc_info=True)
 
 
@@ -138,7 +138,7 @@ class MCPManager:
             try:
                 client = self._create_client(name, server_def)
                 clients.append(client)
-            except Exception as e:
+            except (OSError, RuntimeError) as e:  # client creation: spawn/connect errors
                 emit(M.SWRN, f"MCP server '{name}' failed to start: {e}")
 
         return clients
@@ -193,7 +193,7 @@ class MCPManager:
             with open(self.config_path, encoding="utf-8") as f:
                 data: dict[str, Any] = json.load(f)
                 return data
-        except Exception as e:
+        except (OSError, json.JSONDecodeError, ValueError) as e:  # config: file/JSON errors
             logger.warning("Failed to load MCP config %s: %s", self.config_path, e)
             return _DEFAULT_CONFIG
 

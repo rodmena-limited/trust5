@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import logging
 
+from .constants import MAX_ERROR_SUMMARY, MAX_RAW_ERROR_INPUT
 from .llm import LLM, LLMError
 from .message import M, emit
 
 logger = logging.getLogger(__name__)
-
-_MAX_RAW_INPUT = 100_000
-_MAX_SUMMARY = 20_000
+_MAX_RAW_INPUT = MAX_RAW_ERROR_INPUT
+_MAX_SUMMARY = MAX_ERROR_SUMMARY
 
 _SUMMARIZER_PROMPT = """You are an error classifier. Given raw test/lint/build output,
 produce a structured summary. Be concise and precise.
@@ -72,7 +72,7 @@ def summarize_errors(
             return summary[:_MAX_SUMMARY]
     except LLMError as e:
         logger.warning("Error summarizer LLM failed (non-fatal): %s", e)
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, KeyError) as e:  # summarizer: non-LLM failures
         logger.warning("Error summarizer unexpected failure (non-fatal): %s", e)
 
     return raw_output[:_MAX_SUMMARY]

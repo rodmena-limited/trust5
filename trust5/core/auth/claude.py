@@ -50,6 +50,8 @@ def _generate_pkce() -> tuple[str, str]:
 
 
 class ClaudeProvider(AuthProvider):
+    """Anthropic Claude OAuth provider with PKCE authorization flow."""
+
     def __init__(self) -> None:
         super().__init__(CLAUDE_CONFIG)
 
@@ -69,10 +71,11 @@ class ClaudeProvider(AuthProvider):
         }
         auth_url = f"{_AUTH_URL}?{urlencode(params)}"
 
-        print("\nOpening browser for Claude Max authorization...\n")
-        print(f"If the browser does not open, visit:\n{auth_url}\n")
+        print("\nOpening browser for Claude Max authorization...\n")  # User-facing CLI output
+        print(f"If the browser does not open, visit:\n{auth_url}\n")  # User-facing CLI output
         webbrowser.open(auth_url, new=2)
 
+        # User-facing CLI output
         print("After authorizing, you will see a code in the browser.\nPaste the full response (code#state) below:\n")
         raw_response = input("Authorization response: ").strip()
 

@@ -54,7 +54,7 @@ class RalphLoop:
 
                 time.sleep(1)
 
-        except Exception as e:
+        except (OSError, RuntimeError) as e:  # loop: LSP/subprocess/IO errors
             emit(M.LERR, f"Loop Error: {e}")
         finally:
             self.lsp.stop()
@@ -105,6 +105,7 @@ class RalphLoop:
                     cwd=self.project_root,
                     capture_output=True,
                     text=True,
+                    timeout=120,
                 )
                 if result.returncode != 0:
                     issues.append(
@@ -114,7 +115,7 @@ class RalphLoop:
                             "file": "tests",
                         }
                     )
-            except Exception as e:
+            except (subprocess.SubprocessError, OSError) as e:  # test runner errors
                 issues.append({"type": "test_error", "message": str(e)})
 
         return issues

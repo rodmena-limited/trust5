@@ -9,6 +9,8 @@ from typing import Any
 
 
 class JsonRpcClient:
+    """JSON-RPC 2.0 client communicating over stdin/stdout with a subprocess."""
+
     def __init__(self, command: list[str], cwd: str = "."):
         self.command = command
         self.cwd = cwd
@@ -28,13 +30,28 @@ class JsonRpcClient:
             cwd=self.cwd,
             text=False,
         )
-        self.running = True
-        threading.Thread(target=self._read_loop, daemon=True).start()
+        try:
+            self.running = True
+            threading.Thread(target=self._read_loop, daemon=True).start()
+        except (OSError, RuntimeError):  # subprocess spawn errors
+            self.running = False
+            if self.process:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                self.process = None
+            raise
 
     def stop(self) -> None:
         self.running = False
         if self.process:
             self.process.terminate()
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
             self.process = None
 
     def send_request(self, method: str, params: Any = None) -> Any:
@@ -104,11 +121,13 @@ class JsonRpcClient:
                     self.responses[msg["id"]] = msg.get("result") or msg.get("error")
                 else:
                     self.notifications.put(msg)
-            except Exception as e:
+            except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:  # JSON-RPC parse errors
                 logging.getLogger(__name__).debug("JSON Parse Error: %s", e)
 
 
 class LSPClient:
+    """Language Server Protocol client for diagnostics and document symbols."""
+
     def __init__(self, command: list[str], root_uri: str):
         self.rpc = JsonRpcClient(command)
         self.root_uri = root_uri

@@ -57,6 +57,7 @@ def _resolve_db_path() -> str:
     os.makedirs(db_dir, exist_ok=True)
     return os.path.join(db_dir, "trust5.db")
 
+
 def _build_task_registry() -> TaskRegistry:
     registry = TaskRegistry()
     registry.register("agent", AgentTask)
@@ -136,7 +137,7 @@ def setup_stabilize(
         recovered = recover_on_startup(store, queue, application="trust5")
         if recovered:
             emit(M.WRCV, f"Recovered {len(recovered)} pending workflow(s)")
-    except Exception as e:
+    except (OSError, RuntimeError) as e:  # recovery: DB/queue errors
         emit(M.SWRN, f"Recovery check failed (non-fatal): {e}")
 
     processor = QueueProcessor(queue, store=store, task_registry=_build_task_registry())
@@ -176,5 +177,5 @@ def _cancel_stale_workflows() -> None:
         for wf in store.retrieve_by_application("trust5", criteria):
             wf.status = WorkflowStatus.CANCELED
             store.update_status(wf)
-    except Exception:
+    except (OSError, RuntimeError):  # cleanup: DB access errors
         logger.debug("Best-effort stale workflow cleanup failed", exc_info=True)

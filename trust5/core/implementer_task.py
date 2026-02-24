@@ -149,7 +149,7 @@ class ImplementerTask(Task):
                         retry_after=retry_after,
                     )
                 return TaskResult.terminal(error=f"Implementation LLM failed: {e}")
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError, KeyError) as e:  # implementation: non-LLM errors
                 logger.exception("Implementation failed")
                 return TaskResult.terminal(error=f"Implementation failed: {e}")
 
@@ -208,7 +208,7 @@ class ImplementerTask(Task):
         try:
             with open(prompt_path, encoding="utf-8") as f:
                 content = f.read()
-        except Exception:
+        except OSError:  # prompt file read error
             logger.debug("Failed to read implementer prompt file", exc_info=True)
             return "You are a code implementer. Write complete, working code."
 

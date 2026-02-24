@@ -47,6 +47,8 @@ REVIEWER_TOOLS = ["Read", "ReadFiles", "Glob", "Grep"]
 
 @dataclass
 class ReviewFinding:
+    """Single code review finding with severity, category, and location."""
+
     severity: str  # "error" | "warning" | "info"
     category: str  # one of REVIEW_CATEGORIES
     file: str
@@ -56,6 +58,8 @@ class ReviewFinding:
 
 @dataclass
 class ReviewReport:
+    """Aggregated code review results with scoring summary."""
+
     findings: list[ReviewFinding] = field(default_factory=list)
     summary_score: float = 1.0
     total_errors: int = 0
@@ -162,7 +166,7 @@ class ReviewTask(Task):
                     prompt,
                     max_turns=config.review_max_turns,
                 )
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:  # review agent: LLM/tool/config errors
             emit(M.RVFL, f"Review agent error: {e}")
             return TaskResult.failed_continue(
                 error=f"Review agent failed: {e}",
@@ -305,7 +309,7 @@ class ReviewTask(Task):
             mgr = ConfigManager(project_root)
             cfg = mgr.load_config()
             return cfg.quality
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:  # config loading errors
             logger.warning("Failed to load config for review: %s — using defaults", e)
             return QualityConfig()
 

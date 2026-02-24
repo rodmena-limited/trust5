@@ -309,7 +309,7 @@ def login(provider: str) -> None:
         token_data = do_login(provider)
         expires_min = int(token_data.expires_in_seconds / 60)
         emit(M.WSUC, f"Logged in to {provider}. Token expires in {expires_min} min.")
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:  # login: network/auth/config errors
         emit(M.SERR, f"Login failed: {e}")
         raise typer.Exit(1)
 
@@ -412,21 +412,22 @@ def _render_watch_event(evt: dict[str, str]) -> None:
     label = evt.get("l", "")
     tag = f"{{{code}}}"
 
+    # CLI user output
     if kind == "msg":
-        print(f"{tag}{ts} {msg}", flush=True)
+        print(f"{tag}{ts} {msg}", flush=True)  # CLI user output
     elif kind == "bs":
-        print(f"{tag}{ts} \u250c\u2500\u2500 {label}", flush=True)
+        print(f"{tag}{ts} \u250c\u2500\u2500 {label}", flush=True)  # CLI user output
     elif kind == "bl":
-        print(f"{tag}{ts}  \u2502 {msg}", flush=True)
+        print(f"{tag}{ts}  \u2502 {msg}", flush=True)  # CLI user output
     elif kind == "be":
-        print(f"{tag}{ts} \u2514\u2500\u2500", flush=True)
+        print(f"{tag}{ts} \u2514\u2500\u2500", flush=True)  # CLI user output
     elif kind == "ss":
-        print(f"{tag}{ts} {label}", end="", flush=True)
+        print(f"{tag}{ts} {label}", end="", flush=True)  # CLI user output
     elif kind == "st":
         sys.stdout.write(msg)
         sys.stdout.flush()
     elif kind == "se":
-        print("", flush=True)
+        print("", flush=True)  # CLI user output
 
 
 if __name__ == "__main__":

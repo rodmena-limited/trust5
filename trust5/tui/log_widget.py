@@ -7,6 +7,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 from textual.widgets import RichLog
 
+from ..core.constants import TUI_MAX_BLOCK_LINES, TUI_MAX_THINKING_LINES
 from ..core.event_bus import (
     K_BLOCK_END,
     K_BLOCK_LINE,
@@ -68,8 +69,8 @@ class Trust5Log(RichLog):
     even deferred scrolls scheduled before the user scrolled are suppressed.
     """
 
-    MAX_BLOCK_LINES = 500
-    MAX_THINKING_LINES = 50
+    MAX_BLOCK_LINES = TUI_MAX_BLOCK_LINES
+    MAX_THINKING_LINES = TUI_MAX_THINKING_LINES
 
     _SCROLL_BOTTOM_THRESHOLD = 3
 

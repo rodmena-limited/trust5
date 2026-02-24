@@ -3,10 +3,9 @@ import logging
 import os
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from .constants import MAX_FILE_CONTENT, MAX_TOTAL_CONTEXT
 
-MAX_FILE_CONTENT = 6000
-MAX_TOTAL_CONTEXT = 30000
+logger = logging.getLogger(__name__)
 
 
 def _read_file_safe(path: str, max_len: int = MAX_FILE_CONTENT) -> str:
@@ -16,7 +15,7 @@ def _read_file_safe(path: str, max_len: int = MAX_FILE_CONTENT) -> str:
         if len(content) > max_len:
             return content[:max_len] + f"\n... [{len(content) - max_len} chars truncated]"
         return content
-    except Exception as e:
+    except OSError as e:  # file read error
         return f"[Error reading {path}: {e}]"
 
 
@@ -246,7 +245,7 @@ def build_project_context(project_root: str) -> str:
                 filename = os.path.basename(file_path)
                 content = f.read()
                 parts.append(f"--- PROJECT: {filename} ---\n{content}")
-        except Exception:
+        except OSError:  # project doc read error
             logger.debug("Failed to read project doc %s", file_path, exc_info=True)
     return "\n\n".join(parts)
 

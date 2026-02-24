@@ -17,6 +17,8 @@ from .event_bus import (
 
 
 class M(StrEnum):
+    """Event message codes for pipeline stages, tools, and TUI communication."""
+
     # ── Agent / LLM Communication ──
     ATRN = "ATRN"  # agent turn start (Turn X/Y)
     ATHK = "ATHK"  # agent thinking / reasoning
@@ -196,9 +198,9 @@ def emit(code: M, message: str, *, truncate: int = 0, label: str = "") -> None:
         # Also print if fallback is on and no one is listening on the bus
         # (pre-TUI state: bus exists but TUI hasn't subscribed yet)
         if _print_fallback and not bus._listeners:
-            print(f"{{{code.value}}}{_ts()} {message}", flush=True)
+            print(f"{{{code.value}}}{_ts()} {message}", flush=True)  # Headless mode terminal output
     elif _print_fallback:
-        print(f"{{{code.value}}}{_ts()} {message}", flush=True)
+        print(f"{{{code.value}}}{_ts()} {message}", flush=True)  # Headless mode terminal output
 
 
 def emit_block(code: M, label: str, content: str, *, max_lines: int = 0) -> None:
@@ -217,16 +219,16 @@ def emit_block(code: M, label: str, content: str, *, max_lines: int = 0) -> None
         bus.publish(Event(kind=K_BLOCK_END, code=cv, ts=ts))
         if _print_fallback and not bus._listeners:
             tag = f"{{{cv}}}"
-            print(f"{tag}{_ts()} \u250c\u2500\u2500 {label}", flush=True)
+            print(f"{tag}{_ts()} \u250c\u2500\u2500 {label}", flush=True)  # Headless mode terminal output
             for line in lines:
-                print(f"{tag}{_ts()}  \u2502 {line}", flush=True)
-            print(f"{tag}{_ts()} \u2514\u2500\u2500", flush=True)
+                print(f"{tag}{_ts()}  \u2502 {line}", flush=True)  # Headless mode terminal output
+            print(f"{tag}{_ts()} \u2514\u2500\u2500", flush=True)  # Headless mode terminal output
     elif _print_fallback:
         tag = f"{{{code.value}}}"
-        print(f"{tag}{_ts()} \u250c\u2500\u2500 {label}", flush=True)
+        print(f"{tag}{_ts()} \u250c\u2500\u2500 {label}", flush=True)  # Headless mode terminal output
         for line in lines:
-            print(f"{tag}{_ts()}  \u2502 {line}", flush=True)
-        print(f"{tag}{_ts()} \u2514\u2500\u2500", flush=True)
+            print(f"{tag}{_ts()}  \u2502 {line}", flush=True)  # Headless mode terminal output
+        print(f"{tag}{_ts()} \u2514\u2500\u2500", flush=True)  # Headless mode terminal output
 
 
 _stream_local = threading.local()
@@ -240,7 +242,7 @@ def emit_stream_start(code: M, label: str) -> None:
     if bus is not None:
         bus.publish(Event(kind=K_STREAM_START, code=code.value, ts=_ts(), label=label))
     elif _print_fallback:
-        print(f"{{{code.value}}}{_ts()} {label}", end="", flush=True)
+        print(f"{{{code.value}}}{_ts()} {label}", end="", flush=True)  # Headless mode terminal output
 
 
 def emit_stream_token(token: str) -> None:
@@ -263,7 +265,7 @@ def emit_stream_end() -> None:
     if bus is not None:
         bus.publish(Event(kind=K_STREAM_END, code=code, ts=_ts()))
     elif _print_fallback:
-        print("", flush=True)
+        print("", flush=True)  # Headless mode terminal output
 
 
 def tool_code(name: str) -> M:

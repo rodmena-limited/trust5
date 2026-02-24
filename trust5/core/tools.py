@@ -56,7 +56,6 @@ _SAFE_COMMAND_PATTERNS: list[re.Pattern[str]] = [
 _VALID_PACKAGE_RE = re.compile(r"^[a-zA-Z0-9._-]+[a-zA-Z0-9._\-\[\]>=<,! ]*$")
 
 
-
 # ── .trust5/ directory protection ─────────────────────────────────────
 # Path segments that indicate the file is inside the Trust5 internal
 # state directory.  Used by both Write/Edit tools and Bash tool to
@@ -80,6 +79,7 @@ def _is_trust5_internal_path(path: str) -> bool:
         if marker in normalized or normalized.endswith(marker):
             return True
     return False
+
 
 def _is_project_scoped_rm(command: str, workdir: str) -> bool:
     """Allow ``rm -rf`` when ALL targets resolve within the project directory.
@@ -242,7 +242,7 @@ class Tools:
             detected = detect_language(path)
             initializer._write_default_config(detected)
             return "Project initialized successfully."
-        except Exception as e:
+        except OSError as e:  # init: filesystem errors
             return f"Error initializing project: {str(e)}"
 
     @staticmethod
@@ -268,7 +268,7 @@ class Tools:
                     header = f"[Lines {start + 1}-{min(end, total)} of {total}]\n"
                     return header + "".join(selected)
                 return f.read()
-        except Exception as e:
+        except OSError as e:  # read: filesystem errors
             return f"Error reading file {file_path}: {str(e)}"
 
     def write_file(self, file_path: str, content: str) -> str:
@@ -282,7 +282,7 @@ class Tools:
                 try:
                     with open(real_path, encoding="utf-8") as f:
                         old_content = f.read()
-                except Exception:
+                except OSError:  # read existing: filesystem errors
                     logger.debug("Failed to read existing file content at %s", real_path, exc_info=True)
 
             emit(M.TWRT, f"Writing {len(content)} chars to {real_path}")
@@ -312,7 +312,7 @@ class Tools:
             action = "modified" if old_content is not None else "created"
             emit(M.FCHG, f"path={real_path} action={action}")
             return f"Successfully wrote to {file_path}"
-        except Exception as e:
+        except OSError as e:  # write: filesystem errors
             return f"Error writing file {file_path}: {str(e)}"
 
     @staticmethod
@@ -322,7 +322,7 @@ class Tools:
             try:
                 with open(fp, encoding="utf-8") as f:
                     results[fp] = f.read()
-            except Exception as e:
+            except OSError as e:  # read_files: filesystem errors
                 results[fp] = f"Error: {e}"
         return json.dumps(results, ensure_ascii=False)
 
@@ -336,7 +336,7 @@ class Tools:
                 content = f.read()
         except FileNotFoundError:
             return f"Error: file not found: {real_path}"
-        except Exception as e:
+        except OSError as e:  # edit_file read: filesystem errors
             return f"Error reading {real_path}: {e}"
 
         count = content.count(old_string)
@@ -351,7 +351,7 @@ class Tools:
                 f.write(new_content)
                 f.flush()
                 os.fsync(f.fileno())
-        except Exception as e:
+        except OSError as e:  # edit_file write: filesystem errors
             return f"Error writing {real_path}: {e}"
 
         diff = difflib.unified_diff(
@@ -413,7 +413,7 @@ class Tools:
         try:
             files = glob.glob(os.path.join(workdir, pattern), recursive=True)
             return [os.path.relpath(f, workdir) for f in files]
-        except Exception as e:
+        except (OSError, ValueError) as e:  # glob: filesystem/pattern errors
             return [f"Error listing files: {str(e)}"]
 
     @staticmethod
@@ -471,8 +471,11 @@ class Tools:
         return defs
 
     @classmethod
-    def ask_user(cls, question: str, options: list[str] = []) -> str:
+    def ask_user(cls, question: str, options: list[str] | None = None) -> str:
         import sys
+
+        if options is None:
+            options = []
 
         default = options[0] if options else "yes"
 
@@ -488,7 +491,7 @@ class Tools:
 
         if options:
             for i, opt in enumerate(options):
-                print(f"{i + 1}. {opt}", flush=True)
+                logger.info("Option %d: %s", i + 1, opt)
             try:
                 sys.stdout.flush()
                 choice = input("Enter choice number (default 1): ").strip()

@@ -365,7 +365,7 @@ class RepairTask(Task):
                 emit(M.RFAL, f"Repair LLM failed permanently: {e}")
                 return TaskResult.terminal(error=f"Repair LLM failed permanently: {e}")
 
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError, KeyError) as e:  # repair: non-LLM execution errors
                 emit(M.RFAL, f"RepairTask failed: {e}")
                 logger.exception("RepairTask failed")
                 return TaskResult.terminal(error=f"Repair failed: {e}")
@@ -439,7 +439,7 @@ class RepairTask(Task):
                         env=env,
                     )
             return result.returncode == 0
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:  # quick test: subprocess errors
             logger.debug("Pre/post-flight test check failed: %s", e)
             return False
 
@@ -453,7 +453,7 @@ class RepairTask(Task):
         try:
             with open(prompt_path, encoding="utf-8") as f:
                 content = f.read()
-        except Exception:
+        except OSError:  # prompt file read error
             logger.debug("Failed to read repairer prompt file", exc_info=True)
             return self._default_repairer_prompt(profile_data)
 

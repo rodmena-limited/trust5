@@ -214,7 +214,7 @@ def run_workflow(
         try:
             orchestrator.cancel(result, user="trust5-timeout", reason=f"Timed out after {timeout}s")
             processor.process_all(timeout=30)
-        except Exception as e:
+        except (OSError, RuntimeError) as e:  # cancel: orchestrator/DB errors
             emit(M.SERR, f"Force-cancel failed: {e}. Marking TERMINAL directly.")
             result.status = WorkflowStatus.TERMINAL
             store.update_status(result)

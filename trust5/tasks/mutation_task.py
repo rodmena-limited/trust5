@@ -20,13 +20,13 @@ from typing import Any
 
 from stabilize import StageExecution, Task, TaskResult
 
-from ..core.constants import SUBPROCESS_TIMEOUT
+from ..core.constants import DEFAULT_MAX_MUTANTS, SUBPROCESS_TIMEOUT
 from ..core.lang import LanguageProfile
 from ..core.message import M, emit
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_MUTANTS = 10
+# DEFAULT_MAX_MUTANTS imported from constants
 
 # Mutation operators — each is (pattern, replacement).
 # These are intentionally conservative: only operators that almost always
@@ -183,7 +183,7 @@ class MutationTask(Task):
                     survived_details.append(mutant.description)
             except subprocess.TimeoutExpired:
                 killed += 1  # Timeout counts as "caught" (behaviour changed)
-            except Exception as e:
+            except OSError as e:  # mutation: file I/O or subprocess spawn errors
                 logger.warning("Mutation test error for %s: %s", mutant.description, e)
                 continue  # Don't count errors either way
             finally:

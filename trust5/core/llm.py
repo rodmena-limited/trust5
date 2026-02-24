@@ -23,6 +23,12 @@ from .constants import (
     STREAM_READ_TIMEOUT_THINKING,
 )
 from .llm_backends import LLMBackendsMixin
+from .llm_constants import (
+    _ANTHROPIC_THINKING_BUDGET,  # noqa: F401 — re-export
+    _GEMINI_25_THINKING_BUDGET,  # noqa: F401 — re-export
+)
+from .llm_constants import RETRY_DELAY_CONNECT as _LLC_RETRY_DELAY_CONNECT
+from .llm_constants import RETRY_DELAY_SERVER as _LLC_RETRY_DELAY_SERVER
 from .llm_errors import LLMError as LLMError  # noqa: F401 — re-export for backward compat
 from .llm_streams import LLMStreamsMixin
 from .message import M, emit
@@ -39,8 +45,8 @@ TOKEN_REFRESH_MARGIN = LLM_TOKEN_REFRESH_MARGIN
 RETRY_BUDGET_CONNECT = LLM_RETRY_BUDGET_CONNECT
 RETRY_BUDGET_SERVER = LLM_RETRY_BUDGET_SERVER
 RETRY_BUDGET_RATE = LLM_RETRY_BUDGET_RATE
-RETRY_DELAY_CONNECT = 5  # quick retries — network may recover any moment (unchanged)
-RETRY_DELAY_SERVER = 10  # lower initial base — Full Jitter handles growth
+RETRY_DELAY_CONNECT = _LLC_RETRY_DELAY_CONNECT
+RETRY_DELAY_SERVER = _LLC_RETRY_DELAY_SERVER
 MAX_BACKOFF_DELAY = LLM_MAX_BACKOFF_DELAY
 
 # Backoff strategies per error class (using resilient-circuit)
@@ -64,38 +70,24 @@ _BACKOFF_SERVER = ExponentialDelay(
 # 2-minute cooldown before half-open probe.
 
 _model_circuits: dict[str, CircuitProtectorPolicy] = {}
+_circuits_lock = threading.Lock()
 
 
 def _get_model_circuit(model: str) -> CircuitProtectorPolicy:
     """Get or create a circuit breaker for a specific model endpoint."""
-    if model not in _model_circuits:
-        _model_circuits[model] = CircuitProtectorPolicy(
-            resource_key=f"trust5-llm-{model}",
-            cooldown=timedelta(seconds=120),
-            failure_limit=Fraction(3, 5),
-            success_limit=Fraction(2, 2),
-        )
-    return _model_circuits[model]
+    with _circuits_lock:
+        if model not in _model_circuits:
+            _model_circuits[model] = CircuitProtectorPolicy(
+                resource_key=f"trust5-llm-{model}",
+                cooldown=timedelta(seconds=120),
+                failure_limit=Fraction(3, 5),
+                success_limit=Fraction(2, 2),
+            )
+        return _model_circuits[model]
 
 
-MODEL_CONTEXT_WINDOW: dict[str, int] = {
-    "claude-opus-4-20250514": 200_000,
-    "claude-sonnet-4-20250514": 200_000,
-    "gemini-3-pro-preview": 1_048_576,
-    "gemini-3-flash-preview": 1_048_576,
-    "gemini-2.5-pro": 1_048_576,
-    "gemini-2.5-flash": 1_048_576,
-}
+# MODEL_CONTEXT_WINDOW and MODEL_TIERS imported from llm_constants
 
-# Legacy Ollama defaults — superseded by GlobalConfig.models.ollama in ~/.trust5/config.yaml.
-# Kept for backward compatibility if config load fails unexpectedly.
-MODEL_TIERS = {
-    "best": "qwen3-coder-next:cloud",
-    "good": "kimi-k2.5:cloud",
-    "fast": "nemotron-3-nano:30b-cloud",
-    "watchdog": "nemotron-3-nano:30b-cloud",
-    "default": "qwen3-coder-next:cloud",
-}
 
 THINKING_TIERS = {"best", "good"}
 DEFAULT_FALLBACK_CHAIN = [
@@ -103,7 +95,6 @@ DEFAULT_FALLBACK_CHAIN = [
     "kimi-k2.5:cloud",
     "nemotron-3-nano:30b-cloud",
 ]
-
 
 
 # Per-stage thinking levels: None=off, "low", "high"
@@ -116,6 +107,7 @@ STAGE_THINKING_LEVEL: dict[str, str] = {
     "repairer": "low",
     "repair": "low",
 }
+
 
 def _resolve_thinking_level(
     tier: str,
@@ -487,7 +479,7 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
                     return
                 emit(M.ARTY, f"Token expires in {remaining:.0f}s, refreshing proactively")
                 self._try_refresh_token_locked()
-            except Exception:
+            except (OSError, ValueError, RuntimeError):  # token check: auth/store errors
                 logger.debug("Proactive token refresh check failed", exc_info=True)
 
     def _try_refresh_token(self) -> bool:
@@ -538,7 +530,7 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
                 # Permanent errors (invalid_grant, bad client credentials) — stop immediately
                 logger.warning("Permanent refresh error for %s: %s", self._provider_name, e)
                 return False
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:  # token refresh: unknown permanent errors
                 # Unknown errors — treat as permanent to avoid infinite loops
                 logger.warning("Token refresh failed for %s: %s", self._provider_name, e, exc_info=True)
                 return False

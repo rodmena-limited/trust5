@@ -68,7 +68,7 @@ class StdoutViewer:
 
             try:
                 self._render(event)
-            except Exception:
+            except (OSError, ValueError, KeyError):  # render: I/O and data errors
                 # Viewer crash must never propagate to pipeline
                 logger.debug("StdoutViewer render error", exc_info=True)
 
@@ -78,6 +78,7 @@ class StdoutViewer:
         tag = f"{{{event.code}}}"
         ts = event.ts
 
+        # Intentional: StdoutViewer renders to terminal
         if event.kind == K_MSG:
             print(f"{tag}{ts} {event.msg}", flush=True)
 

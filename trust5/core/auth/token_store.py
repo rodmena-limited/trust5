@@ -18,6 +18,8 @@ _TOKEN_FILE = "tokens.enc"
 
 
 class TokenStore:
+    """Encrypted credential store using Fernet symmetric encryption."""
+
     def __init__(self, base_dir: str | None = None):
         if base_dir:
             self._dir = Path(base_dir)
@@ -82,7 +84,7 @@ class TokenStore:
                 token_data = provider.refresh(token_data)
                 self.save(provider_name, token_data)
                 logger.info("Token refreshed for provider %s", provider_name)
-            except Exception:
+            except (OSError, ValueError, RuntimeError):  # refresh: network/auth errors
                 logger.warning(
                     "Token refresh failed for %s, using existing token",
                     provider_name,

@@ -9,20 +9,9 @@ from typing import Any
 import requests
 
 from .constants import RETRY_DELAY_SERVER, STREAM_TOTAL_TIMEOUT
+from .llm_constants import MODEL_CONTEXT_WINDOW, RETRY_DELAY_CONNECT
 from .llm_errors import LLMError
 from .message import M, emit, emit_stream_end, emit_stream_start, emit_stream_token
-
-# Duplicated from llm.py to avoid circular imports
-MODEL_CONTEXT_WINDOW: dict[str, int] = {
-    "claude-opus-4-20250514": 200_000,
-    "claude-sonnet-4-20250514": 200_000,
-    "gemini-3-pro-preview": 1_048_576,
-    "gemini-3-flash-preview": 1_048_576,
-    "gemini-2.5-pro": 1_048_576,
-    "gemini-2.5-flash": 1_048_576,
-}
-
-RETRY_DELAY_CONNECT = 5
 
 
 class LLMStreamsMixin:

@@ -54,8 +54,11 @@ def _generate_pkce() -> tuple[str, str]:
 
 
 def _load_client_json(path: str) -> tuple[str, str]:
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"Invalid JSON in {path}: {exc}")
     for key in ("installed", "web"):
         if key in data:
             return data[key]["client_id"], data[key]["client_secret"]
@@ -63,6 +66,8 @@ def _load_client_json(path: str) -> tuple[str, str]:
 
 
 class GoogleProvider(AuthProvider):
+    """Google Gemini OAuth provider with PKCE and local callback server."""
+
     def __init__(self) -> None:
         super().__init__(GOOGLE_CONFIG)
 
@@ -81,9 +86,9 @@ class GoogleProvider(AuthProvider):
         if home_path.exists():
             return _load_client_json(str(home_path))
 
-        print("\nGoogle Gemini OAuth Login")
-        print("=" * 40)
-        print(
+        print("\nGoogle Gemini OAuth Login")  # User-facing CLI output
+        print("=" * 40)  # User-facing CLI output
+        print(  # User-facing CLI output
             "\nYou need a Google Cloud OAuth 2.0 Desktop Client.\n"
             "Create one at: https://console.cloud.google.com/apis/credentials\n"
             "Enable the Generative Language API first:\n"
@@ -119,8 +124,8 @@ class GoogleProvider(AuthProvider):
         }
         auth_url = f"{_AUTH_URL}?{urlencode(params)}"
 
-        print("\nOpening browser for Google authorization...\n")
-        print(f"If the browser does not open, visit:\n{auth_url}\n")
+        print("\nOpening browser for Google authorization...\n")  # User-facing CLI output
+        print(f"If the browser does not open, visit:\n{auth_url}\n")  # User-facing CLI output
         webbrowser.open(auth_url, new=2)
 
         code, error = run_callback_server(port=8585, timeout=120)

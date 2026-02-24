@@ -28,10 +28,14 @@ GLOBAL_CONFIG_PATH = os.path.join(GLOBAL_CONFIG_DIR, "config.yaml")
 
 
 class PlanGateConfig(BaseModel):
+    """Configuration for plan phase validation gates."""
+
     require_baseline: bool = True
 
 
 class RunGateConfig(BaseModel):
+    """Configuration for run phase error thresholds."""
+
     max_errors: int = 0
     max_type_errors: int = 0
     max_lint_errors: int = 0
@@ -39,18 +43,24 @@ class RunGateConfig(BaseModel):
 
 
 class SyncGateConfig(BaseModel):
+    """Configuration for sync phase error and warning limits."""
+
     max_errors: int = 0
     max_warnings: int = 10
     require_clean_lsp: bool = True
 
 
 class RegressionConfig(BaseModel):
+    """Configuration for regression detection thresholds."""
+
     error_increase_threshold: int = 0
     warning_increase_threshold: int = 10
     type_error_increase_threshold: int = 0
 
 
 class DDDConfig(BaseModel):
+    """Configuration for Documentation-Driven Development mode."""
+
     require_existing_tests: bool = True
     characterization_tests: bool = True
     behavior_snapshots: bool = True
@@ -59,6 +69,8 @@ class DDDConfig(BaseModel):
 
 
 class TDDConfig(BaseModel):
+    """Configuration for Test-Driven Development mode."""
+
     min_coverage_per_commit: int = 80
     require_test_first: bool = True
     red_green_refactor: bool = True
@@ -66,6 +78,8 @@ class TDDConfig(BaseModel):
 
 
 class HybridConfig(BaseModel):
+    """Configuration for hybrid development mode combining TDD and DDD."""
+
     new_features: str = "tdd"
     legacy_refactoring: str = "ddd"
     min_coverage_new: int = 90
@@ -74,12 +88,16 @@ class HybridConfig(BaseModel):
 
 
 class CoverageExemptions(BaseModel):
+    """Configuration for test coverage exemption rules."""
+
     enabled: bool = False
     require_justification: bool = True
     max_exempt_percentage: int = 20
 
 
 class TestQuality(BaseModel):
+    """Configuration for test quality requirements and constraints."""
+
     specification_based: bool = True
     meaningful_assertions: bool = True
     avoid_implementation_coupling: bool = True
@@ -87,10 +105,14 @@ class TestQuality(BaseModel):
 
 
 class SimplicityPrinciple(BaseModel):
+    """Configuration for task parallelism constraints."""
+
     max_parallel_tasks: int = 5
 
 
 class ReportGeneration(BaseModel):
+    """Configuration for quality report auto-generation."""
+
     enabled: bool = True
     auto_create: bool = True
 
@@ -99,6 +121,8 @@ class ReportGeneration(BaseModel):
 
 
 class QualityConfig(BaseModel):
+    """Main quality gate configuration with thresholds and repair limits."""
+
     development_mode: str = "hybrid"
     coverage_threshold: float = 80.0
     pass_score_threshold: float = 0.70
@@ -201,6 +225,8 @@ class QualityConfig(BaseModel):
 
 
 class GitStrategyConfig(BaseModel):
+    """Configuration for git branching strategy and team workflow."""
+
     auto_branch: bool = True
     branch_prefix: str = "feature/"
     spec_git_workflow: str = "main_direct"
@@ -208,6 +234,8 @@ class GitStrategyConfig(BaseModel):
 
 
 class LanguageConfig(BaseModel):
+    """Configuration for language, localization, and LSP settings."""
+
     conversation_language: str = "en"
     code_comments: str = "en"
     language: str = "auto"
@@ -223,10 +251,14 @@ class LanguageConfig(BaseModel):
 
 
 class WorkflowConfig(BaseModel):
+    """Configuration for workflow execution and team settings."""
+
     team: dict[str, Any] = Field(default_factory=lambda: {"enabled": False})
 
 
 class MoaiConfig(BaseModel):
+    """Top-level project configuration combining all config sections."""
+
     quality: QualityConfig = Field(default_factory=QualityConfig)
     git: GitStrategyConfig = Field(default_factory=GitStrategyConfig)
     language: LanguageConfig = Field(default_factory=LanguageConfig)
@@ -342,37 +374,44 @@ class ModelsConfig(BaseModel):
     Users can override which models each provider uses for each tier.
     These override the hardcoded defaults in auth/claude.py, auth/google.py, and llm.py."""
 
-    claude: ProviderModelsConfig = Field(default_factory=lambda: ProviderModelsConfig(
-        best="claude-opus-4-6",
-        good="claude-opus-4-6",
-        fast="claude-sonnet-4-5",
-        watchdog="claude-haiku-4-5",
-        default="claude-opus-4-6",
-        fallback_chain=["claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"],
-        thinking_tiers=["best", "good"],
-    ))
-    google: ProviderModelsConfig = Field(default_factory=lambda: ProviderModelsConfig(
-        best="gemini-3-pro-preview",
-        good="gemini-3-pro-preview",
-        fast="gemini-3-flash-preview",
-        watchdog="gemini-3-flash-preview",
-        default="gemini-3-pro-preview",
-        fallback_chain=["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
-        thinking_tiers=["best", "good"],
-    ))
-    ollama: ProviderModelsConfig = Field(default_factory=lambda: ProviderModelsConfig(
-        best="qwen3-coder-next:cloud",
-        good="kimi-k2.5:cloud",
-        fast="nemotron-3-nano:30b-cloud",
-        watchdog="nemotron-3-nano:30b-cloud",
-        default="qwen3-coder-next:cloud",
-        fallback_chain=["qwen3-coder-next:cloud", "kimi-k2.5:cloud", "nemotron-3-nano:30b-cloud"],
-        thinking_tiers=["best", "good"],
-    ))
+    claude: ProviderModelsConfig = Field(
+        default_factory=lambda: ProviderModelsConfig(
+            best="claude-opus-4-6",
+            good="claude-opus-4-6",
+            fast="claude-sonnet-4-5",
+            watchdog="claude-haiku-4-5",
+            default="claude-opus-4-6",
+            fallback_chain=["claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"],
+            thinking_tiers=["best", "good"],
+        )
+    )
+    google: ProviderModelsConfig = Field(
+        default_factory=lambda: ProviderModelsConfig(
+            best="gemini-3-pro-preview",
+            good="gemini-3-pro-preview",
+            fast="gemini-3-flash-preview",
+            watchdog="gemini-3-flash-preview",
+            default="gemini-3-pro-preview",
+            fallback_chain=["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+            thinking_tiers=["best", "good"],
+        )
+    )
+    ollama: ProviderModelsConfig = Field(
+        default_factory=lambda: ProviderModelsConfig(
+            best="qwen3-coder-next:cloud",
+            good="kimi-k2.5:cloud",
+            fast="nemotron-3-nano:30b-cloud",
+            watchdog="nemotron-3-nano:30b-cloud",
+            default="qwen3-coder-next:cloud",
+            fallback_chain=["qwen3-coder-next:cloud", "kimi-k2.5:cloud", "nemotron-3-nano:30b-cloud"],
+            thinking_tiers=["best", "good"],
+        )
+    )
 
 
 class LLMConfig(BaseModel):
     """LLM provider retry and timeout settings."""
+
     timeout_fast: int = 120
     timeout_standard: int = 300
     timeout_extended: int = 600
@@ -456,18 +495,15 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
 
 def load_global_config(force_reload: bool = False) -> GlobalConfig:
     """Load and cache the global config with 3-tier precedence.
-
-    1. Pydantic defaults
     2. ``~/.trust5/config.yaml`` (global, written on first run)
     3. Environment variables ``TRUST5_<SECTION>_<KEY>``
-
-    Project-level config is merged separately in ``ConfigManager.load_config()``.
     """
     global _global_config
+    if _global_config is not None and not force_reload:
+        return _global_config
     with _config_lock:
         if _global_config is not None and not force_reload:
             return _global_config
-
         data: dict[str, Any] = {}
         # Layer 1: Read global config file
         if os.path.exists(GLOBAL_CONFIG_PATH):
@@ -476,7 +512,7 @@ def load_global_config(force_reload: bool = False) -> GlobalConfig:
                     file_data = yaml.safe_load(f)
                     if isinstance(file_data, dict):
                         data = file_data
-            except Exception as exc:
+            except (OSError, yaml.YAMLError) as exc:  # config: file/YAML parse errors
                 _log.warning("Failed to read global config %s: %s", GLOBAL_CONFIG_PATH, exc)
         data = _apply_env_overrides(data)
         try:
@@ -596,7 +632,7 @@ class ConfigManager:
             with open(path, encoding="utf-8") as f:
                 result: dict[str, Any] = yaml.safe_load(f) or {}
                 return result
-        except Exception as e:
+        except (OSError, yaml.YAMLError) as e:  # YAML config: file/parse errors
             _log.warning("Failed to load config %s: %s", path, e)
             return {}
 

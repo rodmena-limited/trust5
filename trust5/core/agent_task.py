@@ -477,7 +477,7 @@ class AgentTask(Task):
                         retry_after=retry_after,
                     )
                 return TaskResult.terminal(error=f"LLM failed: {e}")
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError, KeyError) as e:  # agent: non-LLM execution errors
                 emit(M.SERR, f"[{agent_name}] Agent execution failed: {e}")
                 logger.exception("Agent %s failed", agent_name)
                 return TaskResult.terminal(error=f"Agent execution failed: {e}")
@@ -507,7 +507,7 @@ class AgentTask(Task):
         try:
             with open(agent_def_path, encoding="utf-8") as f:
                 content = f.read()
-        except Exception as e:
+        except OSError as e:  # prompt file read error
             logger.error("Error reading prompt file %s: %s", prompt_file, e)
             return None
 
@@ -557,7 +557,7 @@ def _load_skills(skills: list[str], assets_path: str) -> str:
                     content = f.read()
                 _, body = _parse_frontmatter(content)
                 loaded.append(f"--- SKILL: {skill_name} ---\n{body}\n")
-            except Exception:
+            except OSError:  # skill file read error
                 logger.debug("Failed to load skill %s", skill_name, exc_info=True)
     return "\n".join(loaded)
 

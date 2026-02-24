@@ -867,4 +867,3 @@ def test_run_bash_blocks_truncate_trust5(tools: Tools):
     """truncate command on .trust5/ files must be blocked."""
     result = tools.run_bash("truncate -s 0 .trust5/trust5.db")
     assert "blocked" in result.lower()
-

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 # ── Validator base ───────────────────────────────────────────────────
 
 
-class _ValidatorBase:
+class _ValidatorBase(ABC):
     """Abstract base for TRUST 5 pillar validators.
 
     Subclasses implement ``name()`` → pillar name and ``validate()`` → PrincipleResult.
@@ -54,9 +55,11 @@ class _ValidatorBase:
         self._profile = profile
         self._config = config
 
+    @abstractmethod
     def name(self) -> str:
         raise NotImplementedError
 
+    @abstractmethod
     def validate(self) -> PrincipleResult:
         raise NotImplementedError
 
@@ -545,7 +548,7 @@ class TrustGate:
         def _run_one(v: _ValidatorBase) -> tuple[str, PrincipleResult]:
             try:
                 return v.name(), v.validate()
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:  # validator: IO/parse errors
                 logger.warning("Validator %s crashed: %s", v.name(), e)
                 return v.name(), PrincipleResult(
                     name=v.name(),

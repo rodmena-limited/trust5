@@ -7,6 +7,7 @@ from typing import Any
 from stabilize import StageExecution, Task, TaskResult
 
 from ..core.config import ConfigManager, QualityConfig
+from ..core.constants import QUALITY_OUTPUT_LIMIT
 from ..core.context_keys import increment_jump_count, propagate_context
 from ..core.lang import LanguageProfile
 from ..core.message import M, emit, emit_block
@@ -28,8 +29,6 @@ from ..core.quality_gates import (
 from ..tasks.watchdog_task import signal_pipeline_done
 
 logger = logging.getLogger(__name__)
-
-QUALITY_OUTPUT_LIMIT = 6000
 
 
 class QualityTask(Task):
@@ -295,7 +294,7 @@ class QualityTask(Task):
             mgr = ConfigManager(project_root)
             cfg = mgr.load_config()
             return cfg.quality
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:  # config loading errors
             logger.warning("Failed to load quality config: %s — using defaults", e)
             return QualityConfig()
 

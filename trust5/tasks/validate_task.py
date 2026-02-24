@@ -592,7 +592,7 @@ class ValidateTask(Task):
                 logger.info("Installed dev dependencies: %s", ", ".join(deps))
             else:
                 logger.warning("Failed to install dev deps: %s", result.stderr[:200])
-        except Exception as exc:
+        except (subprocess.SubprocessError, OSError) as exc:  # dev dep install errors
             logger.warning("Dev dependency install error: %s", exc)
 
     @staticmethod
@@ -621,7 +621,7 @@ class ValidateTask(Task):
         except FileNotFoundError:
             logger.warning("Syntax check tool not found: %s", syntax_cmd[0])
             return None
-        except Exception as e:
+        except OSError as e:  # syntax check: OS-level spawn errors
             return f"Syntax check error: {e}"
 
         return None
@@ -667,7 +667,7 @@ class ValidateTask(Task):
             except FileNotFoundError:
                 logger.warning("Lint tool not found: %s", cmd[0])
                 continue
-            except Exception as e:
+            except OSError as e:  # lint check: OS-level spawn errors
                 errors.append(f"Lint check error ({' '.join(cmd[:2])}): {e}")
 
         return "\n\n".join(errors) if errors else None
@@ -714,7 +714,7 @@ class ValidateTask(Task):
                 "output": f"Test runner not found: {test_cmd[0]}",
                 "total": 0,
             }
-        except Exception as e:
+        except OSError as e:  # test execution: OS-level spawn errors
             return {"passed": False, "output": f"Test execution error: {e}", "total": 0}
 
         output = result.stdout + "\n" + result.stderr

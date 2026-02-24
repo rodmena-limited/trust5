@@ -16,7 +16,7 @@ def _load_development_mode(project_root: str) -> str:
         mgr = ConfigManager(project_root)
         cfg = mgr.load_config()
         return cfg.quality.development_mode
-    except Exception:
+    except (OSError, ValueError, KeyError):  # config loading errors
         logger.debug("Failed to load development mode, defaulting to 'hybrid'", exc_info=True)
         return "hybrid"
 
@@ -95,7 +95,7 @@ def _load_mutation_enabled(project_root: str) -> bool:
         mgr = ConfigManager(project_root)
         cfg = mgr.load_config()
         return cfg.quality.tdd.mutation_testing_enabled or cfg.quality.test_quality.mutation_testing_enabled
-    except Exception:
+    except (OSError, ValueError, KeyError):  # config loading errors
         logger.debug("Failed to load mutation testing config", exc_info=True)
         return False
 
@@ -106,7 +106,7 @@ def _load_code_review_enabled(project_root: str) -> bool:
         mgr = ConfigManager(project_root)
         cfg = mgr.load_config()
         return cfg.quality.code_review_enabled
-    except Exception:
+    except (OSError, ValueError, KeyError):  # config loading errors
         logger.debug("Failed to load code review config", exc_info=True)
         return True
 
@@ -122,7 +122,7 @@ def _load_pipeline_limits(project_root: str) -> dict[str, int]:
             "max_reimplementations": cfg.quality.max_reimplementations,
             "per_module_max_jumps": cfg.quality.per_module_max_jumps,
         }
-    except Exception:
+    except (OSError, ValueError, KeyError):  # config loading errors
         logger.debug("Failed to load pipeline limits from config, using defaults", exc_info=True)
         return {
             "max_jumps": 50,

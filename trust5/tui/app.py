@@ -35,6 +35,8 @@ _BATCH_SIZE = 64
 
 
 class Trust5App(App[None]):
+    """Textual TUI application for live pipeline monitoring and event display."""
+
     CSS_PATH = "styles.tcss"
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
@@ -134,7 +136,7 @@ class Trust5App(App[None]):
                     # were missed (e.g. agent killed mid-turn without ASUM).
                     self.call_from_thread(self._clear_status_bar_on_completion, wf.status)
                     break
-            except Exception as exc:
+            except (OSError, RuntimeError) as exc:  # DB poll error
                 logger.debug("watch_workflow poll error: %s", exc)
             time.sleep(0.5)
 
@@ -156,7 +158,7 @@ class Trust5App(App[None]):
                 consecutive_errors = 0
             except queue.Empty:
                 continue
-            except Exception:
+            except (OSError, RuntimeError):  # event queue error
                 logger.debug("consume_events error", exc_info=True)
                 consecutive_errors += 1
                 if consecutive_errors >= 10:
@@ -215,7 +217,7 @@ class Trust5App(App[None]):
                     continue
                 try:
                     self._route_event(event)
-                except Exception as exc:
+                except (OSError, RuntimeError, KeyError, ValueError) as exc:  # TUI rendering error
                     logger.debug("TUI event routing error: %s", exc)
             # Coalesced repaint — one refresh per batch, not per property change.
             self._header.refresh()

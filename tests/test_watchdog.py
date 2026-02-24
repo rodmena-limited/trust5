@@ -11,12 +11,10 @@ from trust5.tasks.watchdog_task import (
     _DOUBLE_EXT_RE,
     _GARBLED_RE,
     _LEGIT_DOUBLE_EXT,
-    _MAX_LLM_AUDITS,
     PipelineHealth,
     WatchdogTask,
-    _build_audit_prompt,
-    _run_llm_audit,
-    _should_trigger_audit,
+    _build_narrative_prompt,
+    _run_llm_narrative,
     _start_event_consumer,
     check_rebuild_signal,
     clear_rebuild_signal,
@@ -261,7 +259,7 @@ def test_load_watchdog_findings_with_findings():
         ]
         WatchdogTask._write_report(tmpdir, findings, 2)
         result = load_watchdog_findings(tmpdir)
-        assert "## Watchdog Audit Findings" in result
+        assert "## Watchdog Pipeline Status" in result
         assert "**[ERROR]**" in result
         assert "**[WARNING]**" in result
         assert "`=3.0`" in result
@@ -319,7 +317,7 @@ def test_emit_findings_block_warning_only(mock_emit_block):
     from trust5.core.message import M as _M
 
     assert args[0][0] == _M.WDWN
-    assert "Watchdog Audit (check #3)" in args[0][1]
+    assert "Watchdog (check #3)" in args[0][1]
     assert "stub_file" in args[0][2]
     assert "\u26a0\ufe0f" in args[0][2]  # warning icon
 
@@ -353,6 +351,26 @@ def test_emit_findings_block_content_format(mock_emit_block):
     assert "garbled_file" in content
     assert "=3.0" in content
     assert "Bad file" in content
+
+
+@patch("trust5.tasks.watchdog_task.emit_block")
+def test_emit_findings_block_with_narrative(mock_emit_block):
+    """Narrative appears at the top of the block, findings below."""
+    findings = [
+        {"severity": "warning", "category": "stub_file", "file": "main.py", "message": "Stub detected"},
+    ]
+    WatchdogTask._emit_findings_block(findings, 2, narrative="Pipeline is recovering.")
+    content = mock_emit_block.call_args[0][2]
+    assert content.startswith("Pipeline is recovering.")
+    assert "stub_file" in content
+
+
+@patch("trust5.tasks.watchdog_task.emit_block")
+def test_emit_findings_block_narrative_only(mock_emit_block):
+    """Narrative-only block (no rule findings)."""
+    WatchdogTask._emit_findings_block([], 4, narrative="All systems nominal.")
+    content = mock_emit_block.call_args[0][2]
+    assert "All systems nominal." in content
 
 
 # ── Sentinel / pipeline completion ────────────────────────────────────
@@ -668,104 +686,98 @@ def test_start_event_consumer_with_bus(mock_get_bus):
 # ── LLM Auditor ───────────────────────────────────────────────────
 
 
-def test_build_audit_prompt_contains_fields():
+def test_build_narrative_prompt_contains_fields():
     health = PipelineHealth(repair_attempts=2, jump_count=5)
     health.stages_completed.append("implement")
     profile = {"language": "python"}
     rule_findings = [{"severity": "warning", "category": "repair_loop"}]
-    prompt = _build_audit_prompt(health, profile, rule_findings)
-    assert "python" in prompt
+    prompt = _build_narrative_prompt(health, profile, rule_findings, 120.0, 10, "")
+    assert "python" in prompt.lower()
     assert "implement" in prompt
     assert "repair_loop" in prompt
 
 
-def test_should_trigger_audit_post_implement():
+def test_build_narrative_prompt_includes_previous():
     health = PipelineHealth()
-    health.stages_completed.append("implement")
-    trigger = _should_trigger_audit(health, [], set())
-    assert trigger == "post_implement"
+    prompt = _build_narrative_prompt(health, {}, [], 60.0, 5, "Previous: all good")
+    assert "Previous: all good" in prompt
 
 
-def test_should_trigger_audit_already_fired():
+def test_build_narrative_prompt_includes_test_history():
     health = PipelineHealth()
-    health.stages_completed.append("implement")
-    trigger = _should_trigger_audit(health, [], {"post_implement"})
-    assert trigger != "post_implement"
-
-
-def test_should_trigger_audit_post_vfal():
-    health = PipelineHealth()
-    health.stages_failed.append("validate")
-    trigger = _should_trigger_audit(health, [], set())
-    assert trigger == "post_vfal"
-
-
-def test_should_trigger_audit_anomaly_high():
-    health = PipelineHealth()
-    findings = [{"severity": "error", "category": "garbled_file"}]
-    trigger = _should_trigger_audit(health, findings, set())
-    assert trigger == "anomaly_high"
-
-
-def test_should_trigger_audit_max_reached():
-    health = PipelineHealth(llm_audit_count=_MAX_LLM_AUDITS)
-    health.stages_completed.append("implement")
-    trigger = _should_trigger_audit(health, [], set())
-    assert trigger is None
-
-
-def test_should_trigger_audit_nothing():
-    health = PipelineHealth()
-    trigger = _should_trigger_audit(health, [], set())
-    assert trigger is None
-
-
-def test_run_llm_audit_max_reached():
-    health = PipelineHealth(llm_audit_count=_MAX_LLM_AUDITS)
-    result = _run_llm_audit(health, {}, [], "test")
-    assert result is None
+    health.test_pass_history = [True, True, False]
+    prompt = _build_narrative_prompt(health, {}, [], 60.0, 5, "")
+    assert "\u2713" in prompt or "passed" in prompt.lower()
 
 
 @patch("trust5.core.llm.LLM")
-def test_run_llm_audit_success(mock_llm_cls):
+def test_run_llm_narrative_success(mock_llm_cls):
     mock_instance = MagicMock()
-    mock_instance.chat.return_value = {
-        "message": {"role": "assistant", "content": json.dumps({"risk": "LOW", "concerns": [], "recommendations": []})},
-        "done": True,
-    }
+    mock_instance.chat.return_value = {"content": "Pipeline is progressing well."}
     mock_llm_cls.for_tier.return_value = mock_instance
     health = PipelineHealth()
-    result = _run_llm_audit(health, {"language": "python"}, [], "post_implement")
+    result = _run_llm_narrative(health, {"language": "python"}, [], 60.0, 5, "")
     assert result is not None
-    assert result["risk"] == "LOW"
-    assert result["trigger"] == "post_implement"
+    assert "progressing" in result
     assert health.llm_audit_count == 1
 
 
 @patch("trust5.core.llm.LLM")
-def test_run_llm_audit_llm_failure(mock_llm_cls):
+def test_run_llm_narrative_strips_markdown_fences(mock_llm_cls):
+    mock_instance = MagicMock()
+    mock_instance.chat.return_value = {"content": "```\nPipeline status: OK\n```"}
+    mock_llm_cls.for_tier.return_value = mock_instance
+    health = PipelineHealth()
+    result = _run_llm_narrative(health, {}, [], 60.0, 1, "")
+    assert result is not None
+    assert "```" not in result
+    assert "Pipeline status: OK" in result
+
+
+@patch("trust5.core.llm.LLM")
+def test_run_llm_narrative_handles_list_content(mock_llm_cls):
+    mock_instance = MagicMock()
+    mock_instance.chat.return_value = {"content": [{"text": "Status: running smoothly"}]}
+    mock_llm_cls.for_tier.return_value = mock_instance
+    health = PipelineHealth()
+    result = _run_llm_narrative(health, {}, [], 60.0, 1, "")
+    assert result is not None
+    assert "running smoothly" in result
+
+
+@patch("trust5.core.llm.LLM")
+def test_run_llm_narrative_returns_none_on_failure(mock_llm_cls):
     mock_llm_cls.for_tier.side_effect = RuntimeError("API unavailable")
     health = PipelineHealth()
-    result = _run_llm_audit(health, {}, [], "test")
+    result = _run_llm_narrative(health, {}, [], 60.0, 1, "")
+    assert result is None
+
+
+@patch("trust5.core.llm.LLM")
+def test_run_llm_narrative_returns_none_on_empty(mock_llm_cls):
+    mock_instance = MagicMock()
+    mock_instance.chat.return_value = {"content": ""}
+    mock_llm_cls.for_tier.return_value = mock_instance
+    health = PipelineHealth()
+    result = _run_llm_narrative(health, {}, [], 60.0, 1, "")
     assert result is None
 
 
 # ── Enhanced report format ─────────────────────────────────────────
 
 
-def test_write_report_with_health_and_audits():
+def test_write_report_with_health_and_narrative():
     with tempfile.TemporaryDirectory() as tmpdir:
         health = PipelineHealth(repair_attempts=2, jump_count=5)
         health.stages_completed.append("implement")
-        audits = [{"trigger": "post_implement", "risk": "MEDIUM", "concerns": ["slow"], "recommendations": []}]
-        WatchdogTask._write_report(tmpdir, [], 10, health=health, audit_summaries=audits)
+        WatchdogTask._write_report(tmpdir, [], 10, health=health, narrative="Pipeline is on track.")
         report_path = os.path.join(tmpdir, ".trust5", "watchdog_report.json")
         with open(report_path) as f:
             data = json.load(f)
         assert "pipeline_health" in data
         assert data["pipeline_health"]["repair_attempts"] == 2
-        assert "audit_summaries" in data
-        assert data["audit_summaries"][0]["risk"] == "MEDIUM"
+        assert "narrative" in data
+        assert data["narrative"] == "Pipeline is on track."
 
 
 def test_write_report_without_health():
@@ -775,27 +787,29 @@ def test_write_report_without_health():
         with open(report_path) as f:
             data = json.load(f)
         assert "pipeline_health" not in data
-        assert "audit_summaries" not in data
+        assert "narrative" not in data
 
 
-def test_load_watchdog_findings_with_audit_summaries():
+def test_load_watchdog_findings_with_narrative():
     with tempfile.TemporaryDirectory() as tmpdir:
-        health = PipelineHealth(repair_attempts=1)
-        audits = [
-            {
-                "trigger": "post_implement",
-                "risk": "HIGH",
-                "concerns": ["Too many repairs"],
-                "recommendations": ["Reduce complexity"],
-            }
-        ]
         findings = [{"severity": "warning", "category": "test", "file": "x.py", "message": "test msg"}]
-        WatchdogTask._write_report(tmpdir, findings, 5, health=health, audit_summaries=audits)
+        health = PipelineHealth(repair_attempts=1)
+        WatchdogTask._write_report(tmpdir, findings, 5, health=health, narrative="Repair in progress.")
         result = load_watchdog_findings(tmpdir)
-        assert "LLM Audit Summaries" in result
-        assert "HIGH" in result
-        assert "Too many repairs" in result
-        assert "Reduce complexity" in result
+        assert "Current Pipeline Assessment" in result
+        assert "Repair in progress." in result
+        assert "Detected Issues" in result
+        assert "test msg" in result
+
+
+def test_load_watchdog_findings_narrative_only():
+    """Narrative without findings still produces output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        WatchdogTask._write_report(tmpdir, [], 5, narrative="All clear, pipeline running.")
+        result = load_watchdog_findings(tmpdir)
+        assert "Current Pipeline Assessment" in result
+        assert "All clear, pipeline running." in result
+        assert "Detected Issues" not in result
 
 
 # ── _run_rules integration ─────────────────────────────────────────
@@ -826,10 +840,6 @@ def test_run_rules_aggregates_all_rules(_mock_emit):
 
 
 # ── Constants ────────────────────────────────────────────────────
-
-
-def test_max_llm_audits_is_three():
-    assert _MAX_LLM_AUDITS == 3
 
 
 # ── Rebuild sentinel tests ───────────────────────────────────────
@@ -1025,17 +1035,3 @@ def test_should_trigger_rebuild_false_when_jumps_low(_mock_emit):
         context: dict = {"_max_jumps": 50}
         result = _make_watchdog()._should_trigger_rebuild(health, context, tmpdir)
         assert result is False
-
-
-# ── Scaled audit budget tests ────────────────────────────────────
-
-
-def test_should_trigger_audit_respects_max_audits():
-    """With max_audits raised, more triggers allowed."""
-    health = PipelineHealth()
-    health.stages_completed.append("implement")
-    health.llm_audit_count = 3
-    # Default max=3 → should return None
-    assert _should_trigger_audit(health, [], set()) is None
-    # Raised max=5 → should return trigger
-    assert _should_trigger_audit(health, [], set(), max_audits=5) == "post_implement"

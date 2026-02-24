@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# Thinking budget constants (duplicated from llm.py to avoid circular imports)
-_ANTHROPIC_THINKING_BUDGET = {"low": 5000, "high": 10000}
-_GEMINI_25_THINKING_BUDGET = {"low": 5000, "high": 10000}
+from .llm_constants import _ANTHROPIC_THINKING_BUDGET, _GEMINI_25_THINKING_BUDGET
 
 
 class LLMBackendsMixin:

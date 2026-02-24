@@ -39,18 +39,27 @@ class MCPClient:
             env=self.env,
             text=True,
         )
-        self._send_request(
-            "initialize",
-            {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "trust5", "version": "0.1.0"},
-            },
-        )
-        resp = self._read_response()
-        self.server_capabilities = resp.get("result", {}).get("capabilities", {})
-
-        self._send_notification("notifications/initialized")
+        try:
+            self._send_request(
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "trust5", "version": "0.1.0"},
+                },
+            )
+            resp = self._read_response()
+            self.server_capabilities = resp.get("result", {}).get("capabilities", {})
+            self._send_notification("notifications/initialized")
+        except (OSError, RuntimeError):  # MCP server start/handshake errors
+            if self.process:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                self.process = None
+            raise
 
     def stop(self) -> None:
         if self.process:
@@ -59,7 +68,7 @@ class MCPClient:
                 self.process.wait(timeout=5)
             except ProcessLookupError:
                 pass  # Process already exited between poll() and kill()
-            except Exception:
+            except OSError:  # process termination errors
                 logger.debug("Failed to terminate MCP server %s", self.name, exc_info=True)
                 if self.process.poll() is None:
                     try:
@@ -114,7 +123,10 @@ class MCPClient:
         if not line:
             raise RuntimeError(f"MCP server '{self.name}' closed connection")
 
-        result: dict[str, Any] = json.loads(line)
+        try:
+            result: dict[str, Any] = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            raise RuntimeError(f"MCP server '{self.name}' returned invalid JSON")
         return result
 
 
@@ -194,12 +206,12 @@ class MCPSSEClient:
         if self._sse_response:
             try:
                 self._sse_response.close()
-            except Exception:
+            except OSError:  # SSE response close error
                 logger.debug("Failed to close SSE response for %s", self.name, exc_info=True)
         if self._session:
             try:
                 self._session.close()
-            except Exception:
+            except OSError:  # SSE session close error
                 logger.debug("Failed to close SSE session for %s", self.name, exc_info=True)
         self._sse_response = None
         self._session = None

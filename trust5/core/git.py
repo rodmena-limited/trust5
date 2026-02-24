@@ -26,6 +26,8 @@ htmlcov/
 
 
 class GitManager:
+    """Git operations wrapper for repository init, commits, and worktrees."""
+
     def __init__(self, project_root: str = "."):
         self.project_root = project_root
 
@@ -37,6 +39,7 @@ class GitManager:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=30,
             )
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:

@@ -25,6 +25,38 @@ def _cfg() -> Any:
     return load_global_config()
 
 
+# ── Module-level constants (sensible defaults, not config-driven) ────────────
+# These are imported directly and do NOT go through __getattr__.
+
+# Agent limits
+AGENT_MAX_EMPTY_RETRIES = 3
+
+# Subprocess defaults
+DEFAULT_SUBPROCESS_TIMEOUT = 120
+DEFAULT_SETUP_TIMEOUT = 300
+
+# Context builder limits
+MAX_FILE_CONTENT = 6000
+MAX_TOTAL_CONTEXT = 30000
+
+# Error summarizer limits
+MAX_RAW_ERROR_INPUT = 100_000
+MAX_ERROR_SUMMARY = 20_000
+
+# Quality thresholds (DO NOT change pillar weights)
+QUALITY_OUTPUT_LIMIT = 6000
+QUALITY_PASS_THRESHOLD = 0.70
+PILLAR_PASS_THRESHOLD = 0.85
+PILLAR_WARNING_THRESHOLD = 0.50
+
+# TUI
+TUI_BATCH_SIZE = 64
+TUI_MAX_BLOCK_LINES = 500
+TUI_MAX_THINKING_LINES = 50
+
+# Mutation testing
+DEFAULT_MAX_MUTANTS = 10
+
 # ── Attribute map: constant name → (config section, field name) ──────────────
 
 

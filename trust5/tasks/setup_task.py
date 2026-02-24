@@ -111,5 +111,5 @@ def _run_setup_command(cmd: str, cwd: str) -> tuple[int, str]:
         return proc.returncode, (proc.stdout + "\n" + proc.stderr).strip()
     except subprocess.TimeoutExpired:
         return 124, f"command timed out after {SETUP_TIMEOUT}s"
-    except Exception as e:
+    except OSError as e:  # subprocess: OS-level spawn errors
         return 1, str(e)

@@ -8,6 +8,7 @@ from typing import Any
 from .constants import (
     AGENT_IDLE_MAX_TURNS,
     AGENT_IDLE_WARN_TURNS,
+    AGENT_MAX_EMPTY_RETRIES,
     AGENT_MAX_HISTORY_MESSAGES,
     AGENT_PER_TURN_TIMEOUT,
     AGENT_TOOL_RESULT_LIMIT,
@@ -24,11 +25,10 @@ MAX_HISTORY_MESSAGES = AGENT_MAX_HISTORY_MESSAGES
 
 # Tools that modify the workspace — used by idle detection.
 _WRITE_TOOLS = frozenset({"Write", "Edit", "Bash"})
-
 # How many consecutive empty (0-char, no tool call) responses to tolerate
 # before accepting the empty result.  Transient LLM failures sometimes
 # produce a single empty response; retrying the same turn usually fixes it.
-_MAX_EMPTY_RESPONSE_RETRIES = 2
+_MAX_EMPTY_RESPONSE_RETRIES = AGENT_MAX_EMPTY_RETRIES
 
 
 def _safe_int(value: object, default: int | None = None) -> int | None:
@@ -116,7 +116,7 @@ class Agent:
                             },
                         }
                     )
-            except Exception as e:
+            except (OSError, RuntimeError) as e:  # MCP tool listing: connection errors
                 emit(M.SWRN, f"[{self.name}] Failed to load MCP tools: {e}")
 
     def run(self, user_input: str, max_turns: int = 20, timeout_seconds: float | None = None) -> str:
@@ -299,7 +299,7 @@ class Agent:
                 mcp_result = str(client.call_tool(name, args))
                 emit(M.TRES, f"[{self.name}] {name} (MCP) -> {len(mcp_result)} chars")
                 return mcp_result
-            except Exception:
+            except (OSError, RuntimeError):  # MCP tool call: connection errors
                 logger.debug("MCP tool call failed for %s", name, exc_info=True)
                 continue
 

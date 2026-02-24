@@ -68,7 +68,9 @@ def get_active_provider() -> AuthProvider | None:
 
 def get_active_token() -> tuple[AuthProvider, TokenData] | None:
     store = _get_store()
-    active_name = _provider_override or store.get_active() or DEFAULT_PROVIDER
+    with _registry_lock:
+        override = _provider_override
+    active_name = override or store.get_active() or DEFAULT_PROVIDER
     if active_name == "ollama":
         return None
 
