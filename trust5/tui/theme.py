@@ -24,6 +24,9 @@ C_RED = "#c87070"  # Rose — errors
 C_LAVENDER = "#b08cb8"  # Mauve — stages
 C_PURPLE = "#a87fd4"  # Purple — watchdog
 
+C_CYAN = "#6abcbc"  # Cyan — file/search operations
+C_DIM_CYAN = "#4a8c8c"  # Dim cyan
+
 C_DIM_GREEN = "#68986c"
 C_DIM_AMBER = "#a07838"
 C_DIM_RED = "#985858"
@@ -76,15 +79,15 @@ THEME: dict[str, dict[str, Any]] = {
     M.CAST: {"marker": f"{SYM_OUTPUT} ", "color": C_SECONDARY, "title": "Assistant", "pill": False},
     M.CTLC: {"marker": f"{SYM_ARROW} ", "color": C_TEAL, "title": "Tool Call", "pill": False},
     M.CTLR: {"marker": f"{SYM_ARROW} ", "color": C_DIM, "title": "Result", "pill": False},
-    # Tools
+    # Tools — each type has a distinct color for visual scanability
     M.TCAL: {"marker": f"{SYM_ARROW} ", "color": C_TEAL, "title": "Tool", "pill": False},
     M.TRES: {"marker": f"{SYM_ARROW} ", "color": C_DIM, "title": "Result", "pill": False},
-    M.TBSH: {"marker": f"{SYM_SHELL}", "color": C_TEAL, "title": "Shell", "pill": False},
+    M.TBSH: {"marker": f"{SYM_SHELL}", "color": C_AMBER, "title": "Shell", "pill": False},
     M.TWRT: {"marker": f"{SYM_CODE}", "color": C_GREEN, "title": "Write", "pill": False},
-    M.TRED: {"marker": f"{SYM_FOLDER}", "color": C_BLUE, "title": "Read", "pill": False},
+    M.TRED: {"marker": f"{SYM_FOLDER}", "color": C_CYAN, "title": "Read", "pill": False},
     M.TEDT: {"marker": f"{SYM_CODE}", "color": C_GREEN, "title": "Edit", "pill": False},
-    M.TGLB: {"marker": f"{SYM_FOLDER}", "color": C_DIM, "title": "Glob", "pill": False},
-    M.TGRP: {"marker": f"{SYM_SEARCH}", "color": C_DIM, "title": "Search", "pill": False},
+    M.TGLB: {"marker": f"{SYM_SEARCH}", "color": C_CYAN, "title": "Glob", "pill": False},
+    M.TGRP: {"marker": f"{SYM_SEARCH}", "color": C_BLUE, "title": "Search", "pill": False},
     M.TPKG: {"marker": f"{SYM_PACKAGE}", "color": C_TEAL, "title": "Package", "pill": False},
     M.TINI: {"marker": f"{SYM_PLAY} ", "color": C_TEAL, "title": "Init", "pill": False},
     # Workflow

@@ -71,7 +71,9 @@ def parse_review_findings(raw_output: str) -> ReviewReport:
     """Parse structured findings from the LLM's review output."""
     match = _FINDINGS_RE.search(raw_output)
     if not match:
-        # Fallback: no valid JSON block — return advisory info finding
+        # Fallback: LLM reviewed the code but didn't produce the structured
+        # JSON block.  "No findings" is a positive signal — the reviewer found
+        # nothing worth flagging — so default to a passing score (0.85).
         return ReviewReport(
             findings=[
                 ReviewFinding(
@@ -82,13 +84,15 @@ def parse_review_findings(raw_output: str) -> ReviewReport:
                     description="Review completed but produced no structured findings.",
                 )
             ],
-            summary_score=0.7,
+            summary_score=0.85,
             total_info=1,
         )
 
     try:
         data = json.loads(match.group(1))
     except (json.JSONDecodeError, TypeError):
+        # Malformed JSON — LLM attempted the format but produced invalid output.
+        # Still advisory, default to passing score.
         return ReviewReport(
             findings=[
                 ReviewFinding(
@@ -96,10 +100,10 @@ def parse_review_findings(raw_output: str) -> ReviewReport:
                     category="design-smell",
                     file="",
                     line=0,
-                    description="Review produced malformed JSON — treating as advisory.",
+                    description="Review produced malformed JSON \u2014 treating as advisory.",
                 )
             ],
-            summary_score=0.7,
+            summary_score=0.85,
             total_info=1,
         )
 

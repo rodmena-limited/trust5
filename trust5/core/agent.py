@@ -25,6 +25,18 @@ MAX_HISTORY_MESSAGES = AGENT_MAX_HISTORY_MESSAGES
 
 # Tools that modify the workspace — used by idle detection.
 _WRITE_TOOLS = frozenset({"Write", "Edit", "Bash"})
+
+# Map tool names to specific TUI message codes for visual distinction.
+_TOOL_EMIT_CODE: dict[str, str] = {
+    "Bash": M.TBSH,
+    "Read": M.TRED,
+    "ReadFiles": M.TRED,
+    "Write": M.TWRT,
+    "Edit": M.TEDT,
+    "Glob": M.TGLB,
+    "Grep": M.TGRP,
+    "InstallPackage": M.TPKG,
+}
 # How many consecutive empty (0-char, no tool call) responses to tolerate
 # before accepting the empty result.  Transient LLM failures sometimes
 # produce a single empty response; retrying the same turn usually fixes it.
@@ -283,7 +295,7 @@ class Agent:
             return f"Invalid JSON arguments for {name}: {str(args_str)[:200]}"
 
         args_summary = self._summarize_args(name, args)
-        emit(M.CTLC, f"[{self.name}] {name}: {args_summary}")
+        emit(_TOOL_EMIT_CODE.get(name, M.CTLC), f"[{self.name}] {name}: {args_summary}")
 
         try:
             result = self._execute_tool(name, args)

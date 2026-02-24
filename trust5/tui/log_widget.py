@@ -2,6 +2,7 @@ import os
 from typing import Any
 
 from rich.box import ROUNDED
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
@@ -21,6 +22,7 @@ from .theme import (
     C_BG,
     C_BLUE,
     C_CHROME,
+    C_CYAN,
     C_DIM,
     C_DIM_PURPLE,
     C_GREEN,
@@ -245,9 +247,9 @@ class Trust5Log(RichLog):
                 box=ROUNDED,
             )
         elif code == M.RVRP:
-            # Review report: plain text in panel — Markdown collapses structured output
+            # Review report: LLM-generated content — render as Markdown
             renderable = Panel(
-                Text(content, style=C_TEXT),
+                Markdown(content),
                 title=f" {theme['title']} ",
                 border_style=theme["color"],
                 box=ROUNDED,
@@ -271,7 +273,7 @@ class Trust5Log(RichLog):
         elif code in (M.WDWN, M.WDER):
             border = C_RED if code == M.WDER else C_PURPLE
             renderable = Panel(
-                Text(content, style=C_TEXT),
+                Markdown(content),
                 title=f" {theme['title']} ",
                 border_style=border,
                 box=ROUNDED,
@@ -427,9 +429,17 @@ class Trust5Log(RichLog):
         # Repair start — bold copper
         if code == M.RSTR:
             return f"bold {C_AMBER}"
-        # Tool calls — sage (visible but subordinate)
-        if code in (M.TCAL, M.CTLC, M.TBSH, M.TRED, M.TWRT, M.TEDT, M.TGLB, M.TGRP, M.TPKG, M.TINI):
-            return C_TEAL
+        # Tool calls — each type gets its own color for scanability
+        if code == M.TBSH:
+            return C_AMBER  # Shell — copper (stands out as side-effect)
+        if code in (M.TRED, M.TGLB):
+            return C_CYAN  # File reads / glob — cyan (read-only, informational)
+        if code in (M.TWRT, M.TEDT):
+            return C_GREEN  # Writes / edits — green (mutation)
+        if code == M.TGRP:
+            return C_BLUE  # Search — gold (discovery)
+        if code in (M.TCAL, M.CTLC, M.TPKG, M.TINI):
+            return C_TEAL  # Generic tools — sage
         # Tool results — dim (background noise)
         if code in (M.TRES, M.CTLR):
             return C_DIM

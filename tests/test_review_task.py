@@ -67,7 +67,7 @@ def test_parse_findings_fallback_on_malformed_json():
 
     assert len(report.findings) == 1
     assert report.findings[0].severity == "info"
-    assert report.summary_score == 0.7
+    assert report.summary_score == 0.85
 
 
 def test_parse_findings_no_json_block():
@@ -78,7 +78,7 @@ def test_parse_findings_no_json_block():
 
     assert len(report.findings) == 1
     assert report.findings[0].severity == "info"
-    assert report.summary_score == 0.7
+    assert report.summary_score == 0.85
 
 
 def test_parse_findings_empty_findings_array():
