@@ -60,7 +60,7 @@ def summarize_errors(
             ],
             timeout=timeout,
         )
-        content = response.get("content", "")
+        content = response.get("message", {}).get("content", "")
         if isinstance(content, list):
             content = "\n".join(block.get("text", "") for block in content if isinstance(block, dict))
         summary = str(content).strip()

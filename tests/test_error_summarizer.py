@@ -15,10 +15,14 @@ class TestSummarizeErrors:
         raw = "E" * 33_000  # Must exceed 32k threshold to trigger LLM path
         mock_llm = MagicMock()
         mock_llm.chat.return_value = {
-            "content": (
-                "FAILURE_TYPE: test\nROOT_CAUSE: Something broke\n"
-                "FILES_AFFECTED:\n- app.py:10 bad import\nSUGGESTED_FIX: Fix the import"
-            )
+            "message": {
+                "role": "assistant",
+                "content": (
+                    "FAILURE_TYPE: test\nROOT_CAUSE: Something broke\n"
+                    "FILES_AFFECTED:\n- app.py:10 bad import\nSUGGESTED_FIX: Fix the import"
+                ),
+            },
+            "done": True,
         }
         with patch("trust5.core.error_summarizer.LLM") as llm_cls:
             llm_cls.for_tier.return_value = mock_llm
@@ -37,7 +41,7 @@ class TestSummarizeErrors:
     def test_llm_returns_short_response_uses_raw(self) -> None:
         raw = "Y" * 500
         mock_llm = MagicMock()
-        mock_llm.chat.return_value = {"content": "ok"}
+        mock_llm.chat.return_value = {"message": {"role": "assistant", "content": "ok"}, "done": True}
         with patch("trust5.core.error_summarizer.LLM") as llm_cls:
             llm_cls.for_tier.return_value = mock_llm
             result = summarize_errors(raw)
@@ -47,7 +51,10 @@ class TestSummarizeErrors:
         raw = "Z" * 33_000  # Must exceed 32k threshold to trigger LLM path
         mock_llm = MagicMock()
         mock_llm.chat.return_value = {
-            "content": [{"type": "text", "text": "FAILURE_TYPE: lint\nROOT_CAUSE: Missing semicolons everywhere"}]
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "FAILURE_TYPE: lint\nROOT_CAUSE: Missing semicolons everywhere"}
+            ]},
+            "done": True,
         }
         with patch("trust5.core.error_summarizer.LLM") as llm_cls:
             llm_cls.for_tier.return_value = mock_llm
@@ -57,7 +64,7 @@ class TestSummarizeErrors:
     def test_truncates_to_max_summary(self) -> None:
         raw = "A" * 500
         mock_llm = MagicMock()
-        mock_llm.chat.return_value = {"content": "B" * 5000}
+        mock_llm.chat.return_value = {"message": {"role": "assistant", "content": "B" * 5000}, "done": True}
         with patch("trust5.core.error_summarizer.LLM") as llm_cls:
             llm_cls.for_tier.return_value = mock_llm
             result = summarize_errors(raw)

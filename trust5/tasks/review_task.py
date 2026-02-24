@@ -132,23 +132,24 @@ class ReviewTask(Task):
     def execute(self, stage: StageExecution) -> TaskResult:
         project_root = stage.context.get("project_root", os.getcwd())
         profile_data = stage.context.get("language_profile", {})
-        config = self._load_config(project_root)
 
-        if not config.code_review_enabled:
-            emit(M.RVST, "Code review disabled — skipping")
-            return TaskResult.success(outputs={"review_passed": True, "review_skipped": True})
-
-        profile = self._build_profile(profile_data, project_root)
-        emit(M.RVST, f"Code review started [{profile.language}]")
-
-        # Build the review prompt
-        prompt = self._build_review_prompt(stage, project_root, profile)
-
-        # Load the system prompt from the asset file
-        system_prompt = self._load_system_prompt()
-
-        # Run the review agent
         try:
+            config = self._load_config(project_root)
+
+            if not config.code_review_enabled:
+                emit(M.RVST, "Code review disabled \u2014 skipping")
+                return TaskResult.success(outputs={"review_passed": True, "review_skipped": True})
+
+            profile = self._build_profile(profile_data, project_root)
+            emit(M.RVST, f"Code review started [{profile.language}]")
+
+            # Build the review prompt
+            prompt = self._build_review_prompt(stage, project_root, profile)
+
+            # Load the system prompt from the asset file
+            system_prompt = self._load_system_prompt()
+
+            # Run the review agent
             llm = LLM.for_tier(
                 tier=config.review_model_tier,
                 stage_name="review",
@@ -166,7 +167,10 @@ class ReviewTask(Task):
                     prompt,
                     max_turns=config.review_max_turns,
                 )
-        except (OSError, RuntimeError, ValueError) as e:  # review agent: LLM/tool/config errors
+        except Exception as e:
+            # Broad catch: review is advisory — any failure (LLMError, KeyError,
+            # TypeError, AttributeError, etc.) must not crash the pipeline.
+            logger.warning("Review task failed: %s", e, exc_info=True)
             emit(M.RVFL, f"Review agent error: {e}")
             return TaskResult.failed_continue(
                 error=f"Review agent failed: {e}",
@@ -187,7 +191,7 @@ class ReviewTask(Task):
         if passed:
             emit(
                 M.RVPS,
-                f"Code review PASSED — score {report.summary_score:.2f} "
+                f"Code review PASSED \u2014 score {report.summary_score:.2f} "
                 f"({report.total_warnings} warnings, {report.total_info} info)",
             )
             return TaskResult.success(
@@ -198,7 +202,7 @@ class ReviewTask(Task):
         if config.code_review_jump_to_repair and report.total_errors > 0:
             emit(
                 M.RVFL,
-                f"Code review FAILED — score {report.summary_score:.2f} "
+                f"Code review FAILED \u2014 score {report.summary_score:.2f} "
                 f"({report.total_errors} errors). Jumping to repair.",
             )
             jump_repair_ref = stage.context.get("jump_repair_ref", "repair")
@@ -217,7 +221,7 @@ class ReviewTask(Task):
         # Advisory mode: report findings but don't block pipeline
         emit(
             M.RVFL,
-            f"Code review FAILED (advisory) — score {report.summary_score:.2f} "
+            f"Code review FAILED (advisory) \u2014 score {report.summary_score:.2f} "
             f"({report.total_errors} errors, {report.total_warnings} warnings)",
         )
         return TaskResult.failed_continue(
@@ -305,16 +309,18 @@ class ReviewTask(Task):
 
     @staticmethod
     def _load_config(project_root: str) -> QualityConfig:
+        """Load quality configuration for code review."""
         try:
             mgr = ConfigManager(project_root)
             cfg = mgr.load_config()
             return cfg.quality
         except (OSError, ValueError, KeyError) as e:  # config loading errors
-            logger.warning("Failed to load config for review: %s — using defaults", e)
+            logger.warning("Failed to load config for review: %s \u2014 using defaults", e)
             return QualityConfig()
 
     @staticmethod
     def _build_profile(data: dict[str, Any], project_root: str = ".") -> LanguageProfile:
+        """Build a language profile from context data or detect from project."""
         if not data:
             detected = detect_language(project_root)
             return get_profile(detected)
@@ -372,6 +378,7 @@ class ReviewTask(Task):
 
     @staticmethod
     def _build_outputs(report: ReviewReport, passed: bool) -> dict[str, Any]:
+        """Build output dictionary from review report."""
         return {
             "review_passed": passed,
             "review_score": report.summary_score,
@@ -384,7 +391,7 @@ class ReviewTask(Task):
     def _format_repair_feedback(report: ReviewReport) -> str:
         """Format review findings as repair input."""
         parts = [
-            "CODE REVIEW FAILED — fix the following issues:\n",
+            "CODE REVIEW FAILED \u2014 fix the following issues:\n",
         ]
         for finding in report.findings:
             if finding.severity == "error":

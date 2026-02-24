@@ -32,7 +32,8 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, bool, li
     """Inspect stage outputs for test/quality/review/compliance failures.
 
     Returns:
-        (has_test_failures, has_quality_failure, has_review_failure, has_compliance_failure, detail_messages)
+        (has_test_failures, has_quality_failure, has_review_failure,
+         has_compliance_failure, detail_messages)
     """
     has_test_failures = False
     has_quality_failure = False
@@ -43,7 +44,7 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, bool, li
     for stage in workflow.stages:
         outputs = stage.outputs or {}
 
-        # Check compliance on any stage that has compliance data (even SUCCEEDED)
+        # --- SPEC compliance reporting & failure detection ---
         spec_ratio = outputs.get("spec_compliance_ratio")
         if spec_ratio is not None:
             try:
@@ -55,27 +56,32 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, bool, li
                     details.append(f"  - Stage '{stage.ref_id}': SPEC compliance {met}/{total} (ratio: {ratio:.2f})")
                     for uc in unmet[:5]:
                         details.append(f"      {uc}")
-                    if ratio < 0.7:
-                        has_compliance_failure = True
+                if outputs.get("compliance_passed") is False:
+                    has_compliance_failure = True
             except (ValueError, TypeError):
                 pass
 
+        # --- Test failure detection (only for failed/terminal stages) ---
         if stage.status not in (WorkflowStatus.FAILED_CONTINUE, WorkflowStatus.TERMINAL):
             continue
 
-        if outputs.get("tests_passed") is False or outputs.get("tests_partial"):
+        if outputs.get("tests_passed") is False or outputs.get("tests_partial") is True:
             has_test_failures = True
             attempts = outputs.get("repair_attempts_used", "?")
             details.append(f"  - Stage '{stage.ref_id}': tests failing (repair attempts: {attempts})")
+
         if stage.status == WorkflowStatus.TERMINAL:
             error = getattr(stage, "error", "") or ""
             if "tests still failing" in error.lower() or "reimplementation" in error.lower():
                 has_test_failures = True
                 details.append(f"  - Stage '{stage.ref_id}': {error[:200]}")
+
+        # --- Quality & review failure detection ---
         if outputs.get("quality_passed") is False:
             has_quality_failure = True
             score = outputs.get("quality_score", "?")
             details.append(f"  - Stage '{stage.ref_id}': quality gate failed (score: {score})")
+
         if outputs.get("review_passed") is False:
             has_review_failure = True
             r_score = outputs.get("review_score", "?")
@@ -90,19 +96,23 @@ def finalize_status(
     prefix: str = "Status",
 ) -> None:
     """Check stage-level failures hidden behind SUCCEEDED.
-    TEST failures and SPEC COMPLIANCE failures override to TERMINAL (resumable).
-    Quality/Review-only failures keep SUCCEEDED with warnings.
+
+    ANY failure (test, quality, review, compliance) overrides to TERMINAL.
+    A SUCCEEDED pipeline means ALL gates passed.
     """
     status_name = result.status.name if hasattr(result.status, "name") else str(result.status)
 
     if status_name in ("SUCCEEDED", "COMPLETED"):
         has_test_fail, has_quality_fail, has_review_fail, has_compliance_fail, details = check_stage_failures(result)
+        any_failure = has_test_fail or has_quality_fail or has_review_fail or has_compliance_fail
 
-        if has_test_fail:
+        if any_failure:
             result.status = WorkflowStatus.TERMINAL
             store.update_status(result)
 
-            problems = ["tests failing"]
+            problems: list[str] = []
+            if has_test_fail:
+                problems.append("tests failing")
             if has_quality_fail:
                 problems.append("quality gate failed")
             if has_review_fail:
@@ -112,34 +122,12 @@ def finalize_status(
             emit(M.WFAL, f"{prefix}: FAILED ({', '.join(problems)})")
             for detail in details:
                 emit(M.WFAL, detail)
-            emit(M.WFAL, "Run 'trust5 resume' to retry from the failed stage.")
-        elif has_compliance_fail:
-            result.status = WorkflowStatus.TERMINAL
-            store.update_status(result)
-
-            problems = ["SPEC compliance below threshold"]
-            if has_quality_fail:
-                problems.append("quality gate failed")
-            if has_review_fail:
-                problems.append("code review failed")
-            emit(M.WFAL, f"{prefix}: FAILED ({', '.join(problems)})")
-            emit(M.WFAL, "SPEC COMPLIANCE FAILURE — the following criteria are not addressed:")
-            for detail in details:
-                emit(M.WFAL, detail)
-            emit(M.WFAL, "Run 'trust5 resume' to retry from the failed stage.")
-        elif has_quality_fail or has_review_fail:
-            issues = []
-            if has_quality_fail:
-                issues.append("quality gate")
-            if has_review_fail:
-                issues.append("code review")
-            emit(M.WSUC, f"{prefix}: {status_name} (with {', '.join(issues)} warnings)")
-            for detail in details:
-                emit(M.SWRN, detail)
-            if has_quality_fail:
-                emit(M.SWRN, "Quality gate did not pass. Run 'trust5 loop' to improve.")
-            if has_review_fail:
-                emit(M.SWRN, "Code review failed. Review code quality manually.")
+            if has_compliance_fail:
+                emit(M.WFAL, "SPEC COMPLIANCE FAILURE \u2014 criteria not addressed in source code.")
+            if has_test_fail or has_compliance_fail:
+                emit(M.WFAL, "Run 'trust5 resume' to retry from the failed stage.")
+            else:
+                emit(M.WFAL, "Run 'trust5 loop' to address remaining issues.")
         else:
             emit(M.WSUC, f"{prefix}: {status_name}")
     elif status_name in ("FAILED_CONTINUE",):

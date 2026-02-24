@@ -30,7 +30,6 @@ def make_workflow(status: WorkflowStatus, stages: list) -> MagicMock:
 
 
 def test_check_stage_failures_detects_test_failure():
-    """FAILED_CONTINUE stage with tests_passed=False is detected."""
     stages = [
         make_stage("setup", WorkflowStatus.SUCCEEDED),
         make_stage("validate", WorkflowStatus.FAILED_CONTINUE, {"tests_passed": False, "repair_attempts_used": 5}),
@@ -46,7 +45,6 @@ def test_check_stage_failures_detects_test_failure():
 
 
 def test_check_stage_failures_detects_quality_failure():
-    """FAILED_CONTINUE stage with quality_passed=False is detected."""
     stages = [
         make_stage("setup", WorkflowStatus.SUCCEEDED),
         make_stage("quality", WorkflowStatus.FAILED_CONTINUE, {"quality_passed": False, "quality_score": 0.55}),
@@ -62,7 +60,6 @@ def test_check_stage_failures_detects_quality_failure():
 
 
 def test_check_stage_failures_detects_terminal_test_failure():
-    """TERMINAL stage with 'tests still failing' in error is detected."""
     stages = [
         make_stage(
             "validate",
@@ -80,7 +77,6 @@ def test_check_stage_failures_detects_terminal_test_failure():
 
 
 def test_check_stage_failures_detects_reimplementation_error():
-    """TERMINAL stage with 'reimplementation' in error is detected."""
     stages = [
         make_stage(
             "validate",
@@ -97,7 +93,6 @@ def test_check_stage_failures_detects_reimplementation_error():
 
 
 def test_check_stage_failures_ignores_succeeded():
-    """SUCCEEDED stages are skipped entirely."""
     stages = [
         make_stage("setup", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
         make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
@@ -113,7 +108,6 @@ def test_check_stage_failures_ignores_succeeded():
 
 
 def test_check_stage_failures_detects_tests_partial():
-    """FAILED_CONTINUE stage with tests_partial=True is a test failure."""
     stages = [
         make_stage("validate", WorkflowStatus.FAILED_CONTINUE, {"tests_partial": True}),
     ]
@@ -124,12 +118,74 @@ def test_check_stage_failures_detects_tests_partial():
     assert has_test is True
 
 
+def test_check_stage_failures_compliance_uses_output_flag():
+    """compliance_passed=False in outputs triggers compliance failure (not a hardcoded ratio)."""
+    stages = [
+        make_stage(
+            "quality",
+            WorkflowStatus.FAILED_CONTINUE,
+            {
+                "quality_passed": False,
+                "spec_compliance_ratio": 0.71,
+                "compliance_passed": False,
+                "spec_criteria_met": 12,
+                "spec_criteria_total": 17,
+                "spec_unmet_criteria": ["[UBIQ] Missing JSON content-type"],
+            },
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+
+    _, _, _, has_compliance, details = check_stage_failures(workflow)
+
+    assert has_compliance is True
+    assert any("12/17" in d for d in details)
+
+
+def test_check_stage_failures_compliance_passed_true_no_failure():
+    """compliance_passed=True means no compliance failure even if ratio < 1.0."""
+    stages = [
+        make_stage(
+            "quality",
+            WorkflowStatus.SUCCEEDED,
+            {
+                "quality_passed": True,
+                "spec_compliance_ratio": 0.71,
+                "compliance_passed": True,
+                "spec_criteria_met": 12,
+                "spec_criteria_total": 17,
+            },
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+
+    _, _, _, has_compliance, details = check_stage_failures(workflow)
+
+    assert has_compliance is False
+    assert any("12/17" in d for d in details)
+
+
+def test_check_stage_failures_detects_review_failure():
+    stages = [
+        make_stage(
+            "review",
+            WorkflowStatus.FAILED_CONTINUE,
+            {"review_passed": False, "review_score": 0.5},
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+
+    _, _, has_review, _, details = check_stage_failures(workflow)
+
+    assert has_review is True
+    assert any("review" in d.lower() for d in details)
+
+
 # ── finalize_status tests ──
 
 
 @patch("trust5.core.runner.emit")
-def test_finalize_status_overrides_to_terminal(mock_emit):
-    """SUCCEEDED workflow with test failures is overridden to TERMINAL."""
+def test_finalize_status_overrides_to_terminal_on_test_failure(mock_emit):
     stages = [
         make_stage("setup", WorkflowStatus.SUCCEEDED),
         make_stage("validate", WorkflowStatus.FAILED_CONTINUE, {"tests_passed": False, "repair_attempts_used": 5}),
@@ -141,14 +197,13 @@ def test_finalize_status_overrides_to_terminal(mock_emit):
 
     assert workflow.status == WorkflowStatus.TERMINAL
     store.update_status.assert_called_once_with(workflow)
-    # Verify WFAL messages were emitted
-    emit_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
-    assert len(emit_calls) >= 1
+    wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    assert len(wfal_calls) >= 1
 
 
 @patch("trust5.core.runner.emit")
-def test_finalize_status_keeps_succeeded_with_quality_warning(mock_emit):
-    """Quality fail only keeps SUCCEEDED but emits warnings."""
+def test_finalize_status_overrides_to_terminal_on_quality_failure(mock_emit):
+    """Quality gate failure alone must be TERMINAL — not SUCCEEDED with warnings."""
     stages = [
         make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
         make_stage("quality", WorkflowStatus.FAILED_CONTINUE, {"quality_passed": False, "quality_score": 0.60}),
@@ -158,19 +213,33 @@ def test_finalize_status_keeps_succeeded_with_quality_warning(mock_emit):
 
     finalize_status(workflow, store)
 
-    # Status should remain SUCCEEDED (not overridden)
-    assert workflow.status == WorkflowStatus.SUCCEEDED
-    store.update_status.assert_not_called()
-    # Should emit WSUC (success with warnings) and SWRN
-    wsuc_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WSUC"]
-    swrn_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "SWRN"]
-    assert len(wsuc_calls) >= 1
-    assert len(swrn_calls) >= 1
+    assert workflow.status == WorkflowStatus.TERMINAL
+    store.update_status.assert_called_once_with(workflow)
+    wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    assert any("quality gate failed" in c[0][1] for c in wfal_calls)
+
+
+@patch("trust5.core.runner.emit")
+def test_finalize_status_overrides_to_terminal_on_review_failure(mock_emit):
+    """Review failure alone must be TERMINAL — not SUCCEEDED with warnings."""
+    stages = [
+        make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
+        make_stage("review", WorkflowStatus.FAILED_CONTINUE, {"review_passed": False, "review_score": 0.4}),
+        make_stage("quality", WorkflowStatus.SUCCEEDED, {"quality_passed": True, "quality_score": 0.90}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    assert workflow.status == WorkflowStatus.TERMINAL
+    store.update_status.assert_called_once_with(workflow)
+    wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    assert any("code review failed" in c[0][1] for c in wfal_calls)
 
 
 @patch("trust5.core.runner.emit")
 def test_finalize_status_clean_succeeded(mock_emit):
-    """Clean SUCCEEDED workflow emits simple success."""
     stages = [
         make_stage("setup", WorkflowStatus.SUCCEEDED),
         make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
@@ -190,7 +259,6 @@ def test_finalize_status_clean_succeeded(mock_emit):
 
 @patch("trust5.core.runner.emit")
 def test_finalize_status_failed_continue_workflow(mock_emit):
-    """FAILED_CONTINUE workflow status emits WFAL."""
     workflow = make_workflow(WorkflowStatus.FAILED_CONTINUE, [])
     store = MagicMock()
 
@@ -203,7 +271,6 @@ def test_finalize_status_failed_continue_workflow(mock_emit):
 
 @patch("trust5.core.runner.emit")
 def test_finalize_status_terminal_workflow(mock_emit):
-    """TERMINAL workflow status emits WFAL with status name."""
     workflow = make_workflow(WorkflowStatus.TERMINAL, [])
     store = MagicMock()
 
@@ -216,7 +283,6 @@ def test_finalize_status_terminal_workflow(mock_emit):
 
 @patch("trust5.core.runner.emit")
 def test_finalize_status_both_test_and_quality_failures(mock_emit):
-    """Both test and quality failures: TERMINAL override with combined message."""
     stages = [
         make_stage("validate", WorkflowStatus.FAILED_CONTINUE, {"tests_passed": False}),
         make_stage("quality", WorkflowStatus.FAILED_CONTINUE, {"quality_passed": False, "quality_score": 0.4}),
@@ -228,7 +294,6 @@ def test_finalize_status_both_test_and_quality_failures(mock_emit):
 
     assert workflow.status == WorkflowStatus.TERMINAL
     store.update_status.assert_called_once()
-    # Both problems should be mentioned
     wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
     failure_msg = wfal_calls[0][0][1]
     assert "tests failing" in failure_msg
@@ -237,7 +302,7 @@ def test_finalize_status_both_test_and_quality_failures(mock_emit):
 
 @patch("trust5.core.runner.emit")
 def test_finalize_status_compliance_failure_overrides_to_terminal(mock_emit):
-    """SPEC compliance failure overrides SUCCEEDED to TERMINAL (resumable)."""
+    """compliance_passed=False in outputs triggers TERMINAL."""
     stages = [
         make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
         make_stage(
@@ -247,6 +312,7 @@ def test_finalize_status_compliance_failure_overrides_to_terminal(mock_emit):
                 "quality_passed": False,
                 "quality_score": 0.975,
                 "spec_compliance_ratio": 0.667,
+                "compliance_passed": False,
                 "spec_criteria_met": 10,
                 "spec_criteria_total": 15,
                 "spec_unmet_criteria": ["[UBIQ] Missing JSON content-type"],
@@ -258,19 +324,104 @@ def test_finalize_status_compliance_failure_overrides_to_terminal(mock_emit):
 
     finalize_status(workflow, store)
 
-    # Must override to TERMINAL — incomplete SPEC is not success
     assert workflow.status == WorkflowStatus.TERMINAL
     store.update_status.assert_called_once_with(workflow)
     wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
-    assert len(wfal_calls) >= 2  # FAILED message + SPEC COMPLIANCE FAILURE message
-    assert "SPEC compliance" in wfal_calls[0][0][1]
+    assert any("SPEC compliance" in c[0][1] for c in wfal_calls)
+
+
+@patch("trust5.core.runner.emit")
+def test_finalize_status_compliance_071_with_compliance_passed_true(mock_emit):
+    """Ratio 0.71 with compliance_passed=True (config threshold <= 0.71) is not a failure."""
+    stages = [
+        make_stage(
+            "quality",
+            WorkflowStatus.SUCCEEDED,
+            {
+                "quality_passed": True,
+                "spec_compliance_ratio": 0.71,
+                "compliance_passed": True,
+                "spec_criteria_met": 12,
+                "spec_criteria_total": 17,
+            },
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    assert workflow.status == WorkflowStatus.SUCCEEDED
+    store.update_status.assert_not_called()
+
+
+@patch("trust5.core.runner.emit")
+def test_finalize_status_exact_user_scenario(mock_emit):
+    """Reproduces the exact failure: ratio 0.71, quality 0.934, review failed, gate failed.
+
+    This is the bug that was missed in certification. Pipeline must report FAILED, not SUCCEEDED.
+    """
+    stages = [
+        make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
+        make_stage(
+            "review",
+            WorkflowStatus.FAILED_CONTINUE,
+            {"review_passed": False, "review_score": 0.6},
+        ),
+        make_stage(
+            "quality",
+            WorkflowStatus.FAILED_CONTINUE,
+            {
+                "quality_passed": False,
+                "quality_score": 0.934,
+                "spec_compliance_ratio": 0.71,
+                "compliance_passed": True,
+                "spec_criteria_met": 12,
+                "spec_criteria_total": 17,
+                "spec_unmet_criteria": [
+                    "[UBIQ] The API shall return JSON responses",
+                    "[EVENT] GET /api/todos/<id>",
+                    "[EVENT] PUT /api/todos/<id>",
+                    "[EVENT] PATCH /api/todos/<id>",
+                    "[EVENT] DELETE /api/todos/<id>",
+                ],
+            },
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    assert workflow.status == WorkflowStatus.TERMINAL
+    store.update_status.assert_called_once_with(workflow)
+    wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    failure_msg = wfal_calls[0][0][1]
+    assert "FAILED" in failure_msg
+    assert "quality gate failed" in failure_msg
+    assert "code review failed" in failure_msg
+
+
+@patch("trust5.core.runner.emit")
+def test_finalize_status_quality_failure_suggests_loop(mock_emit):
+    """Quality-only failure should suggest 'trust5 loop', not 'trust5 resume'."""
+    stages = [
+        make_stage("quality", WorkflowStatus.FAILED_CONTINUE, {"quality_passed": False, "quality_score": 0.60}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
+    assert any("trust5 loop" in c[0][1] for c in wfal_calls)
+    assert not any("trust5 resume" in c[0][1] for c in wfal_calls)
 
 
 # ── wait_for_completion tests ──
 
 
 def test_wait_for_completion_returns_on_terminal():
-    """wait_for_completion returns immediately when workflow is already terminal."""
     store = MagicMock()
     wf = MagicMock()
     wf.status = WorkflowStatus.SUCCEEDED
@@ -282,24 +433,21 @@ def test_wait_for_completion_returns_on_terminal():
 
 
 def test_wait_for_completion_returns_early_on_stop_event():
-    """When stop_event is set, wait_for_completion exits immediately."""
     store = MagicMock()
     wf = MagicMock()
     wf.status = WorkflowStatus.RUNNING
     store.retrieve.return_value = wf
 
     stop = threading.Event()
-    stop.set()  # Already signaled — should return on first iteration
+    stop.set()
 
     result = wait_for_completion(store, "wf-123", timeout=600.0, stop_event=stop)
 
     assert result.status == WorkflowStatus.RUNNING
-    # Should have called retrieve exactly once (early exit, no polling)
     assert store.retrieve.call_count == 1
 
 
 def test_wait_for_completion_ignores_none_stop_event():
-    """When stop_event=None (default), the function polls normally."""
     store = MagicMock()
     wf = MagicMock()
     wf.status = WorkflowStatus.SUCCEEDED
@@ -314,17 +462,15 @@ def test_wait_for_completion_ignores_none_stop_event():
 
 
 def test_progressive_poll_constants_exist():
-    """Progressive polling constants are defined and ordered correctly."""
     from trust5.core.runner import POLL_INTERVAL, POLL_INTERVAL_FAST, POLL_INTERVAL_MODERATE, POLL_INTERVAL_SLOW
 
     assert POLL_INTERVAL_FAST == 0.5
     assert POLL_INTERVAL_MODERATE == 2.0
     assert POLL_INTERVAL_SLOW == 5.0
-    assert POLL_INTERVAL == POLL_INTERVAL_FAST  # backward compat
+    assert POLL_INTERVAL == POLL_INTERVAL_FAST
 
 
 def test_progressive_poll_constants_ordered():
-    """Fast < Moderate < Slow."""
     from trust5.core.runner import POLL_INTERVAL_FAST, POLL_INTERVAL_MODERATE, POLL_INTERVAL_SLOW
 
     assert POLL_INTERVAL_FAST < POLL_INTERVAL_MODERATE < POLL_INTERVAL_SLOW
@@ -332,10 +478,8 @@ def test_progressive_poll_constants_ordered():
 
 @patch("trust5.core.runner.time")
 def test_wait_for_completion_uses_fast_poll_initially(mock_time):
-    """Within first 60s, polling uses POLL_INTERVAL_FAST."""
     store = MagicMock()
 
-    # First call: RUNNING, second call: SUCCEEDED
     wf_running = MagicMock()
     wf_running.status = WorkflowStatus.RUNNING
     wf_done = MagicMock()
@@ -343,8 +487,6 @@ def test_wait_for_completion_uses_fast_poll_initially(mock_time):
 
     store.retrieve.side_effect = [wf_running, wf_done]
 
-    # Simulate: monotonic() returns 100, 100 (start), 100+0.5 (loop check < deadline), 100 (elapsed calc)
-    # Keep elapsed < 60 to stay in FAST interval
     mock_time.monotonic.side_effect = [100.0, 100.0, 100.5, 100.0, 100.5, 101.0]
     mock_time.sleep = MagicMock()
 
@@ -353,6 +495,5 @@ def test_wait_for_completion_uses_fast_poll_initially(mock_time):
     result = wait_for_completion(store, "wf-test", timeout=600.0)
 
     assert result.status == WorkflowStatus.SUCCEEDED
-    # Should have slept with FAST interval
     if mock_time.sleep.called:
         mock_time.sleep.assert_called_with(POLL_INTERVAL_FAST)

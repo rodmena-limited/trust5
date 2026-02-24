@@ -154,14 +154,14 @@ class QualityTask(Task):
         compliance_passed = (
             compliance_report is None or compliance_report.compliance_ratio >= config.spec_compliance_threshold
         )
-        compliance_outputs: dict[str, object] = {}
+        compliance_outputs: dict[str, object] = {"compliance_passed": compliance_passed}
         if compliance_report is not None:
-            compliance_outputs = {
+            compliance_outputs.update({
                 "spec_compliance_ratio": compliance_report.compliance_ratio,
                 "spec_criteria_met": compliance_report.criteria_met,
                 "spec_criteria_total": compliance_report.criteria_total,
                 "spec_unmet_criteria": list(compliance_report.unmet_criteria),
-            }
+            })
 
         has_phase_blockers = any(i.severity == "error" for i in phase_issues)
         if meets_quality_gate(report, config) and not has_phase_blockers and compliance_passed:

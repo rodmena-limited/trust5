@@ -4,8 +4,6 @@ from rich.text import Text
 from textual.reactive import reactive
 from textual.widgets import Static
 
-# Re-export from submodules for backward compatibility.
-# app.py imports these names from .widgets — keep them available here.
 from .log_widget import Trust5Log, _format_count, _parse_kv  # noqa: F401
 from .theme import (
     C_AMBER,
@@ -13,6 +11,7 @@ from .theme import (
     C_BLUE,
     C_CHROME,
     C_DIM,
+    C_DIM_RED,
     C_GREEN,
     C_LAVENDER,
     C_MUTED,
@@ -23,13 +22,11 @@ from .theme import (
 )
 
 __all__ = [
-    # Re-exports
     "Trust5Log",
     "_format_count",
     "_parse_kv",
     "STATUS_BAR_ONLY",
     "get_theme",
-    # Defined here
     "HeaderWidget",
     "StatusBar0",
     "StatusBar1",
@@ -57,7 +54,6 @@ class HeaderWidget(Static):
         ("quality", "GATE"),
     ]
 
-    # Phases that repeat per-module in parallel pipelines.
     _MODULE_PHASES: frozenset[str] = frozenset(
         {
             "write_tests",
@@ -69,15 +65,14 @@ class HeaderWidget(Static):
 
     current_stage: reactive[str] = reactive("plan")
     completed_stages: reactive[set[str]] = reactive(set)
+    failed_stages: reactive[set[str]] = reactive(set)
     stage_total: reactive[int] = reactive(0)
     stages_done: reactive[int] = reactive(0)
     module_count: reactive[int] = reactive(0)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        # Per-phase module tracking: {phase_key: set of module labels done}
         self._phase_modules: dict[str, set[str]] = {}
-        # Dedup for stage counter: set of "phase:module" keys
         self._counted_stages: set[str] = set()
 
     def _stage_index(self, key: str) -> int:
@@ -94,11 +89,9 @@ class HeaderWidget(Static):
         if phase_key not in self._phase_modules:
             self._phase_modules[phase_key] = set()
         self._phase_modules[phase_key].add(module)
-        # Auto-complete the phase when all modules are done.
         mc = self.module_count
         if mc > 0 and len(self._phase_modules[phase_key]) >= mc:
             self.completed_stages = self.completed_stages | {phase_key}
-        # Refresh is handled by _route_batch() in app.py — no per-call refresh needed.
 
     def count_stage_done(self, stage_id: str) -> None:
         """Increment the progress counter (deduped by stage_id)."""
@@ -118,20 +111,14 @@ class HeaderWidget(Static):
         cur_idx = self._stage_index(self.current_stage)
         if status == "success":
             self.completed_stages = self.completed_stages | {key}
+            self.failed_stages = self.failed_stages - {key}
         elif status == "failed":
-            # Un-checkmark this stage if it was previously marked complete
-            # (e.g. quality gate failed after a retry cycle).
             if key in self.completed_stages:
                 self.completed_stages = self.completed_stages - {key}
+            self.failed_stages = self.failed_stages | {key}
         elif status == "running":
-            # DO NOT auto-complete preceding stages.  Stages are only
-            # completed via explicit success events (VPAS, QPAS, RVPS).
-            # Auto-completion caused false checkmarks during repair/quality
-            # loops where preceding stages cycle between running and failed.
-            pass
-        # Allow the active indicator to move both forward and backward.
-        # During quality→repair→validate cycles, the header must track
-        # the actual active phase, not just advance forward.
+            # Clear failed state when stage restarts (repair cycles).
+            self.failed_stages = self.failed_stages - {key}
         new_idx = self._stage_index(key)
         allow_backward = key in ("validate", "repair", "review", "quality")
         if new_idx >= cur_idx or allow_backward:
@@ -139,7 +126,6 @@ class HeaderWidget(Static):
 
     @staticmethod
     def _match_stage_key(ref: str) -> str | None:
-        """Match event content to a header stage key."""
         if "test-writer" in ref or "test_writer" in ref or "write test" in ref:
             return "write_tests"
         if "implement" in ref:
@@ -160,7 +146,6 @@ class HeaderWidget(Static):
         text = Text()
         text.append(" TRUST5 ", style=f"bold {C_BG} on {C_BLUE}")
 
-        # Progress counter: actual completed stages / total
         if self.stage_total > 0:
             text.append(f"  {self.stages_done}/{self.stage_total}  ", style=C_MUTED)
         else:
@@ -176,13 +161,15 @@ class HeaderWidget(Static):
 
             if key in self.completed_stages:
                 text.append(f" \u2713 {label} ", style=f"bold {C_GREEN}")
+            elif key in self.failed_stages and key != self.current_stage:
+                # Failed stage (advisory, e.g. review FAILED_CONTINUE) — dim red ✗
+                text.append(f" \u2717 {label} ", style=C_DIM_RED)
             elif key == self.current_stage:
                 if show_frac:
                     text.append(f" {label} {done}/{mc} ", style=f"bold {C_BG} on {C_LAVENDER}")
                 else:
                     text.append(f" {label} ", style=f"bold {C_BG} on {C_LAVENDER}")
             elif show_frac and done > 0:
-                # Not active, but some modules completed — show progress
                 text.append(f" {label} {done}/{mc} ", style=C_SECONDARY)
             else:
                 text.append(f" {label} ", style=C_MUTED)
@@ -204,7 +191,6 @@ class StatusBar1(Static):
     thinking: reactive[bool] = reactive(False)
     waiting: reactive[bool] = reactive(False)
 
-    # Braille spinner — 10 frames at 80ms = smooth 12.5 FPS rotation
     _SPINNER_FRAMES = (
         "\u280b",
         "\u2819",
@@ -303,7 +289,6 @@ class StatusBar0(Static):
         if self.context_info:
             text.append(f"  {self.context_info}", style=C_AMBER)
 
-        # Keybindings
         text.append("  ", style=C_DIM)
         text.append("^C", style=C_SECONDARY)
         text.append(" quit  ", style=C_DIM)
