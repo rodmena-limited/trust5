@@ -128,7 +128,7 @@ class ImplementerTask(Task):
             )
 
             try:
-                result = agent.run(user_prompt, max_turns=25)
+                result = agent.run(user_prompt, max_turns=int(stage.context.get("max_turns", 25)))
                 return TaskResult.success(
                     outputs={
                         "result": result,

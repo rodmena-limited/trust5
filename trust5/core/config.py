@@ -203,7 +203,7 @@ class QualityConfig(BaseModel):
     code_review_enabled: bool = True
     code_review_jump_to_repair: bool = False
     review_model_tier: str = "good"
-    review_max_turns: int = 15
+    review_max_turns: int = 8
     # LLM-driven overrides (set from planner output, not YAML config)
     plan_lint_command: str | None = None
     plan_test_command: str | None = None
@@ -272,6 +272,7 @@ class AgentConfig(BaseModel):
     """Agent execution limits."""
 
     max_turns: int = 20
+    simple_max_turns: int = 8  # Reduced turns for trivial projects (≤3 source files)
     max_history_messages: int = 60
     tool_result_limit: int = 8000
     default_timeout: int = 7200  # 2 hr wall-clock per agent run

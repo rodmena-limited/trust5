@@ -26,7 +26,7 @@ from stabilize import Workflow
 
 from .commands.resume_cmd import resume_logic
 from .core import constants
-from .core.config import ensure_global_config
+from .core.config import ensure_global_config, load_global_config
 from .core.git import GitManager
 from .core.init import ProjectInitializer
 from .core.message import M, emit
@@ -43,6 +43,7 @@ from .tui_runner import (
     _run_workflow_dispatch,
 )
 from .workflows.loop_workflow import create_loop_workflow
+from .workflows.module_spec import ModuleSpec
 from .workflows.parallel_pipeline import (
     create_parallel_develop_workflow,
     extract_plan_output,
@@ -206,7 +207,19 @@ def develop(request: str) -> None:
                 emit(M.WFAL, "Plan phase produced no output after all attempts — cannot proceed.")
                 return None
 
+        if plan_result is None:
+            emit(M.WFAL, "Plan workflow returned no result — cannot proceed.")
+            return None
+
         modules = parse_modules(plan_result)
+
+        # Safety net: collapse trivial multi-module plans to serial
+        if len(modules) > 1:
+            total_files = sum(len(m.files) for m in modules)
+            if total_files <= 3:
+                emit(M.SINF, f"Collapsing {len(modules)} modules ({total_files} total files) to serial pipeline")
+                modules = [ModuleSpec(id="main", name="Main")]
+
         plan_config = parse_plan_output(plan_output)
         emit(
             M.SINF,
@@ -220,14 +233,22 @@ def develop(request: str) -> None:
         # Phase 2: Implement (fresh processor/store to avoid stale state)
         p2_processor, p2_orchestrator, p2_store, _q2, db2 = _setup_phase()
 
+        # Determine whether this is a trivial project (≤3 source files)
+        total_source_files = sum(len(m.files) for m in modules) if modules else 0
+        is_trivial = len(modules) <= 1 and total_source_files <= 3
         if len(modules) <= 1:
             serial_wf = create_develop_workflow(request)
             stripped = strip_plan_stage(serial_wf.stages, plan_output)
+            gcfg = load_global_config()
+            simple_turns = gcfg.agent.simple_max_turns
             for stage in stripped:
                 if stage.ref_id == "setup":
                     stage.context["setup_commands"] = list(plan_config.setup_commands)
                 if stage.ref_id in ("write_tests", "implement", "validate", "quality", "review"):
                     stage.context["plan_config"] = plan_config_dict
+                # Reduce agent turns for trivial projects
+                if is_trivial and stage.ref_id in ("write_tests", "implement"):
+                    stage.context["max_turns"] = simple_turns
             impl_wf = Workflow.create(
                 application="trust5",
                 name="Develop Pipeline",

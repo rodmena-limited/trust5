@@ -84,7 +84,7 @@ Module rules:
 - Maximum 5 modules — prefer fewer, larger modules over many small ones
 - Every planned source file must belong to exactly one module
 - Test files map to their source module
-- For simple single-file projects, do NOT include a MODULES block (serial pipeline is used automatically)
+- For projects with 3 or fewer source files, or single-service CRUD APIs (e.g., a todo app, a calculator, a URL shortener), do NOT include a MODULES block — serial pipeline handles these faster and more reliably. Only decompose when you have genuinely distinct subsystems with independent test suites.
 - `id` must be a short alphanumeric identifier (lowercase, no spaces)
 - Module files must be ACTUAL implementation files, not facades or re-exports
 - Do NOT assign package marker files, re-export files, or index files as a module's sole source file

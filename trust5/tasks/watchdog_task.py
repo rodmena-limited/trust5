@@ -564,8 +564,9 @@ class WatchdogTask(Task):
                     "severity": "warning",
                     "category": "repair_loop",
                     "file": "",
-                    "message": (f"Pipeline has attempted {health.repair_attempts} repairs"
-                               " \u2014 may be stuck in repair loop"),
+                    "message": (
+                        f"Pipeline has attempted {health.repair_attempts} repairs \u2014 may be stuck in repair loop"
+                    ),
                 }
             )
         if health.jump_count >= 20:

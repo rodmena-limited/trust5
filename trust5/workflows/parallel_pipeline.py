@@ -558,6 +558,7 @@ def create_parallel_develop_workflow(
             "jump_repair_ref": "integration_repair",
             "jump_validate_ref": "integration_validate",
             "jump_quality_ref": "quality",
+            "jump_review_ref": "review",
             "test_files": all_test_files or None,
         },
         requisite_stage_ref_ids={"integration_validate"},
@@ -606,6 +607,9 @@ def create_parallel_develop_workflow(
             "language_profile": profile_dict,
             # Disable jump-to-repair in parallel pipelines (cross-module jump too complex)
             "code_review_jump_to_repair": False,
+            "jump_repair_ref": "integration_repair",
+            "jump_review_ref": "review",
+            "jump_quality_ref": "quality",
         }
         if plan_config_dict:
             review_ctx["plan_config"] = plan_config_dict
@@ -639,6 +643,7 @@ def create_parallel_develop_workflow(
         "development_mode": dev_mode,
         "test_first_completed": use_tdd,
         "jump_repair_ref": "integration_repair",
+        "jump_review_ref": "review",
     }
     if plan_config_dict:
         quality_ctx["plan_config"] = plan_config_dict

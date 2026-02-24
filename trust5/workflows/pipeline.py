@@ -255,6 +255,10 @@ def create_develop_workflow(user_request: str) -> Workflow:
             "_max_jumps": limits["max_jumps"],
             "language_profile": profile_dict,
             "development_mode": dev_mode,
+            "jump_repair_ref": "repair",
+            "jump_validate_ref": "validate",
+            "jump_review_ref": "review",
+            "jump_quality_ref": "quality",
         },
         requisite_stage_ref_ids={"validate"},
         tasks=[
@@ -266,6 +270,9 @@ def create_develop_workflow(user_request: str) -> Workflow:
             ),
         ],
     )
+
+    mutation: StageExecution | None = None
+    review: StageExecution | None = None
 
     # Optional mutation testing stage (Oracle Problem mitigation)
     review_deps: set[str] = {"repair"}
@@ -302,6 +309,9 @@ def create_develop_workflow(user_request: str) -> Workflow:
             context={
                 "project_root": project_root,
                 "language_profile": profile_dict,
+                "jump_repair_ref": "repair",
+                "jump_review_ref": "review",
+                "jump_quality_ref": "quality",
             },
             requisite_stage_ref_ids=review_deps,
             tasks=[
@@ -328,6 +338,8 @@ def create_develop_workflow(user_request: str) -> Workflow:
             "pipeline_phase": "run",
             "development_mode": dev_mode,
             "test_first_completed": use_tdd,
+            "jump_repair_ref": "repair",
+            "jump_review_ref": "review",
         },
         requisite_stage_ref_ids=quality_deps,
         tasks=[
@@ -365,9 +377,9 @@ def create_develop_workflow(user_request: str) -> Workflow:
     if use_tdd:
         stages.append(write_tests)
     stages.extend([implement, validate, repair])
-    if use_mutation:
+    if mutation is not None:
         stages.append(mutation)
-    if use_review:
+    if review is not None:
         stages.append(review)
     stages.append(quality)
 

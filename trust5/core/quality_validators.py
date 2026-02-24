@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
-from ..tasks.validate_helpers import _exclude_test_files_from_lint_cmd
+from ..tasks.validate_helpers import _exclude_test_files_from_lint_cmd, _filter_test_file_lint
 from .config import QualityConfig
 from .lang import LanguageProfile
 from .message import M, emit
@@ -209,12 +209,17 @@ class ReadableValidator(_ValidatorBase):
                 continue
             if rc == 127 or _is_tool_missing(out):
                 continue
+            # Filter test-file lint errors from output (same as validate_task)
+            out = _filter_test_file_lint(out)
+            if not out.strip():
+                # All lint errors were in test files — treat as clean
+                continue
             lint_failures += 1
             result.issues.append(
                 Issue(
                     severity="error",
                     message=out[:2000],
-                    rule="lint-raw",
+                    rule="lint-errors",
                 )
             )
 

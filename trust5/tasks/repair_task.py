@@ -310,7 +310,7 @@ class RepairTask(Task):
                 # leaves all downstream stages permanently NOT_STARTED.
                 # Validate re-runs in <1 s and handles the success path correctly.
                 if failure_type == "quality":
-                    jump_target = stage.context.get("jump_quality_ref", "quality")
+                    jump_target = stage.context.get("jump_review_ref", stage.context.get("jump_quality_ref", "quality"))
                 else:
                     jump_target = stage.context.get("jump_validate_ref", "validate")
                 emit(M.REND, f"Repair work done{mod_tag}.", label=module_name)

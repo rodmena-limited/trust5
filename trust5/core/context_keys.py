@@ -19,6 +19,7 @@ PROPAGATED_CONTEXT_KEYS: tuple[str, ...] = (
     "jump_validate_ref",
     "jump_implement_ref",
     "jump_quality_ref",
+    "jump_review_ref",
     "test_files",
     "owned_files",
     "module_name",

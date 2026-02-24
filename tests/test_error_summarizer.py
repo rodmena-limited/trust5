@@ -51,9 +51,10 @@ class TestSummarizeErrors:
         raw = "Z" * 33_000  # Must exceed 32k threshold to trigger LLM path
         mock_llm = MagicMock()
         mock_llm.chat.return_value = {
-            "message": {"role": "assistant", "content": [
-                {"type": "text", "text": "FAILURE_TYPE: lint\nROOT_CAUSE: Missing semicolons everywhere"}
-            ]},
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "FAILURE_TYPE: lint\nROOT_CAUSE: Missing semicolons everywhere"}],
+            },
             "done": True,
         }
         with patch("trust5.core.error_summarizer.LLM") as llm_cls:
