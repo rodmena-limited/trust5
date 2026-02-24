@@ -89,8 +89,10 @@ def test_run_bash_blocks_wget_pipe_sh(tools: Tools):
     assert "blocked" in result.lower()
 
 
+@patch("trust5.core.tools.os.path.isdir", return_value=False)
 @patch("trust5.core.tools.subprocess.run")
-def test_run_bash_allows_safe_commands(mock_run: MagicMock, tools: Tools):
+def test_run_bash_allows_safe_commands(mock_run: MagicMock, mock_isdir: MagicMock, tools: Tools):
+
     """Normal commands such as ls, echo, pytest must NOT be blocked."""
     mock_run.return_value = MagicMock(stdout="ok\n", stderr="", returncode=0)
 

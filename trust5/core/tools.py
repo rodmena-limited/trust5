@@ -35,8 +35,8 @@ _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
 # level but are safe in context (e.g., find -exec rm only deletes matched files,
 # find -delete only removes found entries).
 _SAFE_COMMAND_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\bfind\b\s+.+-exec\s+rm\b"),  # find ... -exec rm ... is scoped
-    re.compile(r"\bfind\b\s+.+-delete\b"),  # find ... -delete is scoped
+    re.compile(r"\bfind\b\s+.+--exec\s+rm\b"),  # find ... -exec rm ... is scoped
+    re.compile(r"\bfind\b\s+.+--delete\b"),  # find ... -delete is scoped
 ]
 
 # Regex for validating Python package names (allows extras and version specifiers)
@@ -317,7 +317,11 @@ class Tools:
 
     @staticmethod
     def run_bash(command: str, workdir: str = ".") -> str:
-        """Executes a bash command with destructive-pattern blocklist."""
+        """Executes a bash command with destructive-pattern blocklist.
+
+        Automatically activates project virtualenv if .venv or venv exists
+        in the workdir, preventing pollution of Trust5's own environment.
+        """
         is_safe_context = any(p.search(command) for p in _SAFE_COMMAND_PATTERNS)
         if not is_safe_context:
             is_safe_context = _is_project_scoped_rm(command, workdir)
@@ -327,6 +331,17 @@ class Tools:
                     emit(M.SWRN, f"BLOCKED dangerous command: {command[:200]}")
                     return f"Error: command blocked by safety filter. Pattern matched: {pattern.pattern}"
         try:
+            # Build environment with venv activation if present
+            env = os.environ.copy()
+            for venv_dir in (".venv", "venv"):
+                venv_bin = os.path.join(workdir, venv_dir, "bin")
+                if os.path.isdir(venv_bin):
+                    env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
+                    env["VIRTUAL_ENV"] = os.path.join(os.path.abspath(workdir), venv_dir)
+                    env.pop("PYTHONHOME", None)
+                    logger.debug("Activated venv at %s for bash command", venv_bin)
+                    break
+
             result = subprocess.run(
                 command,
                 shell=True,
@@ -334,6 +349,7 @@ class Tools:
                 capture_output=True,
                 text=True,
                 timeout=120,
+                env=env,
             )
             return f"Stdout:\n{result.stdout}\nStderr:\n{result.stderr}\nExit Code: {result.returncode}"
         except subprocess.TimeoutExpired:
