@@ -6,6 +6,7 @@ from typing import Any
 
 from textual import work
 from textual.app import App, ComposeResult
+from textual.containers import Horizontal
 from textual.worker import get_current_worker
 
 from ..core.event_bus import (
@@ -18,10 +19,10 @@ from ..core.event_bus import (
     Event,
 )
 from ..core.message import M
+from .sidebar import Sidebar, SidebarInfo, WatchdogLog
 from .widgets import (
     STATUS_BAR_ONLY,
     HeaderWidget,
-    StatusBar0,
     StatusBar1,
     Trust5Log,
     _format_count,
@@ -30,12 +31,14 @@ from .widgets import (
 
 logger = logging.getLogger(__name__)
 
-# Max events to drain from queue in one batch (prevents call_from_thread flood)
 _BATCH_SIZE = 64
+
+_WATCHDOG_BLOCK_CODES = frozenset({M.WDWN, M.WDER})
+_WATCHDOG_SIDEBAR_CODES = frozenset({M.WDST, M.WDOK, M.WDWN, M.WDER})
 
 
 class Trust5App(App[None]):
-    """Textual TUI application for live pipeline monitoring and event display."""
+    """Textual TUI for live pipeline monitoring."""
 
     CSS_PATH = "styles.tcss"
     BINDINGS = [
@@ -60,27 +63,32 @@ class Trust5App(App[None]):
         self._current_stream_code = ""
         self._changed_files: set[str] = set()
         self._workflow_result: Any = None
-        # Elapsed timer: TUI-driven, independent of per-task SELP events
         self._workflow_start_time: float | None = None
         self._workflow_ended = False
-        # Track setup completion (once) for progress counter
         self._setup_counted = False
+        # Watchdog block accumulation for sidebar routing
+        self._wd_block_buffer: list[str] = []
+        self._wd_block_code: str = ""
+        self._in_wd_block: bool = False
         # Widget refs cached in on_mount
         self._trust5_log: Trust5Log
         self._header: HeaderWidget
-        self._sb0: StatusBar0
+        self._sidebar_info: SidebarInfo
+        self._watchdog_log: WatchdogLog
         self._sb1: StatusBar1
 
     def compose(self) -> ComposeResult:
         yield HeaderWidget()
-        yield Trust5Log(markup=False, max_lines=5000, auto_scroll=False, wrap=True)
+        with Horizontal(id="content-area"):
+            yield Trust5Log(markup=False, max_lines=5000, auto_scroll=False, wrap=True)
+            yield Sidebar(id="sidebar")
         yield StatusBar1()
-        yield StatusBar0()
 
     def on_mount(self) -> None:
         self._trust5_log = self.query_one(Trust5Log)
         self._header = self.query_one(HeaderWidget)
-        self._sb0 = self.query_one(StatusBar0)
+        self._sidebar_info = self.query_one(SidebarInfo)
+        self._watchdog_log = self.query_one(WatchdogLog)
         self._sb1 = self.query_one(StatusBar1)
         self.set_interval(1.0, self._tick_elapsed)
         self.consume_events()
@@ -90,7 +98,6 @@ class Trust5App(App[None]):
     # ─── Elapsed timer ─────────────────────────────────────────────────────────
 
     def _tick_elapsed(self) -> None:
-        """Update elapsed display every second from a single workflow clock."""
         if self._workflow_start_time is not None and not self._workflow_ended:
             elapsed = time.monotonic() - self._workflow_start_time
             self._sb1.elapsed = self._format_elapsed(elapsed)
@@ -111,10 +118,7 @@ class Trust5App(App[None]):
 
     @work(thread=True)
     def watch_workflow(self) -> None:
-        """Poll workflow status and store result when terminal.
-
-        The TUI stays open — the user decides when to quit (q / Ctrl+C).
-        """
+        """Poll workflow status until terminal, then record result."""
         import time
 
         from stabilize.models.status import WorkflowStatus
@@ -130,26 +134,17 @@ class Trust5App(App[None]):
             try:
                 wf = self.store.retrieve(self.workflow_id)
                 if wf.status in terminal_statuses:
-                    time.sleep(0.5)  # let events drain
+                    time.sleep(0.5)
                     self._workflow_result = wf
-                    # Safety net: clear status bar in case terminal events
-                    # were missed (e.g. agent killed mid-turn without ASUM).
                     self.call_from_thread(self._clear_status_bar_on_completion, wf.status)
                     break
-            except (OSError, RuntimeError) as exc:  # DB poll error
+            except (OSError, RuntimeError) as exc:
                 logger.debug("watch_workflow poll error: %s", exc)
             time.sleep(0.5)
 
     @work(thread=True)
     def consume_events(self) -> None:
-        """Background worker: drain events in batches and dispatch to main thread.
-
-        When the event queue sends None (pipeline done), we stop consuming
-        but do NOT exit the TUI — the user quits when ready.
-
-        Resilience: transient errors don't kill the consumer. Only 10
-        consecutive failures (or a cancelled worker) cause the loop to stop.
-        """
+        """Drain event queue in batches, dispatch to main thread."""
         worker = get_current_worker()
         consecutive_errors = 0
         while not worker.is_cancelled:
@@ -158,7 +153,7 @@ class Trust5App(App[None]):
                 consecutive_errors = 0
             except queue.Empty:
                 continue
-            except (OSError, RuntimeError):  # event queue error
+            except (OSError, RuntimeError):
                 logger.debug("consume_events error", exc_info=True)
                 consecutive_errors += 1
                 if consecutive_errors >= 10:
@@ -169,7 +164,6 @@ class Trust5App(App[None]):
             if event is None:
                 break
 
-            # Drain up to _BATCH_SIZE more without blocking
             batch = [event]
             done = False
             for _ in range(_BATCH_SIZE - 1):
@@ -187,11 +181,6 @@ class Trust5App(App[None]):
                 break
 
     def _clear_status_bar_on_completion(self, status: Any) -> None:
-        """Reset status bar to reflect pipeline completion.
-
-        Called from both event routing (WFAL/WSUC) and watch_workflow
-        (safety net for missed events).
-        """
         self._sb1.thinking = False
         self._sb1.waiting = False
         self._sb1.current_tool = ""
@@ -207,51 +196,59 @@ class Trust5App(App[None]):
     # ─── Event routing ───────────────────────────────────────────────────────
 
     def _route_batch(self, events: list[Event | None]) -> None:
-        """Route a batch of events. One bad event won't kill the TUI.
-        Uses batch_update() to prevent intermediate layout passes.
-        Scroll-to-end is deferred here (once per batch) instead of per-write.
-        """
         with self.batch_update():
             for event in events:
                 if event is None:
                     continue
                 try:
                     self._route_event(event)
-                except (OSError, RuntimeError, KeyError, ValueError) as exc:  # TUI rendering error
+                except (OSError, RuntimeError, KeyError, ValueError) as exc:
                     logger.debug("TUI event routing error: %s", exc)
-            # Coalesced repaint — one refresh per batch, not per property change.
             self._header.refresh()
             self._sb1.refresh()
-            self._sb0.refresh()
+            self._sidebar_info.refresh()
         if not self._trust5_log._user_scrolled:
             self._trust5_log.scroll_end(animate=False)
 
     def _route_event(self, event: Event) -> None:
-        """Dispatch a single event to the appropriate widget."""
         code = event.code
         content = event.msg
         kind = event.kind
 
-        # ── Block events (accumulate and render as panels) ──
+        # ── Block events: watchdog blocks → sidebar, rest → main log ──
         if kind == K_BLOCK_START:
+            if code in _WATCHDOG_BLOCK_CODES:
+                self._wd_block_buffer = []
+                self._wd_block_code = code
+                self._in_wd_block = True
+                return
             self._trust5_log.write_event(event)
             return
 
         if kind == K_BLOCK_LINE:
+            if self._in_wd_block:
+                self._wd_block_buffer.append(content)
+                return
             self._trust5_log.write_event(event)
             return
 
         if kind == K_BLOCK_END:
+            if self._in_wd_block:
+                narrative = "\n".join(self._wd_block_buffer)
+                level = "error" if self._wd_block_code == M.WDER else "warn"
+                self._watchdog_log.add_narrative(narrative, level)
+                self._in_wd_block = False
+                return
             self._trust5_log.write_event(event)
             return
 
-        # ── Stream events (accumulate and write inline to log) ──
+        # ── Stream events ──
         if kind == K_STREAM_START:
             self._current_stream_label = event.label or "Streaming"
             self._current_stream_code = code
             self._trust5_log.write_stream_start(code, self._current_stream_label)
             if code == M.ATHK:
-                self._sb1.waiting = False  # LLM responded — stop waiting
+                self._sb1.waiting = False
                 self._sb1.thinking = True
             return
 
@@ -265,15 +262,23 @@ class Trust5App(App[None]):
                 self._sb1.thinking = False
             return
 
+        # ── Watchdog atomic events → sidebar ──
+        if code in _WATCHDOG_SIDEBAR_CODES:
+            _wd_level_map: dict[str, str] = {
+                M.WDST: "start",
+                M.WDOK: "ok",
+                M.WDWN: "warn",
+                M.WDER: "error",
+            }
+            self._watchdog_log.add_narrative(content, _wd_level_map.get(code, "ok"))
+            return
+
         # ── Pipeline header updates ──
-        # Track actual stage progress and per-module phase completions.
-        # WSTR is a workflow-level event and must NOT trigger stage matching.
         module = event.label or ""
 
         if code == M.WSTG:
             self._header.update_stage(content, "running")
             ref = content.lower()
-            # When an implementer starts, the preceding test-writer is done.
             if "implement" in ref:
                 if not self._setup_counted:
                     self._header.count_stage_done("setup")
@@ -291,14 +296,11 @@ class Trust5App(App[None]):
         elif code == M.WFAL:
             self._header.update_stage(content, "failed")
 
-        # Non-agent tasks: validate, repair, quality.
         if code == M.VRUN:
             self._header.update_stage("validate", "running")
-            # Validate starting means the implementer stage is done.
             if module:
                 self._header.mark_module_done("implement", module)
                 self._header.count_stage_done(f"implement:{module}")
-            # Integration validate (empty module): no phantom "implement:" key
 
         elif code == M.VFAL:
             self._header.update_stage("validate", "failed")
@@ -307,14 +309,12 @@ class Trust5App(App[None]):
             self._header.update_stage("repair", "running")
 
         elif code == M.RSKP:
-            # Repair skipped still counts as a completed stage.
             if module:
                 self._header.count_stage_done(f"repair:{module}")
             else:
                 self._header.count_stage_done("integration_repair")
 
         elif code == M.RJMP:
-            # Repair completed and jumping back — count it.
             if module:
                 self._header.count_stage_done(f"repair:{module}")
             else:
@@ -329,19 +329,16 @@ class Trust5App(App[None]):
         elif code == M.QFAL:
             self._header.update_stage("quality", "failed")
             self._header.update_stage("repair", "running")
-            self._sb1.stage_name = "quality → repair"
+            self._sb1.stage_name = "quality \u2192 repair"
 
-        # Per-stage success events.
         elif code == M.VPAS:
             self._header.update_stage("validate", "success")
             if module:
                 self._header.mark_module_done("validate", module)
-                # Validate passed = no repair needed = repair phase done too.
                 self._header.mark_module_done("repair", module)
                 self._header.count_stage_done(f"validate:{module}")
                 self._header.count_stage_done(f"repair:{module}")
             else:
-                # Integration stages use dedicated keys.
                 self._header.count_stage_done("integration_validate")
                 self._header.count_stage_done("integration_repair")
 
@@ -349,7 +346,6 @@ class Trust5App(App[None]):
             self._header.update_stage("quality", "success")
             self._header.count_stage_done("quality")
 
-        # Code review events.
         elif code == M.RVST:
             self._header.update_stage("review", "running")
         elif code == M.RVFL:
@@ -358,7 +354,6 @@ class Trust5App(App[None]):
             self._header.update_stage("review", "success")
             self._header.count_stage_done("review")
 
-        # Loop workflow events (trust5 loop command).
         elif code == M.LSTR:
             self._sb1.stage_name = "loop"
         elif code == M.LITR:
@@ -368,15 +363,13 @@ class Trust5App(App[None]):
         elif code == M.LERR:
             self._sb1.stage_name = "loop error"
 
-        # ── Elapsed timer: start on first WSTR, freeze on terminal events ──
+        # ── Elapsed timer ──
         if code == M.WSTR:
             if self._workflow_start_time is None:
                 self._workflow_start_time = time.monotonic()
             self._workflow_ended = False
         elif code in (M.WSUC, M.WFAL, M.WTMO, M.WINT):
             self._workflow_ended = True
-            # Clear transient agent state so the status bar reflects completion,
-            # not the last agent's stale thinking/tool state.
             self._sb1.thinking = False
             self._sb1.waiting = False
             self._sb1.current_tool = ""
@@ -388,40 +381,39 @@ class Trust5App(App[None]):
             }
             self._sb1.stage_name = _terminal_stage_names.get(code, "done")
 
-        # ── Status bar routing ──
+        # ── Status bar routing (model/tokens → sidebar, stage/turn → bottom bar) ──
         self._update_status_bars(code, content)
 
-        # ── Main log (skip status-bar-only noise) ──
+        # ── Main log ──
         if code in STATUS_BAR_ONLY:
             return
 
         self._trust5_log.write_event(event)
 
     def _update_status_bars(self, code: str, content: str) -> None:
-        """Parse event content into structured status bar properties."""
         try:
             if code == M.MMDL:
                 kv = _parse_kv(content)
                 model = kv.get("model", content)
                 thinking = kv.get("thinking", "")
                 if thinking:
-                    self._sb0.model_name = f"{model} (think:{thinking})"
+                    self._sidebar_info.model_name = f"{model} (think:{thinking})"
                 else:
-                    self._sb0.model_name = model
+                    self._sidebar_info.model_name = model
             elif code == M.MPRF:
                 kv = _parse_kv(content)
-                self._sb0.provider = kv.get("provider", content)
+                self._sidebar_info.provider = kv.get("provider", content)
             elif code == M.MTKN:
                 kv = _parse_kv(content)
                 tok_in = int(kv.get("in", "0"))
                 tok_out = int(kv.get("out", "0"))
-                self._sb0.token_info = f"{_format_count(tok_in)} in / {_format_count(tok_out)} out"
+                self._sidebar_info.token_info = f"{_format_count(tok_in)} in / {_format_count(tok_out)} out"
             elif code == M.MCTX:
                 kv = _parse_kv(content)
                 remaining = int(kv.get("remaining", "0"))
                 window = int(kv.get("window", "1"))
                 pct_free = int((remaining / window) * 100) if window else 0
-                self._sb0.context_info = f"ctx {pct_free}% free"
+                self._sidebar_info.context_info = f"ctx {pct_free}% free"
             elif code == M.FCHG:
                 kv = _parse_kv(content)
                 path = kv.get("path", "")
@@ -436,25 +428,18 @@ class Trust5App(App[None]):
                     self._header.module_count = modules
             elif code == M.WSTG:
                 self._sb1.stage_name = content
-            # SELP ignored — TUI drives its own elapsed timer via _tick_elapsed
             elif code == M.ATRN:
-                # Content: "[name] Turn 3/20 (history=12 msgs)" → "Turn 3/20"
                 m = re.search(r"Turn \d+/\d+", content)
                 self._sb1.turn_info = m.group(0) if m else content
-                # New turn starting → about to call LLM. Clear stale tool info
-                # and show "generating" spinner so user knows the system is alive.
                 self._sb1.current_tool = ""
                 self._sb1.waiting = True
             elif code == M.CTLC:
-                # LLM responded with a tool call — stop the waiting indicator
                 self._sb1.waiting = False
-                # Strip [agent] prefix, truncate for status bar
                 display = content
                 if "] " in display:
                     display = display.split("] ", 1)[1]
                 self._sb1.current_tool = display[:60]
             elif code == M.ASUM:
-                # Agent finished (final text response, no more tools)
                 self._sb1.waiting = False
                 self._sb1.current_tool = ""
         except (ValueError, KeyError):

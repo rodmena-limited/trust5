@@ -5,6 +5,7 @@ from textual.reactive import reactive
 from textual.widgets import Static
 
 from .log_widget import Trust5Log, _format_count, _parse_kv  # noqa: F401
+from .sidebar import Sidebar, SidebarInfo, WatchdogLog  # noqa: F401
 from .theme import (
     C_AMBER,
     C_BG,
@@ -30,6 +31,9 @@ __all__ = [
     "HeaderWidget",
     "StatusBar0",
     "StatusBar1",
+    "Sidebar",
+    "SidebarInfo",
+    "WatchdogLog",
 ]
 
 
@@ -230,6 +234,13 @@ class StatusBar1(Static):
             text.append(f"  \u25b8 {self.current_tool}", style=f"bold {C_TEAL}")
         if self.files_changed > 0:
             text.append(f"  {self.files_changed} file(s)", style=f"bold {C_GREEN}")
+        text.append("    ", style=C_DIM)
+        text.append("^C", style=C_SECONDARY)
+        text.append(" quit  ", style=C_DIM)
+        text.append("c", style=C_SECONDARY)
+        text.append(" clear  ", style=C_DIM)
+        text.append("s", style=C_SECONDARY)
+        text.append(" scroll", style=C_DIM)
         return text
 
     def _needs_spinner(self) -> bool:

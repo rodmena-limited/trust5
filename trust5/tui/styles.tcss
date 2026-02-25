@@ -17,9 +17,14 @@ HeaderWidget {
     padding: 0 2;
 }
 
+/* ─── Content Area (horizontal: log + sidebar) ────────────────────── */
+#content-area {
+    height: 1fr;
+}
+
 /* ─── Main Log ────────────────────────────────────────────────────── */
 Trust5Log {
-    height: 1fr;
+    width: 1fr;
     max-width: 120;
     background: #0c0a08;
     color: #e8ddd0;
@@ -33,20 +38,53 @@ Trust5Log {
     padding: 0 1;
 }
 
-/* ─── Status Bars ─────────────────────────────────────────────────── */
+/* ─── Sidebar ─────────────────────────────────────────────────────── */
+Sidebar {
+    width: 36;
+    background: #151210;
+    border-left: solid #2a2420;
+}
+
+SidebarLogo {
+    height: auto;
+    padding: 1 1 0 1;
+    background: #151210;
+}
+
+SidebarInfo {
+    height: auto;
+    padding: 1 1;
+    border-top: solid #2a2420;
+    border-bottom: solid #2a2420;
+    background: #151210;
+}
+
+WatchdogHeader {
+    height: auto;
+    padding: 1 0 0 0;
+    background: #151210;
+}
+
+#watchdog-log {
+    height: 1fr;
+    background: #151210;
+    color: #e8ddd0;
+    padding: 0 1;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #3a322c;
+    scrollbar-color-hover: #d4a054;
+    scrollbar-color-active: #d4a054;
+    border: none;
+}
+
+/* ─── Status Bar ──────────────────────────────────────────────────── */
 StatusBar1 {
     height: auto;
     background: #151210;
     color: #b08cb8;
     text-style: bold;
-    padding: 0 2;
-    border-top: solid #2a2420;
-}
-
-StatusBar0 {
-    height: auto;
-    background: #100e0c;
-    color: #706860;
     padding: 0 2;
     border-top: solid #2a2420;
 }
