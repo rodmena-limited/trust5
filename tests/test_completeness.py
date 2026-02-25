@@ -164,7 +164,6 @@ def test_validator_name():
         assert validator.name() == "completeness"
 
 
-
 # ── Manifest fallback tests ──────────────────────────────────────────
 
 

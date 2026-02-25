@@ -363,12 +363,12 @@ class RepairTask(Task):
                         },
                     )
                 emit(M.RFAL, f"Repair LLM failed permanently: {e}")
-                return TaskResult.terminal(error=f"Repair LLM failed permanently: {e}")
+                return TaskResult.failed_continue(error=f"Repair LLM failed permanently: {e}")
 
             except (OSError, RuntimeError, ValueError, KeyError) as e:  # repair: non-LLM execution errors
                 emit(M.RFAL, f"RepairTask failed: {e}")
                 logger.exception("RepairTask failed")
-                return TaskResult.terminal(error=f"Repair failed: {e}")
+                return TaskResult.failed_continue(error=f"Repair failed: {e}")
 
     @staticmethod
     def _quick_test_check(

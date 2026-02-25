@@ -72,9 +72,7 @@ def test_tool_emit_code_values_are_m_enum():
     from trust5.core.agent import _TOOL_EMIT_CODE
 
     for tool_name, code in _TOOL_EMIT_CODE.items():
-        assert isinstance(code, M), (
-            f"{tool_name} maps to {code!r} which is not an M enum"
-        )
+        assert isinstance(code, M), f"{tool_name} maps to {code!r} which is not an M enum"
 
 
 def test_tool_emit_unknown_tool_falls_back_to_ctlc():

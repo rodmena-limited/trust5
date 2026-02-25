@@ -43,6 +43,7 @@ def _schedule_force_exit() -> None:
 
     threading.Thread(target=_watchdog, daemon=True).start()
 
+
 def _suppress_print_fallback() -> None:
     """Disable emit() print fallback just before TUI takes over the terminal."""
     from .core.message import set_print_fallback

@@ -337,7 +337,6 @@ class Trust5App(App[None]):
             self._header.update_stage("repair", "running")
             self._sb1.stage_name = "quality \u2192 repair"
 
-
         elif code == M.VPAS:
             self._header.update_stage("validate", "success")
             if module:
@@ -373,7 +372,6 @@ class Trust5App(App[None]):
         elif code == M.LERR:
             self._sb1.stage_name = "loop error"
 
-
         if code == M.WSTR:
             if self._workflow_start_time is None:
                 self._workflow_start_time = time.monotonic()
@@ -391,7 +389,6 @@ class Trust5App(App[None]):
             }
             stage = _terminal_stage_names.get(code, "done")
             self._sb1.stage_name = stage
-
 
         self._update_routing(code, content)
 
@@ -418,6 +415,9 @@ class Trust5App(App[None]):
                 tok_in = int(kv.get("in", "0"))
                 tok_out = int(kv.get("out", "0"))
                 self._sidebar_info.token_info = f"{_format_count(tok_in)} in / {_format_count(tok_out)} out"
+                if self._workflow_start_time is not None:
+                    elapsed = time.monotonic() - self._workflow_start_time
+                    self._sidebar_info.elapsed = self._format_elapsed(elapsed)
             elif code == M.MCTX:
                 kv = _parse_kv(content)
                 remaining = int(kv.get("remaining", "0"))
@@ -444,6 +444,9 @@ class Trust5App(App[None]):
                 self._sidebar_info.turn_info = m.group(0) if m else content
                 self._sb1.current_tool = ""
                 self._sidebar_info.waiting = True
+                if self._workflow_start_time is not None:
+                    elapsed = time.monotonic() - self._workflow_start_time
+                    self._sidebar_info.elapsed = self._format_elapsed(elapsed)
             elif code == M.CTLC:
                 self._sidebar_info.waiting = False
                 display = content

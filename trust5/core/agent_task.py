@@ -476,11 +476,11 @@ class AgentTask(Task):
                         f"LLM failed for {agent_name}: {e}",
                         retry_after=retry_after,
                     )
-                return TaskResult.terminal(error=f"LLM failed: {e}")
+                return TaskResult.failed_continue(error=f"LLM failed: {e}")
             except (OSError, RuntimeError, ValueError, KeyError) as e:  # agent: non-LLM execution errors
                 emit(M.SERR, f"[{agent_name}] Agent execution failed: {e}")
                 logger.exception("Agent %s failed", agent_name)
-                return TaskResult.terminal(error=f"Agent execution failed: {e}")
+                return TaskResult.failed_continue(error=f"Agent execution failed: {e}")
             finally:
                 _elapsed_stop_event.set()
                 _elapsed_thread.join(timeout=2.0)

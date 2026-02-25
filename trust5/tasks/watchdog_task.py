@@ -138,11 +138,18 @@ class PipelineHealth:
         self.test_pass_history.append(passed)
 
     # Stages that indicate the pipeline has moved beyond per-module repair
-    _POST_REPAIR_STAGES = frozenset({
-        "review", "quality", "integration validate", "integration repair",
-        "review (code analysis)", "quality (trust 5 gate)",
-        "integration validate (all tests)", "integration repair (cross-module fix)",
-    })
+    _POST_REPAIR_STAGES = frozenset(
+        {
+            "review",
+            "quality",
+            "integration validate",
+            "integration repair",
+            "review (code analysis)",
+            "quality (trust 5 gate)",
+            "integration validate (all tests)",
+            "integration repair (cross-module fix)",
+        }
+    )
 
     def past_repair_phase(self) -> bool:
         """True when any post-repair stage (review, quality) has started."""
@@ -520,8 +527,7 @@ class WatchdogTask(Task):
             for f in behavioral_findings:
                 icon = severity_icon.get(f.get("severity", "warning"), "\u26a0")
                 lines.append(
-                    f"{icon}  [{f.get('severity', 'warning').upper()}] {f.get('category', '')} "
-                    f"{f.get('message', '')}"
+                    f"{icon}  [{f.get('severity', 'warning').upper()}] {f.get('category', '')} {f.get('message', '')}"
                 )
                 lines.append("")
         content = "\n".join(lines).rstrip()

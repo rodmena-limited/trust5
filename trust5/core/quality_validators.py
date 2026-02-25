@@ -487,9 +487,7 @@ class ProjectCompletenessValidator(_ValidatorBase):
         # For files that are also in manifest_files (e.g. pyproject.toml for Python),
         # accept any alternative manifest as a valid substitute (e.g. requirements.txt).
         manifest_set = set(self._profile.manifest_files)
-        has_any_manifest = any(
-            os.path.exists(os.path.join(self._root, m)) for m in self._profile.manifest_files
-        )
+        has_any_manifest = any(os.path.exists(os.path.join(self._root, m)) for m in self._profile.manifest_files)
         for req_file in self._profile.required_project_files:
             full = os.path.join(self._root, req_file)
             if os.path.exists(full):

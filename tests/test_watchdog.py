@@ -883,7 +883,6 @@ def test_should_trigger_rebuild_false_when_progressing(_mock_emit):
         assert result is False
 
 
-
 # ── past_repair_phase suppression tests ────────────────────────────
 
 

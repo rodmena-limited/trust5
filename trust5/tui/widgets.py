@@ -187,6 +187,7 @@ class HeaderWidget(Static):
 class StatusBar1(Static):
     stage_name: reactive[str] = reactive("")
     current_tool: reactive[str] = reactive("")
+
     def render(self) -> Text:
         left = Text()
         if self.stage_name:
@@ -211,7 +212,6 @@ class StatusBar1(Static):
         left.append(" " * gap)
         left.append_text(right)
         return left
-
 
 
 class StatusBar0(Static):

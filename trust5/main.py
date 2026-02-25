@@ -31,7 +31,7 @@ from .core.git import GitManager
 from .core.init import ProjectInitializer
 from .core.message import M, emit
 from .core.plan_parser import parse_plan_output
-from .core.runner import finalize_status, wait_for_completion
+from .core.runner import check_stage_failures, finalize_status, reset_failed_stages, wait_for_completion
 from .core.tools import Tools
 from .infrastructure import (
     _init_viewer_once,
@@ -267,23 +267,88 @@ def develop(request: str) -> None:
         p2_orchestrator.start(impl_wf)
         emit(M.WSTR, f"Implement started: {impl_wf.id}")
         emit(M.SPRG, f"current=0 total={len(impl_wf.stages)} modules={len(modules)}")
-        p2_processor.start()
 
-        try:
-            impl_result = wait_for_completion(
-                p2_store,
-                impl_wf.id,
-                constants.TIMEOUT_DEVELOP,
-                stop_event=shutdown,
+        # ── Never-give-up auto-retry loop ────────────────────────────
+        # When a pipeline fails (TERMINAL/FAILED_CONTINUE), reset the
+        # failed stages and restart the processor.  This continues until
+        # the pipeline succeeds or the overall timeout is reached.
+        # The timeout is the full TIMEOUT_DEVELOP (up to 10 days).
+        pipeline_start = time.monotonic()
+        pipeline_deadline = pipeline_start + constants.TIMEOUT_DEVELOP
+        retry_cycle = 0
+        _retry_backoff = ExponentialDelay(
+            min_delay=timedelta(seconds=30),
+            max_delay=timedelta(seconds=300),
+            factor=2,
+            jitter=0.3,
+        )
+
+        impl_result = None
+        while True:
+            remaining = pipeline_deadline - time.monotonic()
+            if remaining <= 0:
+                emit(M.WTMO, "Pipeline timeout reached. Stopping.")
+                break
+
+            p2_processor.start()
+            try:
+                impl_result = wait_for_completion(
+                    p2_store,
+                    impl_wf.id,
+                    remaining,
+                    stop_event=shutdown,
+                )
+            finally:
+                p2_processor.request_stop()
+                p2_processor.stop(wait=False)
+
+            if shutdown is not None and shutdown.is_set():
+                return None
+
+            # Success — break out of the retry loop.
+            status_name = impl_result.status.name if hasattr(impl_result.status, "name") else str(impl_result.status)
+            if status_name in ("SUCCEEDED", "COMPLETED"):
+                # Check for hidden failures before declaring success.
+                has_tf, has_qf, has_rf, has_cf, _ = check_stage_failures(impl_result)
+                if not (has_tf or has_qf or has_rf or has_cf):
+                    break  # Genuine success — all gates passed.
+
+            # Pipeline didn't fully succeed — attempt auto-retry.
+            retry_cycle += 1
+            impl_result = p2_store.retrieve(impl_wf.id)
+            reset_count = reset_failed_stages(impl_result, p2_store)
+
+            if reset_count == 0:
+                # Nothing to reset — perhaps SUCCEEDED with hidden failures.
+                # finalize_status will mark it TERMINAL; break so the user
+                # can inspect and resume manually.
+                emit(
+                    M.SWRN,
+                    f"Pipeline ended ({status_name}) with no resettable stages.",
+                )
+                break
+
+            # Use recovery to re-queue the reset stages.
+            from stabilize.recovery import recover_on_startup
+
+            p2r_processor, _p2r_orch, p2_store, p2_queue, _p2r_db = _setup_phase()
+            recovered = recover_on_startup(p2_store, p2_queue, application="trust5")
+
+            wait_seconds = _retry_backoff.for_attempt(retry_cycle)
+            emit(
+                M.WRCV,
+                f"Auto-retry cycle {retry_cycle}: {reset_count} stage(s) reset, "
+                f"{len(recovered) if recovered else 0} recovered. "
+                f"Waiting {wait_seconds:.0f}s before restart.",
             )
-        finally:
-            p2_processor.request_stop()
-            p2_processor.stop(wait=False)
+            time.sleep(wait_seconds)
 
-        if shutdown is not None and shutdown.is_set():
-            return None
+            p2_processor = p2r_processor
 
-        finalize_status(impl_result, p2_store, prefix="Status")
+        if impl_result is not None:
+            finalize_status(impl_result, p2_store, prefix="Status")
+        else:
+            emit(M.WTMO, "Pipeline timed out before any cycle completed.")
         return impl_result
 
     if _USE_TUI:

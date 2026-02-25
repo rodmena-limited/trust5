@@ -148,10 +148,10 @@ class ImplementerTask(Task):
                         f"LLM failed during implementation: {e}",
                         retry_after=retry_after,
                     )
-                return TaskResult.terminal(error=f"Implementation LLM failed: {e}")
+                return TaskResult.failed_continue(error=f"Implementation LLM failed: {e}")
             except (OSError, RuntimeError, ValueError, KeyError) as e:  # implementation: non-LLM errors
                 logger.exception("Implementation failed")
-                return TaskResult.terminal(error=f"Implementation failed: {e}")
+                return TaskResult.failed_continue(error=f"Implementation failed: {e}")
 
     @staticmethod
     def _clean_source_files(project_root: str, context: dict) -> None:

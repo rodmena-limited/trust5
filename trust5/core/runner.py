@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import threading
@@ -160,6 +161,93 @@ def wait_for_completion(
             interval = POLL_INTERVAL_SLOW
         time.sleep(interval)
     return store.retrieve(workflow_id)
+
+
+logger = logging.getLogger(__name__)
+
+# Stages that are considered 'failed' and need reset for auto-retry.
+_FAILED_STAGE_STATUSES = frozenset(
+    {
+        WorkflowStatus.TERMINAL,
+        WorkflowStatus.CANCELED,
+        WorkflowStatus.FAILED_CONTINUE,
+    }
+)
+
+
+def _reset_stage_for_retry(stage: Any) -> None:
+    """Clear stale counters so a retried stage gets fresh attempts."""
+    ctx = stage.context
+    ctx.pop("quality_attempt", None)
+    ctx.pop("prev_quality_report", None)
+    ctx.pop("tests_partial", None)
+    ctx.pop("previous_failures", None)
+    ctx.pop("reimplementation_count", None)
+    ctx.pop("diagnostic_baseline", None)
+    ctx.pop("last_repair_summary", None)
+    ctx.pop("_repair_requested", None)
+    stage.outputs = {}
+    stage.end_time = None
+    stage.start_time = None
+
+
+def reset_failed_stages(
+    workflow: Workflow,
+    store: SqliteWorkflowStore,
+) -> int:
+    """Reset TERMINAL/CANCELED/FAILED_CONTINUE stages to RUNNING for auto-retry.
+
+    Returns the number of stages reset.  Also resets downstream SKIPPED/NOT_STARTED
+    stages so the DAG can re-trigger them.
+    """
+    found_failed = False
+    reset_count = 0
+    downstream_count = 0
+
+    for stage in workflow.stages:
+        if stage.status in _FAILED_STAGE_STATUSES:
+            found_failed = True
+            reset_count += 1
+            logger.info(
+                "Auto-retry: resetting stage '%s' (%s -> RUNNING)",
+                stage.ref_id,
+                stage.status.name,
+            )
+            emit(
+                M.WRCV,
+                f"Auto-retry: resetting '{stage.ref_id}' ({stage.status.name} \u2192 RUNNING)",
+            )
+            _reset_stage_for_retry(stage)
+            stage.status = WorkflowStatus.RUNNING
+            for task in stage.tasks:
+                if task.status in _FAILED_STAGE_STATUSES:
+                    task.status = WorkflowStatus.RUNNING
+            store.store_stage(stage)
+
+        elif found_failed and stage.status in (
+            WorkflowStatus.SKIPPED,
+            WorkflowStatus.NOT_STARTED,
+        ):
+            downstream_count += 1
+            stage.status = WorkflowStatus.NOT_STARTED
+            stage.start_time = None
+            stage.end_time = None
+            for task in stage.tasks:
+                task.status = WorkflowStatus.NOT_STARTED
+                task.start_time = None
+                task.end_time = None
+            store.store_stage(stage)
+
+    if reset_count > 0:
+        workflow.status = WorkflowStatus.RUNNING
+        workflow.end_time = None
+        store.update_status(workflow)
+        emit(
+            M.WRCV,
+            f"Auto-retry: reset {reset_count} failed + {downstream_count} downstream stage(s)",
+        )
+
+    return reset_count
 
 
 def run_workflow(

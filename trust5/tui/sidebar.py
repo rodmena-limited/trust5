@@ -188,6 +188,7 @@ def _strip_md_chrome(text: str) -> str:
     text = _RULE_RE.sub("", text)
     return text.strip()
 
+
 class _WidthAwareMarkdown(Markdown):
     """Markdown that renders at a specific width to prevent clipping."""
 
@@ -223,6 +224,7 @@ class WatchdogHeader(Static):
     def _animate_blink(self) -> None:
         self._blink_tick += 1
         self.refresh()
+
     def render(self) -> Text:
         t = Text()
         idx = self._blink_tick % len(self._CIRCLE_STYLES)

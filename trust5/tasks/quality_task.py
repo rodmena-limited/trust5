@@ -314,6 +314,7 @@ class QualityTask(Task):
         # The initial context may have language='unknown' if detection ran before source
         # files existed.  By the time the quality gate runs, the files ARE there.
         from ..core.lang import detect_language, get_profile
+
         detected = detect_language(project_root)
         base = get_profile(detected)
 

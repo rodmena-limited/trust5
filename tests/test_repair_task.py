@@ -216,7 +216,7 @@ def test_repair_llm_transient_error_raises(mock_prompt, mock_summarize, mock_llm
 @patch("trust5.tasks.repair_task.summarize_errors", return_value="errors")
 @patch("trust5.tasks.repair_task.build_repair_prompt", return_value="fix")
 def test_repair_llm_permanent_error_terminal(mock_prompt, mock_summarize, mock_llm_cls, mock_agent_cls, mock_emit):
-    """LLMError with retryable=False returns TaskResult.terminal()."""
+    """LLMError with retryable=False returns TaskResult.failed_continue()."""
     mock_agent = MagicMock()
     mock_agent.run.side_effect = LLMError("invalid API key", retryable=False, error_class="permanent")
     mock_agent_cls.return_value = mock_agent
@@ -236,7 +236,7 @@ def test_repair_llm_permanent_error_terminal(mock_prompt, mock_summarize, mock_l
 
     result = task.execute(stage)
 
-    assert result.status == WorkflowStatus.TERMINAL
+    assert result.status == WorkflowStatus.FAILED_CONTINUE
     error_msg = result.context.get("error", "")
     assert "permanently" in error_msg.lower() or "failed" in error_msg.lower()
 

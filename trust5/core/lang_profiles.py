@@ -130,9 +130,9 @@ PROFILES: dict[str, LanguageProfile] = {
         manifest_vals=(
             "python3 -c '"
             "import pathlib,sys; "
-            "p=pathlib.Path(\"pyproject.toml\"); "
+            'p=pathlib.Path("pyproject.toml"); '
             "sys.exit(0) if not p.exists() else "
-            "__import__(\"tomllib\").loads(p.read_text())"
+            '__import__("tomllib").loads(p.read_text())'
             "'",
         ),
         test_disc="pytest --collect-only -q 2>/dev/null | tail -1",

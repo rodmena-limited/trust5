@@ -25,20 +25,14 @@ class TestLintOutputFiltering:
 
     def test_filter_removes_test_file_lines(self):
         """Lint output referencing test_*.py files is stripped."""
-        raw = (
-            "tests/test_app.py:3:1: F401 unused import\n"
-            "src/app.py:10:5: E501 line too long\n"
-        )
+        raw = "tests/test_app.py:3:1: F401 unused import\nsrc/app.py:10:5: E501 line too long\n"
         filtered = _filter_test_file_lint(raw)
         assert "test_app.py" not in filtered
         assert "src/app.py" in filtered
 
     def test_filter_empty_after_strip_is_clean(self):
         """If ALL lint lines come from test files, result is empty (clean)."""
-        raw = (
-            "tests/test_main.py:1:1: F401 unused import\n"
-            "test_utils.py:5:3: E302 expected 2 blank lines\n"
-        )
+        raw = "tests/test_main.py:1:1: F401 unused import\ntest_utils.py:5:3: E302 expected 2 blank lines\n"
         filtered = _filter_test_file_lint(raw)
         # After filtering, nothing substantive remains
         assert filtered.strip() == "" or "test_" not in filtered
@@ -339,9 +333,7 @@ class TestImplementerContextMaxTurns:
     @patch("trust5.core.implementer_task.LLM")
     @patch("trust5.core.implementer_task.build_implementation_prompt")
     @patch("trust5.core.implementer_task.discover_latest_spec")
-    def test_implementer_defaults_to_25_turns(
-        self, mock_discover, mock_build, mock_llm_cls, mock_agent_cls, mock_mcp
-    ):
+    def test_implementer_defaults_to_25_turns(self, mock_discover, mock_build, mock_llm_cls, mock_agent_cls, mock_mcp):
         """When stage.context has no max_turns, implementer defaults to 25."""
         from trust5.core.implementer_task import ImplementerTask
 
