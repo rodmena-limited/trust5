@@ -93,7 +93,7 @@ THINKING_TIERS = {"best", "good"}
 DEFAULT_FALLBACK_CHAIN = [
     "qwen3-coder-next:cloud",
     "kimi-k2.5:cloud",
-    "nemotron-3-nano:30b-cloud",
+    "gemini-3-flash-preview:cloud",
 ]
 
 

@@ -401,10 +401,10 @@ class ModelsConfig(BaseModel):
         default_factory=lambda: ProviderModelsConfig(
             best="qwen3-coder-next:cloud",
             good="kimi-k2.5:cloud",
-            fast="nemotron-3-nano:30b-cloud",
-            watchdog="nemotron-3-nano:30b-cloud",
+            fast="gemini-3-flash-preview:cloud",
+            watchdog="gemini-3-flash-preview:cloud",
             default="qwen3-coder-next:cloud",
-            fallback_chain=["qwen3-coder-next:cloud", "kimi-k2.5:cloud", "nemotron-3-nano:30b-cloud"],
+            fallback_chain=["qwen3-coder-next:cloud", "kimi-k2.5:cloud", "gemini-3-flash-preview:cloud"],
             thinking_tiers=["best", "good"],
         )
     )
