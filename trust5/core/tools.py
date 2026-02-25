@@ -38,7 +38,7 @@ _BLOCKED_COMMAND_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bcp\b.*\.trust5/"),  # cp into .trust5/
     re.compile(r"\brm\b.*\.trust5/"),  # rm inside .trust5/
     re.compile(r"\btruncate\b.*\.trust5/"),  # truncate .trust5/ files
-    re.compile(r"\bcat\b.*>.*\.trust5/"),  # cat > .trust5/
+    re.compile(r"\bcat\b.*>\s*(?:[^\s]*\.trust5/)"),  # cat > .trust5/ (redirect must target .trust5)
 ]
 
 # Safe compound command patterns that override blocked checks.
@@ -50,6 +50,7 @@ _SAFE_COMMAND_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bfind\b\s+.+-delete\b"),  # find ... -delete is scoped
     re.compile(r"\bfind\b\s+.+-name\b.*-delete\b"),  # find . -name '*.pyc' -delete
     re.compile(r"\bfind\b\s+.+-type\s+\w\s+-exec\s+rm"),  # find . -type d -exec rm -rf {} +
+    re.compile(r"\bcat\b\s+\.trust5/"),  # cat .trust5/* is a read-only operation
 ]
 
 # Regex for validating Python package names (allows extras and version specifiers)

@@ -310,11 +310,15 @@ class QualityTask(Task):
 
     @staticmethod
     def _build_profile(data: dict[str, Any], project_root: str = ".") -> LanguageProfile:
-        if not data:
-            from ..core.lang import detect_language, get_profile
+        # Always re-detect language from the project to avoid stale 'unknown' profiles.
+        # The initial context may have language='unknown' if detection ran before source
+        # files existed.  By the time the quality gate runs, the files ARE there.
+        from ..core.lang import detect_language, get_profile
+        detected = detect_language(project_root)
+        base = get_profile(detected)
 
-            detected = detect_language(project_root)
-            return get_profile(detected)
+        if not data or data.get("language") == "unknown":
+            return base
 
         def _tup(v: Any) -> tuple[str, ...] | None:
             if v is None:
@@ -323,15 +327,11 @@ class QualityTask(Task):
                 return tuple(v)
             return (str(v),)
 
-        # Use detect_language as the base profile for missing fields
-        from ..core.lang import detect_language, get_profile
-
-        detected = detect_language(project_root)
-        base = get_profile(detected)
+        # base profile already computed above from detect_language()
 
         return LanguageProfile(
-            language=data.get("language", base.language),
-            extensions=tuple(data.get("extensions", base.extensions)),
+            language=data.get("language") or base.language,
+            extensions=tuple(data.get("extensions") or base.extensions),
             test_command=tuple(data.get("test_command", base.test_command)),
             test_verify_command=data.get("test_verify_command", base.test_verify_command),
             lint_commands=tuple(data.get("lint_commands", base.lint_commands)),
