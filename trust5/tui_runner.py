@@ -229,10 +229,11 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
         bus = init_bus(os.path.abspath(os.getcwd()))
 
     eq = bus.subscribe()
-    tui_app = Trust5App(eq)  # No store/workflow_id — won't auto-exit
-
     result_holder: list[Workflow | None] = [None]
     stop_event = threading.Event()
+    pipeline_done = threading.Event()  # Signals when pipeline completes
+
+    tui_app = Trust5App(eq, pipeline_done=pipeline_done)  # Pass done event to TUI
 
     def _background() -> None:
         try:
@@ -240,7 +241,9 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
         except Exception as e:  # Intentional broad catch: background pipeline runner
             if not stop_event.is_set():
                 emit(M.SERR, f"Pipeline failed: {e}")
-
+        finally:
+            # Signal pipeline completion so TUI can auto-exit
+            pipeline_done.set()
     t = threading.Thread(target=_background, daemon=True)
     t.start()
 

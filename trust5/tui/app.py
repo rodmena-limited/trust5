@@ -1,9 +1,9 @@
 import logging
 import queue
 import re
+import threading
 import time
 from typing import Any
-
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
@@ -65,11 +65,13 @@ class Trust5App(App[None]):
         event_queue: queue.Queue[Event | None],
         store: Any = None,
         workflow_id: str = "",
+        pipeline_done: threading.Event | None = None,
     ) -> None:
         super().__init__()
         self.event_queue = event_queue
         self.store = store
         self.workflow_id = workflow_id
+        self._pipeline_done = pipeline_done
         self._current_stream_label = ""
         self._current_stream_code = ""
         self._changed_files: set[str] = set()
@@ -100,6 +102,8 @@ class Trust5App(App[None]):
         self._watchdog_log = self.query_one(WatchdogLog)
         self._sb1 = self.query_one(StatusBar1)
         self.set_interval(1.0, self._tick_elapsed)
+        if self._pipeline_done:
+            self.set_interval(0.5, self._check_pipeline_done)
         self.consume_events()
         if self.store and self.workflow_id:
             self.watch_workflow()
@@ -123,7 +127,16 @@ class Trust5App(App[None]):
         h, m = divmod(m, 60)
         return f"{h}h {m:02d}m"
 
-    # ─── Background workers ──────────────────────────────────────────────────
+    def _check_pipeline_done(self) -> None:
+        """Exit TUI when pipeline thread completes."""
+        if self._pipeline_done is not None and self._pipeline_done.is_set():
+            # Clear status and exit - pipeline thread completed
+            self._sidebar_info.thinking = False
+            self._sidebar_info.waiting = False
+            self.exit()
+
+    # ── Background workers ──────────────────────────────────────────────────
+
 
     @work(thread=True)
     def watch_workflow(self) -> None:

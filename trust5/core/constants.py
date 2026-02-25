@@ -74,6 +74,7 @@ _ATTR_MAP: dict[str, tuple[str, str]] = {
     "MAX_REPAIR_ATTEMPTS": ("pipeline", "max_repair_attempts"),
     "CONSECUTIVE_FAILURE_LIMIT": ("pipeline", "consecutive_failure_limit"),
     "MAX_REIMPLEMENTATIONS": ("pipeline", "max_reimplementations"),
+    "MAX_RETRY_CYCLES": ("pipeline", "max_retry_cycles"),
     "TEST_OUTPUT_LIMIT": ("pipeline", "test_output_limit"),
     "REPAIR_AGENT_TIMEOUT": ("pipeline", "repair_agent_timeout"),
     "QUICK_TEST_TIMEOUT": ("pipeline", "quick_test_timeout"),

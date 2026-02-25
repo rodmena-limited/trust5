@@ -287,6 +287,7 @@ class PipelineConfig(BaseModel):
     consecutive_failure_limit: int = 3
     max_repair_attempts: int = 5
     max_reimplementations: int = 3
+    max_retry_cycles: int = 5  # Max auto-retry cycles before giving up
     test_output_limit: int = 4000
     repair_agent_timeout: int = 1800
     quick_test_timeout: int = 60
@@ -294,7 +295,6 @@ class PipelineConfig(BaseModel):
     max_quality_attempts: int = 3
     setup_timeout: int = 120
     subprocess_timeout: int = 120
-
 
 class WorkflowTimeoutConfig(BaseModel):
     """Workflow-level timeouts in seconds."""

@@ -29,6 +29,7 @@ from .core import constants
 from .core.config import ensure_global_config, load_global_config
 from .core.git import GitManager
 from .core.init import ProjectInitializer
+from .core.llm import reset_llm_state
 from .core.message import M, emit
 from .core.plan_parser import parse_plan_output
 from .core.runner import check_stage_failures, finalize_status, reset_failed_stages, wait_for_completion
@@ -315,6 +316,16 @@ def develop(request: str) -> None:
 
             # Pipeline didn't fully succeed — attempt auto-retry.
             retry_cycle += 1
+
+            # Check if we've exceeded max retry cycles
+            if retry_cycle > constants.MAX_RETRY_CYCLES:
+                emit(
+                    M.WFAL,
+                    f"Max retry cycles ({constants.MAX_RETRY_CYCLES}) exceeded. "
+                    f"Run 'trust5 resume' to continue manually.",
+                )
+                break
+
             impl_result = p2_store.retrieve(impl_wf.id)
             reset_count = reset_failed_stages(impl_result, p2_store)
 
@@ -327,7 +338,6 @@ def develop(request: str) -> None:
                     f"Pipeline ended ({status_name}) with no resettable stages.",
                 )
                 break
-
             # Use recovery to re-queue the reset stages.
             from stabilize.recovery import recover_on_startup
 
@@ -342,6 +352,10 @@ def develop(request: str) -> None:
                 f"Waiting {wait_seconds:.0f}s before restart.",
             )
             time.sleep(wait_seconds)
+
+            # Reset LLM circuit breakers for fresh retry cycle
+            # This mirrors the fresh process state that manual 'resume' gets
+            reset_llm_state()
 
             p2_processor = p2r_processor
 

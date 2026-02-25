@@ -86,6 +86,22 @@ def _get_model_circuit(model: str) -> CircuitProtectorPolicy:
         return _model_circuits[model]
 
 
+def reset_llm_state() -> None:
+    """Reset LLM circuit breakers and accumulated state for auto-retry cycles.
+
+    Called between auto-retry cycles to give each cycle a fresh start,
+    similar to how manual resume starts a new process with clean state.
+    This clears accumulated circuit breaker failures that can cause
+    subsequent retries to fail with rate limiting or connection issues.
+    """
+    global _model_circuits
+    with _circuits_lock:
+        _model_circuits.clear()
+    logger.info("LLM state reset: circuit breakers cleared for new retry cycle")
+
+
+# MODEL_CONTEXT_WINDOW and MODEL_TIERS imported from llm_constants
+
 # MODEL_CONTEXT_WINDOW and MODEL_TIERS imported from llm_constants
 
 
