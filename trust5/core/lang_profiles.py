@@ -125,10 +125,15 @@ PROFILES: dict[str, LanguageProfile] = {
         path_var="PYTHONPATH",
         syntax_tool_names=("py_compile", "compileall"),
         dev_deps=("ruff", "pytest-timeout"),
-        required_files=("pyproject.toml",),
+        required_files=(),
         tool_checks=("python3 -c 'import pytest'", "python3 -c 'import ruff'"),
         manifest_vals=(
-            "python3 -c 'import tomllib,pathlib; tomllib.loads(pathlib.Path(\"pyproject.toml\").read_text())'",
+            "python3 -c '"
+            "import pathlib,sys; "
+            "p=pathlib.Path(\"pyproject.toml\"); "
+            "sys.exit(0) if not p.exists() else "
+            "__import__(\"tomllib\").loads(p.read_text())"
+            "'",
         ),
         test_disc="pytest --collect-only -q 2>/dev/null | tail -1",
     ),

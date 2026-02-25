@@ -39,10 +39,11 @@ def test_language_profile_has_required_project_files_field():
     assert profile.required_project_files == ()
 
 
-def test_python_profile_requires_pyproject_toml():
-    """Python profile has pyproject.toml as required project file."""
+def test_python_profile_has_no_required_files():
+    """Python profile has NO required project files — any manifest (pyproject.toml,
+    requirements.txt, setup.py) is accepted by the completeness validator."""
     python = PROFILES["python"]
-    assert python.required_project_files == ("pyproject.toml",)
+    assert python.required_project_files == ()
 
 
 def test_typescript_profile_requires_package_json_and_tsconfig():

@@ -73,6 +73,8 @@ When the failure type is "quality" (from TRUST 5 gate), the feedback contains qu
 - **test failures in quality context**: Same as normal test failures — fix source code, never tests.
 - **file size warnings**: If a file exceeds limits, split into logical modules.
 - **SPEC compliance failures**: The issue is MISSING features, not bugs in existing code. Read the unmet criteria listed in the feedback and ADD the missing functionality. This may require creating new classes, methods, or modules. Use the EXACT names from the criteria (e.g., if the criterion mentions `BatchProcessor`, create a class named `BatchProcessor`).
+- **manifest files**: For Python projects, `requirements.txt` OR `setup.py` is a perfectly valid alternative to `pyproject.toml`. Do NOT create `pyproject.toml` if `requirements.txt` already exists. Similarly, other languages accept any of their manifest files — not all are required.
+- **coverage gaps**: Increase coverage by adding real code paths, not by padding files. Do NOT create a `pyproject.toml` just to satisfy coverage or completeness — the test framework will already have what it needs.
 
 ## Workflow
 

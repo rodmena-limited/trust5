@@ -137,6 +137,17 @@ class PipelineHealth:
     def record_test_result(self, passed: bool) -> None:
         self.test_pass_history.append(passed)
 
+    # Stages that indicate the pipeline has moved beyond per-module repair
+    _POST_REPAIR_STAGES = frozenset({
+        "review", "quality", "integration validate", "integration repair",
+        "review (code analysis)", "quality (trust 5 gate)",
+        "integration validate (all tests)", "integration repair (cross-module fix)",
+    })
+
+    def past_repair_phase(self) -> bool:
+        """True when any post-repair stage (review, quality) has started."""
+        return any(s in self._POST_REPAIR_STAGES for s in self.stages_completed)
+
 
 # ── EventBus consumer ────────────────────────────────────────────────
 
@@ -267,11 +278,13 @@ def _build_narrative_prompt(
         recent_str = " ".join("\u2713" if t else "\u2717" for t in recent)
         test_summary = f"{passes} passed, {fails} failed (recent: {recent_str})"
 
+    phase = "POST-REPAIR (review/quality phase)" if health.past_repair_phase() else "ACTIVE (implementation/repair)"
     return (
         "You are the Trust5 Pipeline Watchdog \u2014 an intelligent observer that monitors\n"
         "a code generation pipeline and provides clear status narratives.\n\n"
         f"Language: {lang}\n"
-        f"Elapsed: {elapsed_min:.1f} minutes (check #{check_number})\n\n"
+        f"Elapsed: {elapsed_min:.1f} minutes (check #{check_number})\n"
+        f"Pipeline phase: {phase}\n\n"
         "PIPELINE BEHAVIOR:\n"
         f"  Stages completed: {', '.join(health.stages_completed) or 'none yet'}\n"
         f"  Stages failed: {', '.join(health.stages_failed) or 'none'}\n"
@@ -287,12 +300,16 @@ def _build_narrative_prompt(
         "INSTRUCTIONS:\n"
         "Write a 2-4 sentence narrative summary of the pipeline's CURRENT state.\n"
         "- Assess the project files: are there empty files, stubs, missing manifests,\n"
-        "  structural issues, or anything that looks wrong for a {lang} project?\n"
+        f"  structural issues, or anything that looks wrong for a {lang} project?\n"
+        "- For Python projects, requirements.txt is a valid alternative to pyproject.toml\n"
         "- Report any behavioral alerts if present\n"
         "- If a previous issue is NO LONGER visible, it was RESOLVED \u2014 do NOT mention it\n"
         "- Tell the user what's happening RIGHT NOW and what to expect next\n"
         "- If things are going well, say so briefly\n"
+        "- If the pipeline has reached review/quality phase, prior repair attempts are NORMAL\n"
+        "  and should NOT be reported as concerning\n"
         "- If the pipeline is stuck or regressing, warn clearly\n"
+        "- Do NOT recommend manual intervention if the pipeline is progressing normally\n"
         "- Do NOT use JSON. Write plain text only.\n"
         "- Be direct and useful, not verbose.\n"
     )
@@ -499,11 +516,13 @@ class WatchdogTask(Task):
         if behavioral_findings:
             lines.append("")
             lines.append("\u2500" * 40)
-            severity_icon = {"error": "\u274c", "warning": "\u26a0\ufe0f"}
+            severity_icon = {"error": "\u2717", "warning": "\u26a0"}
             for f in behavioral_findings:
-                icon = severity_icon.get(f.get("severity", "warning"), "\u26a0\ufe0f")
-                lines.append(f"{icon}  [{f.get('severity', 'warning').upper()}] {f.get('category', '')}")
-                lines.append(f"   {f.get('message', '')}")
+                icon = severity_icon.get(f.get("severity", "warning"), "\u26a0")
+                lines.append(
+                    f"{icon}  [{f.get('severity', 'warning').upper()}] {f.get('category', '')} "
+                    f"{f.get('message', '')}"
+                )
                 lines.append("")
         content = "\n".join(lines).rstrip()
         if not content:
@@ -558,6 +577,9 @@ class WatchdogTask(Task):
     @staticmethod
     def _rule_repair_loop(health: PipelineHealth) -> list[dict[str, str]]:
         findings: list[dict[str, str]] = []
+        # Suppress repair-loop warnings once pipeline has progressed past repair
+        if health.past_repair_phase():
+            return findings
         if health.repair_attempts >= 3:
             findings.append(
                 {
@@ -583,6 +605,9 @@ class WatchdogTask(Task):
     @staticmethod
     def _rule_idle_agent(health: PipelineHealth) -> list[dict[str, str]]:
         findings: list[dict[str, str]] = []
+        # Suppress idle-agent warnings once pipeline has progressed past repair
+        if health.past_repair_phase():
+            return findings
         if health.consecutive_readonly_turns >= 8:
             findings.append(
                 {

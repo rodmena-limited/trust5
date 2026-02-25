@@ -108,8 +108,13 @@ def test_python_with_only_requirements_txt_passes_completeness():
         assert result.score == 1.0
 
 
-def test_python_with_no_manifest_fails_completeness():
-    """Real Python profile: no manifest at all should fail."""
+def test_python_with_no_manifest_passes_completeness():
+    """Real Python profile: no required_project_files, so completeness always passes.
+
+    Python's required_files is empty because any manifest (pyproject.toml,
+    requirements.txt, setup.py) is acceptable.  Missing manifests are caught
+    by other validators (lint, tests), not by the completeness check.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         open(os.path.join(tmpdir, "app.py"), "w").close()
 
@@ -117,11 +122,8 @@ def test_python_with_no_manifest_fails_completeness():
         config = QualityConfig()
         validator = ProjectCompletenessValidator(tmpdir, profile, config)
         result = validator.validate()
-
-        assert result.passed is False
-        missing = [i for i in result.issues if i.rule == "required-file-missing"]
-        assert len(missing) == 1
-        assert "pyproject.toml" in missing[0].message
+        assert result.passed is True
+        assert result.score == 1.0
 
 
 def test_python_with_pyproject_toml_passes_completeness():

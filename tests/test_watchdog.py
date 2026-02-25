@@ -268,7 +268,7 @@ def test_emit_narrative_block_with_warnings(mock_emit_block):
     assert "Watchdog (check #3)" in args[0][1]
     assert "Pipeline is recovering." in args[0][2]
     assert "idle_agent" in args[0][2]
-    assert "\u26a0\ufe0f" in args[0][2]
+    assert "\u26a0" in args[0][2]
 
 
 @patch("trust5.tasks.watchdog_task.emit_block")
@@ -284,8 +284,8 @@ def test_emit_narrative_block_error_escalates(mock_emit_block):
     from trust5.core.message import M as _M
 
     assert args[0][0] == _M.WDER
-    assert "\u274c" in args[0][2]
-    assert "\u26a0\ufe0f" in args[0][2]
+    assert "\u2717" in args[0][2]
+    assert "\u26a0" in args[0][2]
 
 
 @patch("trust5.tasks.watchdog_task.emit_block")
@@ -881,3 +881,54 @@ def test_should_trigger_rebuild_false_when_progressing(_mock_emit):
         context: dict = {"_max_jumps": 50}
         result = _make_watchdog()._should_trigger_rebuild(health, context, tmpdir)
         assert result is False
+
+
+
+# ── past_repair_phase suppression tests ────────────────────────────
+
+
+def test_past_repair_phase_false_by_default():
+    health = PipelineHealth()
+    assert health.past_repair_phase() is False
+
+
+def test_past_repair_phase_true_after_review():
+    health = PipelineHealth()
+    health.stages_completed.append("review")
+    assert health.past_repair_phase() is True
+
+
+def test_past_repair_phase_true_after_quality():
+    health = PipelineHealth()
+    health.stages_completed.append("quality")
+    assert health.past_repair_phase() is True
+
+
+def test_past_repair_phase_true_after_review_code_analysis():
+    health = PipelineHealth()
+    health.stages_completed.append("review (code analysis)")
+    assert health.past_repair_phase() is True
+
+
+def test_rule_repair_loop_suppressed_after_review():
+    """Once review/quality starts, repair loop warnings are stale."""
+    health = PipelineHealth(repair_attempts=5, jump_count=25)
+    health.stages_completed.append("review")
+    findings = _make_watchdog()._rule_repair_loop(health)
+    assert findings == []
+
+
+def test_rule_idle_agent_suppressed_after_review():
+    """Once review/quality starts, idle agent warnings are stale."""
+    health = PipelineHealth(consecutive_readonly_turns=20)
+    health.stages_completed.append("quality")
+    findings = _make_watchdog()._rule_idle_agent(health)
+    assert findings == []
+
+
+def test_rule_repair_loop_not_suppressed_during_repair():
+    """During active repair, warnings should still fire."""
+    health = PipelineHealth(repair_attempts=5, jump_count=25)
+    health.stages_completed.append("implement")
+    findings = _make_watchdog()._rule_repair_loop(health)
+    assert len(findings) == 2  # Both repair_loop and excessive_jumps
