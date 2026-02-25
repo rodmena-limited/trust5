@@ -1,9 +1,9 @@
 /* ─── Trust5 TUI Theme ───────────────────────────────────────────── */
-/* Warm posh dark: chocolate blacks, cream text, gold/copper accents  */
+/* Dark purple sidebar, pure black main area, flat/borderless design */
 
 Screen {
     layout: vertical;
-    background: #0c0a08;
+    background: #000000;
     color: #e8ddd0;
     overflow-x: hidden;
 }
@@ -11,22 +11,20 @@ Screen {
 /* ─── Header ──────────────────────────────────────────────────────── */
 HeaderWidget {
     height: 3;
-    background: #151210;
-    border-bottom: solid #2a2420;
+    background: #0a0612;
     content-align: left middle;
     padding: 0 2;
 }
 
-/* ─── Content Area (horizontal: log + sidebar) ────────────────────── */
+/* ─── Content Area (horizontal: log 3/4 + sidebar 1/4) ────────────── */
 #content-area {
     height: 1fr;
 }
 
-/* ─── Main Log ────────────────────────────────────────────────────── */
+/* ─── Main Log (3/4 width) ────────────────────────────────────────── */
 Trust5Log {
-    width: 1fr;
-    max-width: 120;
-    background: #0c0a08;
+    width: 3fr;
+    background: #000000;
     color: #e8ddd0;
     border: none;
     overflow-y: scroll;
@@ -35,67 +33,64 @@ Trust5Log {
     scrollbar-color: #3a322c;
     scrollbar-color-hover: #d4a054;
     scrollbar-color-active: #d4a054;
-    padding: 0 1;
+    padding: 1 0 1 2;
 }
 
-/* ─── Sidebar ─────────────────────────────────────────────────────── */
+/* ─── Sidebar (1/4 width, NO padding — children handle their own) ── */
 Sidebar {
-    width: 36;
-    background: #151210;
-    border-left: solid #2a2420;
+    width: 1fr;
+    background: #120a1c;
 }
 
 SidebarLogo {
     height: auto;
-    padding: 1 1 0 1;
-    background: #151210;
+    padding: 0 2;
+    background: #120a1c;
 }
 
 SidebarInfo {
     height: auto;
-    padding: 1 1;
-    border-top: solid #2a2420;
-    border-bottom: solid #2a2420;
-    background: #151210;
+    max-height: 14;
+    padding: 0 2;
+    background: #120a1c;
 }
 
 WatchdogHeader {
     height: auto;
-    padding: 1 0 0 0;
-    background: #151210;
+    padding: 0 2;
+    background: #120a1c;
 }
 
 #watchdog-log {
     height: 1fr;
-    background: #151210;
+    background: #120a1c;
     color: #e8ddd0;
-    padding: 0 1;
     overflow-y: scroll;
     overflow-x: hidden;
     scrollbar-size-vertical: 1;
     scrollbar-color: #3a322c;
-    scrollbar-color-hover: #d4a054;
-    scrollbar-color-active: #d4a054;
+    scrollbar-color-hover: #a87fd4;
+    scrollbar-color-active: #a87fd4;
     border: none;
+    padding: 0 2;
 }
 
 /* ─── Status Bar ──────────────────────────────────────────────────── */
 StatusBar1 {
     height: auto;
-    background: #151210;
+    background: #0a0612;
     color: #b08cb8;
     text-style: bold;
-    padding: 0 2;
-    border-top: solid #2a2420;
+    padding: 0 2 1 2;
 }
 
 /* ─── Scrollbar ───────────────────────────────────────────────────── */
 Scrollbar {
-    background: #0c0a08;
-    color: #2a2420;
+    background: #000000;
+    color: #1a1228;
     width: 1;
 }
 
 Scrollbar:hover {
-    color: #d4a054;
+    color: #a87fd4;
 }

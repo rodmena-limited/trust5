@@ -36,6 +36,17 @@ _BATCH_SIZE = 64
 _WATCHDOG_BLOCK_CODES = frozenset({M.WDWN, M.WDER})
 _WATCHDOG_SIDEBAR_CODES = frozenset({M.WDST, M.WDOK, M.WDWN, M.WDER})
 
+_TOOL_DISPLAY_NAMES: dict[str, str] = {
+    M.TBSH: "Bash",
+    M.TWRT: "Write",
+    M.TRED: "Read",
+    M.TEDT: "Edit",
+    M.TGLB: "Glob",
+    M.TGRP: "Grep",
+    M.TPKG: "Pkg",
+    M.TINI: "Init",
+}
+
 
 class Trust5App(App[None]):
     """Textual TUI for live pipeline monitoring."""
@@ -66,11 +77,9 @@ class Trust5App(App[None]):
         self._workflow_start_time: float | None = None
         self._workflow_ended = False
         self._setup_counted = False
-        # Watchdog block accumulation for sidebar routing
         self._wd_block_buffer: list[str] = []
         self._wd_block_code: str = ""
         self._in_wd_block: bool = False
-        # Widget refs cached in on_mount
         self._trust5_log: Trust5Log
         self._header: HeaderWidget
         self._sidebar_info: SidebarInfo
@@ -100,8 +109,8 @@ class Trust5App(App[None]):
     def _tick_elapsed(self) -> None:
         if self._workflow_start_time is not None and not self._workflow_ended:
             elapsed = time.monotonic() - self._workflow_start_time
-            self._sb1.elapsed = self._format_elapsed(elapsed)
-            self._sb1.refresh()
+            self._sidebar_info.elapsed = self._format_elapsed(elapsed)
+            self._sidebar_info.refresh()
 
     @staticmethod
     def _format_elapsed(seconds: float) -> str:
@@ -136,7 +145,7 @@ class Trust5App(App[None]):
                 if wf.status in terminal_statuses:
                     time.sleep(0.5)
                     self._workflow_result = wf
-                    self.call_from_thread(self._clear_status_bar_on_completion, wf.status)
+                    self.call_from_thread(self._clear_status_on_completion, wf.status)
                     break
             except (OSError, RuntimeError) as exc:
                 logger.debug("watch_workflow poll error: %s", exc)
@@ -180,17 +189,18 @@ class Trust5App(App[None]):
             if done:
                 break
 
-    def _clear_status_bar_on_completion(self, status: Any) -> None:
-        self._sb1.thinking = False
-        self._sb1.waiting = False
+    def _clear_status_on_completion(self, status: Any) -> None:
+        self._sidebar_info.thinking = False
+        self._sidebar_info.waiting = False
         self._sb1.current_tool = ""
         status_name = status.name if hasattr(status, "name") else str(status)
-        if status_name in ("SUCCEEDED", "COMPLETED"):
-            self._sb1.stage_name = "completed"
-        elif status_name in ("CANCELED",):
-            self._sb1.stage_name = "interrupted"
-        else:
-            self._sb1.stage_name = "failed"
+        _terminal_names: dict[str, str] = {
+            "SUCCEEDED": "completed",
+            "COMPLETED": "completed",
+            "CANCELED": "interrupted",
+        }
+        self._sb1.stage_name = _terminal_names.get(status_name, "failed")
+        self._workflow_ended = True
         self._workflow_ended = True
 
     # ─── Event routing ───────────────────────────────────────────────────────
@@ -215,7 +225,6 @@ class Trust5App(App[None]):
         content = event.msg
         kind = event.kind
 
-        # ── Block events: watchdog blocks → sidebar, rest → main log ──
         if kind == K_BLOCK_START:
             if code in _WATCHDOG_BLOCK_CODES:
                 self._wd_block_buffer = []
@@ -242,14 +251,13 @@ class Trust5App(App[None]):
             self._trust5_log.write_event(event)
             return
 
-        # ── Stream events ──
         if kind == K_STREAM_START:
             self._current_stream_label = event.label or "Streaming"
             self._current_stream_code = code
             self._trust5_log.write_stream_start(code, self._current_stream_label)
             if code == M.ATHK:
-                self._sb1.waiting = False
-                self._sb1.thinking = True
+                self._sidebar_info.waiting = False
+                self._sidebar_info.thinking = True
             return
 
         if kind == K_STREAM_TOKEN:
@@ -259,10 +267,9 @@ class Trust5App(App[None]):
         if kind == K_STREAM_END:
             self._trust5_log.write_stream_end()
             if self._current_stream_code == M.ATHK:
-                self._sb1.thinking = False
+                self._sidebar_info.thinking = False
             return
 
-        # ── Watchdog atomic events → sidebar ──
         if code in _WATCHDOG_SIDEBAR_CODES:
             _wd_level_map: dict[str, str] = {
                 M.WDST: "start",
@@ -273,7 +280,6 @@ class Trust5App(App[None]):
             self._watchdog_log.add_narrative(content, _wd_level_map.get(code, "ok"))
             return
 
-        # ── Pipeline header updates ──
         module = event.label or ""
 
         if code == M.WSTG:
@@ -331,6 +337,7 @@ class Trust5App(App[None]):
             self._header.update_stage("repair", "running")
             self._sb1.stage_name = "quality \u2192 repair"
 
+
         elif code == M.VPAS:
             self._header.update_stage("validate", "success")
             if module:
@@ -356,22 +363,25 @@ class Trust5App(App[None]):
 
         elif code == M.LSTR:
             self._sb1.stage_name = "loop"
+
         elif code == M.LITR:
             self._sb1.stage_name = f"loop {content}"
+
         elif code == M.LEND:
             self._sb1.stage_name = "loop complete"
+
         elif code == M.LERR:
             self._sb1.stage_name = "loop error"
 
-        # ── Elapsed timer ──
+
         if code == M.WSTR:
             if self._workflow_start_time is None:
                 self._workflow_start_time = time.monotonic()
             self._workflow_ended = False
         elif code in (M.WSUC, M.WFAL, M.WTMO, M.WINT):
             self._workflow_ended = True
-            self._sb1.thinking = False
-            self._sb1.waiting = False
+            self._sidebar_info.thinking = False
+            self._sidebar_info.waiting = False
             self._sb1.current_tool = ""
             _terminal_stage_names: dict[str, str] = {
                 M.WSUC: "completed",
@@ -379,18 +389,18 @@ class Trust5App(App[None]):
                 M.WTMO: "failed",
                 M.WINT: "interrupted",
             }
-            self._sb1.stage_name = _terminal_stage_names.get(code, "done")
+            stage = _terminal_stage_names.get(code, "done")
+            self._sb1.stage_name = stage
 
-        # ── Status bar routing (model/tokens → sidebar, stage/turn → bottom bar) ──
-        self._update_status_bars(code, content)
 
-        # ── Main log ──
+        self._update_routing(code, content)
+
         if code in STATUS_BAR_ONLY:
             return
 
         self._trust5_log.write_event(event)
 
-    def _update_status_bars(self, code: str, content: str) -> None:
+    def _update_routing(self, code: str, content: str) -> None:
         try:
             if code == M.MMDL:
                 kv = _parse_kv(content)
@@ -419,7 +429,7 @@ class Trust5App(App[None]):
                 path = kv.get("path", "")
                 if path:
                     self._changed_files.add(path)
-                    self._sb1.files_changed = len(self._changed_files)
+                    self._sidebar_info.files_changed = len(self._changed_files)
             elif code == M.SPRG:
                 kv = _parse_kv(content)
                 self._header.stage_total = int(kv.get("total", "0"))
@@ -428,19 +438,22 @@ class Trust5App(App[None]):
                     self._header.module_count = modules
             elif code == M.WSTG:
                 self._sb1.stage_name = content
+                self._sb1.current_tool = ""
             elif code == M.ATRN:
                 m = re.search(r"Turn \d+/\d+", content)
-                self._sb1.turn_info = m.group(0) if m else content
+                self._sidebar_info.turn_info = m.group(0) if m else content
                 self._sb1.current_tool = ""
-                self._sb1.waiting = True
+                self._sidebar_info.waiting = True
             elif code == M.CTLC:
-                self._sb1.waiting = False
+                self._sidebar_info.waiting = False
                 display = content
                 if "] " in display:
                     display = display.split("] ", 1)[1]
                 self._sb1.current_tool = display[:60]
+            elif code in _TOOL_DISPLAY_NAMES:
+                self._sb1.current_tool = _TOOL_DISPLAY_NAMES[code]
             elif code == M.ASUM:
-                self._sb1.waiting = False
+                self._sidebar_info.waiting = False
                 self._sb1.current_tool = ""
         except (ValueError, KeyError):
             pass

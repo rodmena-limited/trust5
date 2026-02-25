@@ -19,7 +19,6 @@ from ..core.event_bus import (
 from ..core.message import M
 from .theme import (
     C_AMBER,
-    C_BG,
     C_BLUE,
     C_CHROME,
     C_CYAN,
@@ -394,22 +393,11 @@ class Trust5Log(RichLog):
         theme = get_theme(code)
         agent_label, display_msg = self._strip_agent_prefix(msg)
         text = Text()
-
-        if theme.get("pill"):
-            # Pill badge: colored background — for major lifecycle events
-            text.append(f" {theme['marker']} ", style=f"bold {C_BG} on {theme['color']}")
-            text.append("  ")
-            if agent_label:
-                text.append(f"{agent_label}  ", style=C_DIM)
-            text.append(display_msg, style=self._msg_style(code))
-        else:
-            # Colored text marker — for tool calls and secondary events
-            text.append(f" {theme['marker']}", style=f"bold {theme['color']}")
-            text.append("  ")
-            if agent_label:
-                text.append(f"{agent_label}  ", style=C_DIM)
-            text.append(display_msg, style=self._msg_style(code))
-
+        text.append(f" {theme['marker']}", style=f"bold {theme['color']}")
+        text.append("  ")
+        if agent_label:
+            text.append(f"{agent_label}  ", style=C_DIM)
+        text.append(display_msg, style=self._msg_style(code))
         self.write(text)
 
     def _msg_style(self, code: str) -> str:

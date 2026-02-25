@@ -149,6 +149,8 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
         self.thinking_level = thinking_level
         self.backend = backend
         emit(M.MMDL, f"model={model} backend={backend} thinking={thinking_level or 'off'}")
+        if provider_name:
+            emit(M.MPRF, f"provider={provider_name}")
         self._auth_header = auth_header
         self._provider_name = provider_name
         self._abort = threading.Event()

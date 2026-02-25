@@ -5,10 +5,10 @@ from ..core.message import M
 # ─── Color Palette ───────────────────────────────────────────────────────────
 # Warm "posh" palette: champagne whites, warm greys, gold/copper/rose accents.
 
-C_BG = "#0c0a08"
-C_SURFACE = "#151210"
-C_BORDER = "#2a2420"
-C_CHROME = "#3a322c"
+C_BG = "#000000"
+C_SURFACE = "#0a0612"
+C_BORDER = "#1a1228"
+C_CHROME = "#2a2232"
 
 C_TEXT = "#e8ddd0"
 C_SECONDARY = "#b0a898"

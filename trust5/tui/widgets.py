@@ -185,96 +185,33 @@ class HeaderWidget(Static):
 
 
 class StatusBar1(Static):
-    """Upper status bar: stage, elapsed, turn, tool, files, thinking/waiting."""
-
     stage_name: reactive[str] = reactive("")
-    elapsed: reactive[str] = reactive("")
-    turn_info: reactive[str] = reactive("")
     current_tool: reactive[str] = reactive("")
-    files_changed: reactive[int] = reactive(0)
-    thinking: reactive[bool] = reactive(False)
-    waiting: reactive[bool] = reactive(False)
-
-    _SPINNER_FRAMES = (
-        "\u280b",
-        "\u2819",
-        "\u2839",
-        "\u2838",
-        "\u283c",
-        "\u2834",
-        "\u2826",
-        "\u2827",
-        "\u2807",
-        "\u280f",
-    )
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._spinner_tick = 0
-        self._spinner_timer: Any = None
-
     def render(self) -> Text:
-        text = Text()
+        left = Text()
         if self.stage_name:
-            text.append(f" {self.stage_name}", style=f"bold {C_LAVENDER}")
+            left.append(f" {self.stage_name}", style=f"bold {C_LAVENDER}")
         else:
-            text.append(" idle", style=C_DIM)
-
-        if self.elapsed:
-            text.append(f"  {self.elapsed}", style=C_MUTED)
-        if self.turn_info:
-            text.append(f"  {self.turn_info}", style=C_MUTED)
-        if self.thinking:
-            frame = self._SPINNER_FRAMES[self._spinner_tick % len(self._SPINNER_FRAMES)]
-            text.append(f"  {frame} thinking", style=f"bold {C_AMBER}")
-        elif self.waiting:
-            frame = self._SPINNER_FRAMES[self._spinner_tick % len(self._SPINNER_FRAMES)]
-            text.append(f"  {frame} generating", style=C_MUTED)
+            left.append(" idle", style=C_DIM)
         if self.current_tool:
-            text.append(f"  \u25b8 {self.current_tool}", style=f"bold {C_TEAL}")
-        if self.files_changed > 0:
-            text.append(f"  {self.files_changed} file(s)", style=f"bold {C_GREEN}")
-        text.append("    ", style=C_DIM)
-        text.append("^C", style=C_SECONDARY)
-        text.append(" quit  ", style=C_DIM)
-        text.append("c", style=C_SECONDARY)
-        text.append(" clear  ", style=C_DIM)
-        text.append("s", style=C_SECONDARY)
-        text.append(" scroll", style=C_DIM)
-        return text
+            left.append("  \u25b8 ", style=C_DIM)
+            left.append(self.current_tool, style=f"bold {C_TEAL}")
+        right = Text()
+        right.append("^C", style=C_SECONDARY)
+        right.append(" quit  ", style=C_DIM)
+        right.append("c", style=C_SECONDARY)
+        right.append(" clear  ", style=C_DIM)
+        right.append("s", style=C_SECONDARY)
+        right.append(" scroll ", style=C_DIM)
+        try:
+            w = self.size.width
+        except Exception:
+            w = 120
+        gap = max(w - len(left.plain) - len(right.plain), 1)
+        left.append(" " * gap)
+        left.append_text(right)
+        return left
 
-    def _needs_spinner(self) -> bool:
-        return self.thinking or self.waiting
-
-    def _start_spinner(self) -> None:
-        if self._spinner_timer is None:
-            self._spinner_tick = 0
-            self._spinner_timer = self.set_interval(0.08, self._animate_spinner)
-
-    def _stop_spinner_if_idle(self) -> None:
-        if not self._needs_spinner() and self._spinner_timer is not None:
-            self._spinner_timer.stop()
-            self._spinner_timer = None
-            self.refresh()
-
-    def watch_thinking(self, value: bool) -> None:
-        """Start/stop spinner for thinking state."""
-        if value:
-            self._start_spinner()
-        else:
-            self._stop_spinner_if_idle()
-
-    def watch_waiting(self, value: bool) -> None:
-        """Start/stop spinner for waiting-for-LLM state."""
-        if value:
-            self._start_spinner()
-        else:
-            self._stop_spinner_if_idle()
-
-    def _animate_spinner(self) -> None:
-        if self._needs_spinner():
-            self._spinner_tick += 1
-            self.refresh()
 
 
 class StatusBar0(Static):
