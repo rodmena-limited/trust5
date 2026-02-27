@@ -263,8 +263,7 @@ class RepairTask(Task):
             if cross_mod_hint:
                 user_prompt = cross_mod_hint + user_prompt
 
-        repair_thinking = "high" if repair_attempt >= 2 else "low"
-        llm = LLM.for_tier("best", stage_name="repairer", thinking_level=repair_thinking)
+        llm = LLM.for_tier("best", stage_name="repairer")
 
         # Integration repair (no owned_files) operates across all modules.
         # It must be able to fix test infrastructure (imports, fixtures)

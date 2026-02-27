@@ -352,3 +352,136 @@ def test_language_context_injected_into_prompt(
     prompt_text = call_args[0][0]  # first positional arg
     assert "Project Language" in prompt_text
     assert "Python" in prompt_text
+
+
+# ── Defensive parsing tests (crash scenarios from production) ─────────
+
+
+def test_parse_findings_comma_separated_line_numbers():
+    """LLM returns '62, 73, 107, 125' for line field — must not crash."""
+    findings_json = json.dumps(
+        {
+            "findings": [
+                {
+                    "severity": "warning",
+                    "category": "code-duplication",
+                    "file": "app.py",
+                    "line": "62, 73, 107, 125",
+                    "description": "Duplicate route handlers",
+                }
+            ],
+            "summary_score": 0.7,
+            "total_errors": 0,
+            "total_warnings": 1,
+            "total_info": 0,
+        }
+    )
+    raw = f"<!-- REVIEW_FINDINGS JSON\n{findings_json}\n-->"
+
+    report = parse_review_findings(raw)
+
+    assert len(report.findings) == 1
+    assert report.findings[0].line == 62  # takes first number
+    assert report.total_warnings == 1
+
+
+def test_parse_findings_range_line_number():
+    """LLM returns '30-60' for line field — must not crash."""
+    findings_json = json.dumps(
+        {
+            "findings": [
+                {
+                    "severity": "error",
+                    "category": "performance",
+                    "file": "models.py",
+                    "line": "30-60",
+                    "description": "N+1 query",
+                }
+            ],
+            "summary_score": "0.65",
+            "total_errors": "1",
+            "total_warnings": 0,
+            "total_info": 0,
+        }
+    )
+    raw = f"<!-- REVIEW_FINDINGS JSON\n{findings_json}\n-->"
+
+    report = parse_review_findings(raw)
+
+    assert len(report.findings) == 1
+    assert report.findings[0].line == 30  # takes first number from range
+    assert report.summary_score == 0.65
+    assert report.total_errors == 1
+
+
+def test_parse_findings_string_numeric_values():
+    """LLM returns numeric values as strings — must not crash."""
+    findings_json = json.dumps(
+        {
+            "findings": [],
+            "summary_score": "0.85",
+            "total_errors": "2",
+            "total_warnings": "3",
+            "total_info": "1",
+        }
+    )
+    raw = f"<!-- REVIEW_FINDINGS JSON\n{findings_json}\n-->"
+
+    report = parse_review_findings(raw)
+
+    assert report.summary_score == 0.85
+    assert report.total_errors == 2
+    assert report.total_warnings == 3
+    assert report.total_info == 1
+
+
+def test_parse_findings_null_line_field():
+    """LLM returns null for line field — falls back to 0."""
+    findings_json = json.dumps(
+        {
+            "findings": [
+                {
+                    "severity": "info",
+                    "category": "design-smell",
+                    "file": "config.py",
+                    "line": None,
+                    "description": "Consider extracting",
+                }
+            ],
+            "summary_score": 0.9,
+            "total_errors": 0,
+            "total_warnings": 0,
+            "total_info": 1,
+        }
+    )
+    raw = f"<!-- REVIEW_FINDINGS JSON\n{findings_json}\n-->"
+
+    report = parse_review_findings(raw)
+
+    assert report.findings[0].line == 0
+
+
+def test_parse_findings_non_numeric_line_garbage():
+    """LLM returns complete garbage for line — falls back to 0."""
+    findings_json = json.dumps(
+        {
+            "findings": [
+                {
+                    "severity": "warning",
+                    "category": "error-handling",
+                    "file": "app.py",
+                    "line": "near the top",
+                    "description": "Missing error handler",
+                }
+            ],
+            "summary_score": 0.8,
+            "total_errors": 0,
+            "total_warnings": 1,
+            "total_info": 0,
+        }
+    )
+    raw = f"<!-- REVIEW_FINDINGS JSON\n{findings_json}\n-->"
+
+    report = parse_review_findings(raw)
+
+    assert report.findings[0].line == 0  # no digits at all

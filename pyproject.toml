@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trust5"
-version = "0.6.2"
+version = "0.6.3"
 description = "AI-driven autonomous code generation with correctness guarantees"
 readme = "README.md"
 license = "Apache-2.0"

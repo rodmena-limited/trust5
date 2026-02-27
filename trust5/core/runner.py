@@ -83,7 +83,9 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, bool, li
             score = outputs.get("quality_score", "?")
             details.append(f"  - Stage '{stage.ref_id}': quality gate failed (score: {score})")
 
-        if outputs.get("review_passed") is False:
+        # Review failures only count if NOT advisory mode
+        # Advisory mode (review_advisory=True) means "inform but don't block"
+        if outputs.get("review_passed") is False and not outputs.get("review_advisory"):
             has_review_failure = True
             r_score = outputs.get("review_score", "?")
             details.append(f"  - Stage '{stage.ref_id}': code review failed (score: {r_score})")

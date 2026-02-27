@@ -10,7 +10,8 @@ import subprocess
 
 from pydantic import BaseModel, Field
 
-from .constants import QUALITY_PASS_THRESHOLD, SUBPROCESS_TIMEOUT
+from .constants import QUALITY_PASS_THRESHOLD
+from .constants import SUBPROCESS_TIMEOUT as SUBPROCESS_TIMEOUT
 
 # ── Principle names and weights ──────────────────────────────────────
 

@@ -26,11 +26,13 @@ from stabilize import Workflow
 
 from .commands.resume_cmd import resume_logic
 from .core import constants
+from .core.auth.registry import validate_provider
 from .core.config import ensure_global_config, load_global_config
 from .core.git import GitManager
 from .core.init import ProjectInitializer
 from .core.llm import reset_llm_state
 from .core.message import M, emit
+from .core.ollama_models import ensure_ollama_models
 from .core.plan_parser import parse_plan_output
 from .core.runner import check_stage_failures, finalize_status, reset_failed_stages, wait_for_completion
 from .core.tools import Tools
@@ -122,8 +124,6 @@ def _global_options(
     if _USE_TUI:
         _silence_logging_for_tui()
     ensure_global_config()
-
-
 # ── CLI Commands ─────────────────────────────────────────────────────────
 
 
@@ -131,7 +131,10 @@ def _global_options(
 def plan(request: str) -> None:
     Tools.set_non_interactive(True)
     processor, orchestrator, store, _queue, db_path = setup_stabilize(use_tui=_USE_TUI)
+    validate_provider()
+    ensure_ollama_models()
     workflow = create_plan_workflow(request)
+
     _run_workflow_dispatch(
         processor,
         orchestrator,
@@ -148,8 +151,11 @@ def plan(request: str) -> None:
 def develop(request: str) -> None:
     Tools.set_non_interactive(True)
     _init_viewer_once(_USE_TUI)
+    validate_provider()
+    ensure_ollama_models()
 
     def _pipeline(shutdown: threading.Event | None = None) -> Workflow | None:
+
         """Run plan -> implement pipeline.
 
         *shutdown* is a ``threading.Event`` set by ``_run_tui_multi`` when the
@@ -375,7 +381,10 @@ def develop(request: str) -> None:
 def run(spec_id: str) -> None:
     Tools.set_non_interactive(True)
     processor, orchestrator, store, _queue, db_path = setup_stabilize(use_tui=_USE_TUI)
+    validate_provider()
+    ensure_ollama_models()
     workflow = create_run_workflow(spec_id)
+
     _run_workflow_dispatch(
         processor,
         orchestrator,
@@ -453,7 +462,10 @@ def auth_status() -> None:
 def loop() -> None:
     Tools.set_non_interactive(True)
     processor, orchestrator, store, _queue, db_path = setup_stabilize(use_tui=_USE_TUI)
+    validate_provider()
+    ensure_ollama_models()
     workflow = create_loop_workflow()
+
     _run_workflow_dispatch(
         processor, orchestrator, store, workflow, constants.TIMEOUT_LOOP, "Ralph Loop", db_path, use_tui=_USE_TUI
     )

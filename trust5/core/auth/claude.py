@@ -27,19 +27,7 @@ CLAUDE_CONFIG = ProviderConfig(
     api_base_url="https://api.anthropic.com",
     auth_header="Authorization",
     backend="anthropic",
-    models={
-        "best": "claude-opus-4-6",
-        "good": "claude-opus-4-6",
-        "fast": "claude-sonnet-4-5",
-        "watchdog": "claude-haiku-4-5",
-        "default": "claude-opus-4-6",
-    },
     thinking_tiers={"best", "good"},
-    fallback_chain=[
-        "claude-opus-4-6",
-        "claude-sonnet-4-5",
-        "claude-haiku-4-5",
-    ],
 )
 
 

@@ -136,7 +136,7 @@ class RalphLoop:
         )
         system_prompt += issue_context
 
-        llm = LLM()
+        llm = LLM.for_tier("fast", stage_name=agent_name)
         with mcp_clients() as mcp:
             agent = Agent(name=agent_name, prompt=system_prompt, llm=llm, mcp_clients=mcp)
             agent.run(f"Fix this issue: {issue['message']}")

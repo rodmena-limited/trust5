@@ -3,7 +3,8 @@ import logging
 import os
 from typing import Any
 
-from .constants import MAX_FILE_CONTENT, MAX_TOTAL_CONTEXT
+from .constants import MAX_FILE_CONTENT
+from .constants import MAX_TOTAL_CONTEXT as MAX_TOTAL_CONTEXT
 
 logger = logging.getLogger(__name__)
 

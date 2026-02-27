@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from typing import Any
+
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
@@ -128,15 +129,14 @@ class Trust5App(App[None]):
         return f"{h}h {m:02d}m"
 
     def _check_pipeline_done(self) -> None:
-        """Exit TUI when pipeline thread completes."""
+        """Update status when pipeline thread completes (but don't exit TUI)."""
         if self._pipeline_done is not None and self._pipeline_done.is_set():
-            # Clear status and exit - pipeline thread completed
+            # Clear status indicators but keep TUI open for review
             self._sidebar_info.thinking = False
             self._sidebar_info.waiting = False
-            self.exit()
+            # Don't exit - let user review output and quit manually
 
     # ── Background workers ──────────────────────────────────────────────────
-
 
     @work(thread=True)
     def watch_workflow(self) -> None:

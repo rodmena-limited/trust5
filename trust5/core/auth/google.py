@@ -30,20 +30,7 @@ GOOGLE_CONFIG = ProviderConfig(
     api_base_url="https://generativelanguage.googleapis.com",
     auth_header="Authorization",
     backend="google",
-    models={
-        "best": "gemini-3-pro-preview",
-        "good": "gemini-3-pro-preview",
-        "fast": "gemini-3-flash-preview",
-        "watchdog": "gemini-3-flash-preview",
-        "default": "gemini-3-pro-preview",
-    },
     thinking_tiers={"best", "good"},
-    fallback_chain=[
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-    ],
 )
 
 

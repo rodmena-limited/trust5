@@ -244,6 +244,7 @@ def _run_tui_multi(run_fn: Callable[[threading.Event], Workflow | None]) -> Work
         finally:
             # Signal pipeline completion so TUI can auto-exit
             pipeline_done.set()
+
     t = threading.Thread(target=_background, daemon=True)
     t.start()
 

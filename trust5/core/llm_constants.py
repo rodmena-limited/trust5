@@ -16,17 +16,6 @@ MODEL_CONTEXT_WINDOW: dict[str, int] = {
     "gemini-2.5-pro": 1_048_576,
     "gemini-2.5-flash": 1_048_576,
 }
-
-# ── Ollama model tiers (legacy fallback) ─────────────────────────────────────
-
-MODEL_TIERS: dict[str, str] = {
-    "best": "qwen3-coder-next:cloud",
-    "good": "kimi-k2.5:cloud",
-    "fast": "gemini-3-flash-preview:cloud",
-    "watchdog": "gemini-3-flash-preview:cloud",
-    "default": "qwen3-coder-next:cloud",
-}
-
 # ── Retry delays ─────────────────────────────────────────────────────────────
 
 RETRY_DELAY_CONNECT = 5  # quick retries — network may recover any moment

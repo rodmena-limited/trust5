@@ -17,9 +17,13 @@ from .lang_profiles import (  # noqa: F401 — re-exports for backward compat
     _FRAMEWORK_MARKERS,
     _MANIFEST_TO_LANG,
     _SKIP_DIRS_DETECT,
-    PROFILES,
-    LanguageProfile,
     _build_ext_map,
+)
+from .lang_profiles import (
+    PROFILES as PROFILES,
+)
+from .lang_profiles import (
+    LanguageProfile as LanguageProfile,
 )
 
 

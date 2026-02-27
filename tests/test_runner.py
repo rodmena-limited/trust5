@@ -181,7 +181,42 @@ def test_check_stage_failures_detects_review_failure():
     assert any("review" in d.lower() for d in details)
 
 
-# ── finalize_status tests ──
+def test_check_stage_failures_ignores_advisory_review():
+    """Advisory review failures (review_advisory=True) should not trigger auto-retry."""
+    stages = [
+        make_stage(
+            "review",
+            WorkflowStatus.SUCCEEDED,  # Advisory returns SUCCESS
+            {"review_passed": False, "review_score": 0.5, "review_advisory": True},
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+
+    _, _, has_review, _, details = check_stage_failures(workflow)
+
+    # Advisory review should NOT count as a failure
+    assert has_review is False
+    assert len(details) == 0
+
+
+def test_check_stage_failures_detects_non_advisory_review_failure():
+    """Non-advisory review failures (review_advisory=False or missing) should trigger auto-retry."""
+    stages = [
+        make_stage(
+            "review",
+            WorkflowStatus.FAILED_CONTINUE,
+            {"review_passed": False, "review_score": 0.5},  # No review_advisory key
+        ),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+
+    _, _, has_review, _, details = check_stage_failures(workflow)
+
+    # Non-advisory review SHOULD count as a failure
+    assert has_review is True
+    assert any("review" in d.lower() for d in details)
+
+
 
 
 @patch("trust5.core.runner.emit")
@@ -237,9 +272,31 @@ def test_finalize_status_overrides_to_terminal_on_review_failure(mock_emit):
     wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
     assert any("code review failed" in c[0][1] for c in wfal_calls)
 
+@patch("trust5.core.runner.emit")
+def test_finalize_status_ignores_advisory_review_failure(mock_emit):
+    """Advisory review failures should NOT cause TERMINAL status."""
+    stages = [
+        make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),
+        make_stage(
+            "review",
+            WorkflowStatus.SUCCEEDED,
+            {"review_passed": False, "review_score": 0.4, "review_advisory": True},
+        ),
+        make_stage("quality", WorkflowStatus.SUCCEEDED, {"quality_passed": True, "quality_score": 0.90}),
+    ]
+    workflow = make_workflow(WorkflowStatus.SUCCEEDED, stages)
+    store = MagicMock()
+
+    finalize_status(workflow, store)
+
+    # Advisory review should NOT cause TERMINAL
+    assert workflow.status == WorkflowStatus.SUCCEEDED
+    store.update_status.assert_not_called()
+
 
 @patch("trust5.core.runner.emit")
 def test_finalize_status_clean_succeeded(mock_emit):
+
     stages = [
         make_stage("setup", WorkflowStatus.SUCCEEDED),
         make_stage("validate", WorkflowStatus.SUCCEEDED, {"tests_passed": True}),

@@ -26,9 +26,7 @@ from .quality_models import (  # noqa: F401
     PRINCIPLE_UNDERSTANDABLE,
     PRINCIPLE_WEIGHTS,
     SUBPROCESS_TIMEOUT,
-    Issue,
     PrincipleResult,
-    QualityReport,
     _check_doc_completeness,
     _check_file_sizes,
     _check_generic_assertions,
@@ -43,14 +41,22 @@ from .quality_models import (  # noqa: F401
     _run_command,
     check_assertion_density,
 )
+from .quality_models import (
+    Issue as Issue,
+)
+from .quality_models import (
+    QualityReport as QualityReport,
+)
 from .quality_validators import (  # noqa: F401
     ReadableValidator,
     SecuredValidator,
     TestedValidator,
     TrackableValidator,
-    TrustGate,
     UnderstandableValidator,
     _ValidatorBase,
+)
+from .quality_validators import (
+    TrustGate as TrustGate,
 )
 
 

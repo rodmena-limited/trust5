@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import timedelta
+from typing import Any
 
 from resilient_circuit import ExponentialDelay
 from stabilize import StageExecution, Task, TaskResult
@@ -154,7 +155,7 @@ class ImplementerTask(Task):
                 return TaskResult.failed_continue(error=f"Implementation failed: {e}")
 
     @staticmethod
-    def _clean_source_files(project_root: str, context: dict) -> None:
+    def _clean_source_files(project_root: str, context: dict[str, Any]) -> None:
         """Delete source files before a full rebuild.
 
         Removes all source files (by extension) from the project directory,

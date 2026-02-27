@@ -67,6 +67,33 @@ class ReviewReport:
     total_info: int = 0
 
 
+def _safe_int(val: object, default: int = 0) -> int:
+    """Parse an int from LLM output, tolerating commas, ranges, and junk."""
+    if isinstance(val, int):
+        return val
+    try:
+        return int(str(val))
+    except (ValueError, TypeError):
+        pass
+    # LLM may return "62, 73, 107" or "30-60" — take first number
+    text = str(val)
+    m = re.search(r"\d+", text)
+    return int(m.group()) if m else default
+
+
+def _safe_float(val: object, default: float = 0.0) -> float:
+    """Parse a float from LLM output, tolerating junk."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        return float(str(val))
+    except (ValueError, TypeError):
+        pass
+    text = str(val)
+    m = re.search(r"\d+\.?\d*", text)
+    return float(m.group()) if m else default
+
+
 def parse_review_findings(raw_output: str) -> ReviewReport:
     """Parse structured findings from the LLM's review output."""
     match = _FINDINGS_RE.search(raw_output)
@@ -116,17 +143,17 @@ def parse_review_findings(raw_output: str) -> ReviewReport:
                 severity=str(item.get("severity", "info")),
                 category=str(item.get("category", "design-smell")),
                 file=str(item.get("file", "")),
-                line=int(item.get("line", 0)),
+                line=_safe_int(item.get("line", 0)),
                 description=str(item.get("description", "")),
             )
         )
 
     return ReviewReport(
         findings=findings,
-        summary_score=float(data.get("summary_score", 0.7)),
-        total_errors=int(data.get("total_errors", 0)),
-        total_warnings=int(data.get("total_warnings", 0)),
-        total_info=int(data.get("total_info", 0)),
+        summary_score=_safe_float(data.get("summary_score", 0.7)),
+        total_errors=_safe_int(data.get("total_errors", 0)),
+        total_warnings=_safe_int(data.get("total_warnings", 0)),
+        total_info=_safe_int(data.get("total_info", 0)),
     )
 
 
@@ -171,9 +198,61 @@ class ReviewTask(Task):
                     prompt,
                     max_turns=config.review_max_turns,
                 )
+
+            # Parse findings
+            report = parse_review_findings(raw_output)
+            self._emit_report(report)
+
+            # Determine pass/fail
+            passed = report.total_errors == 0 and report.summary_score >= 0.8
+
+            if passed:
+                emit(
+                    M.RVPS,
+                    f"Code review PASSED \u2014 score {report.summary_score:.2f} "
+                    f"({report.total_warnings} warnings, {report.total_info} info)",
+                )
+                return TaskResult.success(
+                    outputs=self._build_outputs(report, passed=True),
+                )
+
+            # Review failed \u2014 decide whether to jump to repair or accept advisory
+            if config.code_review_jump_to_repair and report.total_errors > 0:
+                emit(
+                    M.RVFL,
+                    f"Code review FAILED \u2014 score {report.summary_score:.2f} "
+                    f"({report.total_errors} errors). Jumping to repair.",
+                )
+                jump_repair_ref = stage.context.get("jump_repair_ref", "repair")
+                feedback = self._format_repair_feedback(report)
+                jump_context: dict[str, Any] = {
+                    "_repair_requested": True,
+                    "test_output": feedback[:6000],
+                    "failure_type": "review",
+                    "project_root": project_root,
+                    "language_profile": profile_data,
+                }
+                propagate_context(stage.context, jump_context)
+                increment_jump_count(jump_context)
+                return TaskResult.jump_to(jump_repair_ref, context=jump_context)
+
+            # Advisory mode: report findings but don't block pipeline
+            # Mark as advisory so check_stage_failures() knows not to retry
+            emit(
+                M.RVFL,
+                f"Code review FAILED (advisory) \u2014 score {report.summary_score:.2f} "
+                f"({report.total_errors} errors, {report.total_warnings} warnings)",
+            )
+            return TaskResult.success(  # SUCCESS, not FAILED_CONTINUE
+                outputs={
+                    **self._build_outputs(report, passed=False),
+                    "review_advisory": True,  # Marker: don't trigger auto-retry
+                },
+            )
+
         except Exception as e:
-            # Broad catch: review is advisory — any failure (LLMError, KeyError,
-            # TypeError, AttributeError, etc.) must not crash the pipeline.
+            # Broad catch: review is advisory \u2014 any failure (LLMError, KeyError,
+            # TypeError, ValueError, etc.) must not crash the pipeline.
             logger.warning("Review task failed: %s", e, exc_info=True)
             emit(M.RVFL, f"Review agent error: {e}")
             return TaskResult.failed_continue(
@@ -184,54 +263,6 @@ class ReviewTask(Task):
                     "review_error": str(e),
                 },
             )
-
-        # Parse findings
-        report = parse_review_findings(raw_output)
-        self._emit_report(report)
-
-        # Determine pass/fail
-        passed = report.total_errors == 0 and report.summary_score >= 0.8
-
-        if passed:
-            emit(
-                M.RVPS,
-                f"Code review PASSED \u2014 score {report.summary_score:.2f} "
-                f"({report.total_warnings} warnings, {report.total_info} info)",
-            )
-            return TaskResult.success(
-                outputs=self._build_outputs(report, passed=True),
-            )
-
-        # Review failed — decide whether to jump to repair or accept advisory
-        if config.code_review_jump_to_repair and report.total_errors > 0:
-            emit(
-                M.RVFL,
-                f"Code review FAILED \u2014 score {report.summary_score:.2f} "
-                f"({report.total_errors} errors). Jumping to repair.",
-            )
-            jump_repair_ref = stage.context.get("jump_repair_ref", "repair")
-            feedback = self._format_repair_feedback(report)
-            jump_context: dict[str, Any] = {
-                "_repair_requested": True,
-                "test_output": feedback[:6000],
-                "failure_type": "review",
-                "project_root": project_root,
-                "language_profile": profile_data,
-            }
-            propagate_context(stage.context, jump_context)
-            increment_jump_count(jump_context)
-            return TaskResult.jump_to(jump_repair_ref, context=jump_context)
-
-        # Advisory mode: report findings but don't block pipeline
-        emit(
-            M.RVFL,
-            f"Code review FAILED (advisory) \u2014 score {report.summary_score:.2f} "
-            f"({report.total_errors} errors, {report.total_warnings} warnings)",
-        )
-        return TaskResult.failed_continue(
-            error=f"Code review failed (score={report.summary_score:.2f})",
-            outputs=self._build_outputs(report, passed=False),
-        )
 
     def _build_review_prompt(
         self,

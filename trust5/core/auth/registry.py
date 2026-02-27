@@ -86,6 +86,60 @@ def get_active_token() -> tuple[AuthProvider, TokenData] | None:
     return provider, token_data
 
 
+def validate_provider() -> None:
+    """Validate that the active/overridden provider is available and authenticated.
+
+    Call this early in CLI commands (before pipeline starts) to fail fast
+    instead of silently falling back to Ollama.
+
+    Rules:
+    - Ollama: no auth needed — always valid.
+    - Known provider (claude, google) with ``--provider`` override: MUST have valid token.
+    - Known provider set as active (no override): MUST have valid token.
+    - Unknown provider name: always an error.
+    - No override AND no active provider: silent fallback to Ollama (legacy behavior).
+
+    Raises:
+        SystemExit: via ``emit(M.SERR, ...) + raise SystemExit(1)``
+    """
+    from ..message import M, emit
+
+    store = _get_store()
+    with _registry_lock:
+        override = _provider_override
+
+    # Determine what the user asked for
+    if override:
+        requested = override
+        source = "--provider flag"
+    else:
+        active = store.get_active()
+        if not active:
+            return  # No override, no active → Ollama fallback is fine
+        requested = active
+        source = "active provider"
+
+    # Ollama needs no authentication
+    if requested == "ollama":
+        return
+
+    # Unknown provider name?
+    if requested not in _PROVIDERS:
+        available = ", ".join(list(_PROVIDERS.keys()) + ["ollama"])
+        emit(M.SERR, f"Unknown provider '{requested}' ({source}). Available: {available}")
+        raise SystemExit(1)
+
+    # Known provider — check for valid token
+    provider = get_provider(requested)
+    token_data = store.get_valid_token(requested, provider)
+    if token_data is None:
+        emit(
+            M.SERR,
+            f"Provider '{requested}' ({source}) is not authenticated. "
+            f"Run 'trust5 login {requested}' first, or use '--provider ollama'.",
+        )
+        raise SystemExit(1)
+
 DEFAULT_PROVIDER = "claude"
 
 

@@ -31,7 +31,7 @@ class LLMBackendsMixin:
         self._emit_request_log(messages, tools, model, timeout)  # type: ignore[attr-defined]
 
         response = self._post(f"{self.base_url}/api/chat", payload, model, timeout)  # type: ignore[attr-defined]
-        return self._consume_stream(response, model)  # type: ignore[attr-defined]
+        return self._consume_stream(response, model)  # type: ignore[attr-defined, no-any-return]
 
     def _do_chat_anthropic(
         self,
@@ -114,7 +114,7 @@ class LLMBackendsMixin:
         self._emit_request_log(messages, tools, model, timeout)  # type: ignore[attr-defined]
 
         response = self._post(f"{self.base_url}/v1/messages", payload, model, timeout)  # type: ignore[attr-defined]
-        return self._consume_anthropic_stream(response, model)  # type: ignore[attr-defined]
+        return self._consume_anthropic_stream(response, model)  # type: ignore[attr-defined, no-any-return]
 
     @staticmethod
     def _convert_tools_to_anthropic(
@@ -215,7 +215,7 @@ class LLMBackendsMixin:
 
         url = f"{self.base_url}/v1beta/models/{model}:streamGenerateContent?alt=sse"  # type: ignore[attr-defined]
         response = self._post(url, payload, model, timeout)  # type: ignore[attr-defined]
-        return self._consume_google_stream(response, model)  # type: ignore[attr-defined]
+        return self._consume_google_stream(response, model)  # type: ignore[attr-defined, no-any-return]
 
     @staticmethod
     def _convert_tools_to_google(

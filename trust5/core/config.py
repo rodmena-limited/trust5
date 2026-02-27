@@ -277,8 +277,8 @@ class AgentConfig(BaseModel):
     tool_result_limit: int = 8000
     default_timeout: int = 7200  # 2 hr wall-clock per agent run
     per_turn_timeout: int = 1800  # 30 min per LLM call
-    idle_warn_turns: int = 5
-    idle_max_turns: int = 10
+    idle_warn_turns: int = 8  # Warn after 8 read-only turns
+    idle_max_turns: int = 20  # Abort after 20 read-only turns (was 10, too aggressive)
 
 
 class PipelineConfig(BaseModel):
@@ -295,6 +295,7 @@ class PipelineConfig(BaseModel):
     max_quality_attempts: int = 3
     setup_timeout: int = 120
     subprocess_timeout: int = 120
+
 
 class WorkflowTimeoutConfig(BaseModel):
     """Workflow-level timeouts in seconds."""

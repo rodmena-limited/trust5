@@ -100,19 +100,7 @@ def reset_llm_state() -> None:
     logger.info("LLM state reset: circuit breakers cleared for new retry cycle")
 
 
-# MODEL_CONTEXT_WINDOW and MODEL_TIERS imported from llm_constants
-
-# MODEL_CONTEXT_WINDOW and MODEL_TIERS imported from llm_constants
-
-
 THINKING_TIERS = {"best", "good"}
-DEFAULT_FALLBACK_CHAIN = [
-    "qwen3-coder-next:cloud",
-    "kimi-k2.5:cloud",
-    "gemini-3-flash-preview:cloud",
-]
-
-
 # Per-stage thinking levels: None=off, "low", "high"
 # Planner needs deep reasoning; test-writer needs some; implementer needs max output tokens.
 STAGE_THINKING_LEVEL: dict[str, str] = {
@@ -120,8 +108,10 @@ STAGE_THINKING_LEVEL: dict[str, str] = {
     "planner": "high",
     "test-writer": "low",
     "test_writer": "low",
-    "repairer": "low",
-    "repair": "low",
+    "repairer": "high",
+    "repair": "high",
+    "implementer": "high",
+    "implement": "high",
 }
 
 
@@ -148,7 +138,7 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
 
     def __init__(
         self,
-        model: str = "glm-4.7:cloud",
+        model: str,
         base_url: str = "http://localhost:11434",
         timeout: int = TIMEOUT_STANDARD,
         fallback_models: list[str] | None = None,
@@ -200,8 +190,8 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
     def _stream_read_timeout(self) -> int:
         """Per-chunk read timeout, dynamic based on thinking mode."""
         if self.thinking_level:
-            return STREAM_READ_TIMEOUT_THINKING
-        return STREAM_READ_TIMEOUT_STANDARD
+            return int(STREAM_READ_TIMEOUT_THINKING)
+        return int(STREAM_READ_TIMEOUT_STANDARD)
 
     @classmethod
     def for_tier(
@@ -213,10 +203,8 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
     ) -> "LLM":
         """Create an LLM instance for the given tier, reading models from global config.
 
-        Model resolution order:
-          1. ``~/.trust5/config.yaml`` → ``models.<provider>.<tier>``
-          2. Hardcoded provider config (fallback for unknown providers)
-          3. Ollama defaults (when no provider is authenticated)
+        Model resolution: always ``~/.trust5/config.yaml`` → ``models.<provider>.<tier>``.
+        Pydantic defaults in config.py serve as built-in fallback when YAML omits a section.
         """
         from .auth.registry import get_active_token
         from .config import load_global_config
@@ -226,18 +214,18 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
         if active is not None:
             provider, token_data = active
             cfg = provider.config
-            # Read model config from global config (user-editable ~/.trust5/config.yaml)
-            provider_models = getattr(gcfg.models, cfg.name, None)
-            if provider_models is not None:
-                model = getattr(provider_models, tier, None) or provider_models.default
-                fallback_chain = provider_models.fallback_chain or cfg.fallback_chain
-                tt = provider_models.thinking_tiers
-                thinking_tiers = set(tt) if tt else cfg.thinking_tiers
-            else:
-                # Unknown provider — fall back to hardcoded provider config
-                model = cfg.models.get(tier, cfg.models.get("default", ""))
-                fallback_chain = cfg.fallback_chain
-                thinking_tiers = cfg.thinking_tiers
+            # Always read models from global config (user-editable ~/.trust5/config.yaml)
+            # Pydantic defaults in ModelsConfig ensure gcfg.models.<name> is never None
+            provider_models = getattr(gcfg.models, cfg.name, gcfg.models.ollama)
+            model = getattr(provider_models, tier, None) or provider_models.default
+            fallback_chain = provider_models.fallback_chain
+            tt = provider_models.thinking_tiers
+            thinking_tiers = set(tt) if tt else cfg.thinking_tiers
+            if not model:
+                raise ValueError(
+                    f"No model configured for provider '{cfg.name}' tier '{tier}'. "
+                    f"Check ~/.trust5/config.yaml models.{cfg.name}.{tier}"
+                )
             fallback = [m for m in fallback_chain if m != model]
             resolved = _resolve_thinking_level(tier, thinking_tiers, stage_name, thinking_level)
             return cls(
