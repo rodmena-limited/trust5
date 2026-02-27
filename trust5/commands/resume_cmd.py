@@ -37,6 +37,8 @@ def _reset_stage_for_resume(stage: Any) -> None:
     ctx.pop("diagnostic_baseline", None)
     ctx.pop("last_repair_summary", None)
     ctx.pop("_repair_requested", None)
+    # Reset jump count for fresh retry cycle
+    ctx.pop("_jump_count", None)
     stage.outputs = {}
     stage.end_time = None
     stage.start_time = None

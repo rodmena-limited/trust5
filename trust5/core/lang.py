@@ -10,7 +10,7 @@ import os
 
 # Re-export everything that other modules import from trust5.core.lang.
 # This keeps all existing import paths backward-compatible.
-from .lang_profiles import (  # noqa: F401 — re-exports for backward compat
+from .lang_profiles import (  # noqa: F401 — re-exports for backward compat  # noqa: F401 — re-exports for backward compat
     _COMMON_SKIP,
     _EXT_TO_LANG,
     _EXTENSION_MAP,
@@ -19,12 +19,8 @@ from .lang_profiles import (  # noqa: F401 — re-exports for backward compat
     _SKIP_DIRS_DETECT,
     _build_ext_map,
 )
-from .lang_profiles import (
-    PROFILES as PROFILES,
-)
-from .lang_profiles import (
-    LanguageProfile as LanguageProfile,
-)
+from .lang_profiles import PROFILES as PROFILES
+from .lang_profiles import LanguageProfile as LanguageProfile
 
 
 def _manifest_exists(project_root: str, manifest: str) -> bool:

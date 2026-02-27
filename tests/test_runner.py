@@ -217,8 +217,6 @@ def test_check_stage_failures_detects_non_advisory_review_failure():
     assert any("review" in d.lower() for d in details)
 
 
-
-
 @patch("trust5.core.runner.emit")
 def test_finalize_status_overrides_to_terminal_on_test_failure(mock_emit):
     stages = [
@@ -271,6 +269,7 @@ def test_finalize_status_overrides_to_terminal_on_review_failure(mock_emit):
     store.update_status.assert_called_once_with(workflow)
     wfal_calls = [c for c in mock_emit.call_args_list if c[0][0].value == "WFAL"]
     assert any("code review failed" in c[0][1] for c in wfal_calls)
+
 
 @patch("trust5.core.runner.emit")
 def test_finalize_status_ignores_advisory_review_failure(mock_emit):

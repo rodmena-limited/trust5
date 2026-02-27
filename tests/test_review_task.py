@@ -225,9 +225,11 @@ def test_review_advisory_on_errors(
 
     result = task.execute(stage)
 
-    assert result.status == WorkflowStatus.FAILED_CONTINUE
+    # Advisory mode returns SUCCESS (not FAILED_CONTINUE) to avoid infinite retry
+    assert result.status == WorkflowStatus.SUCCEEDED
     assert result.outputs["review_passed"] is False
     assert result.outputs["review_score"] == 0.65
+    assert result.outputs["review_advisory"] is True
     # Should NOT jump to repair (advisory mode)
     assert result.target_stage_ref_id is None
 

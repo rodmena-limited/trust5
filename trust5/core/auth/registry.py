@@ -140,6 +140,7 @@ def validate_provider() -> None:
         )
         raise SystemExit(1)
 
+
 DEFAULT_PROVIDER = "claude"
 
 

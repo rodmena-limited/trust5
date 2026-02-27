@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import QualityConfig
-from .quality_models import (  # noqa: F401
+from .quality_models import (  # noqa: F401  # noqa: F401  # noqa: F401
     _ASSERTION_PATTERNS,
     _SKIP_SIZE_CHECK,
     _TEST_FUNC_PATTERNS,
@@ -41,13 +41,9 @@ from .quality_models import (  # noqa: F401
     _run_command,
     check_assertion_density,
 )
-from .quality_models import (
-    Issue as Issue,
-)
-from .quality_models import (
-    QualityReport as QualityReport,
-)
-from .quality_validators import (  # noqa: F401
+from .quality_models import Issue as Issue
+from .quality_models import QualityReport as QualityReport
+from .quality_validators import (  # noqa: F401  # noqa: F401
     ReadableValidator,
     SecuredValidator,
     TestedValidator,
@@ -55,9 +51,7 @@ from .quality_validators import (  # noqa: F401
     UnderstandableValidator,
     _ValidatorBase,
 )
-from .quality_validators import (
-    TrustGate as TrustGate,
-)
+from .quality_validators import TrustGate as TrustGate
 
 
 def meets_quality_gate(report: QualityReport, config: QualityConfig) -> bool:

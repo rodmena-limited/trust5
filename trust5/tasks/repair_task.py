@@ -236,7 +236,8 @@ class RepairTask(Task):
                                 stub_src.append(src_file)
                             elif not content or (content.startswith('"""') and content.endswith('"""')):
                                 stub_src.append(src_file)
-                    except OSError:
+                    except (OSError, UnicodeDecodeError):
+                        # Binary file or encoding error — skip
                         pass
 
             if missing_src or stub_src:

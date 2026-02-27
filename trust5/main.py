@@ -124,6 +124,8 @@ def _global_options(
     if _USE_TUI:
         _silence_logging_for_tui()
     ensure_global_config()
+
+
 # ── CLI Commands ─────────────────────────────────────────────────────────
 
 
@@ -155,7 +157,6 @@ def develop(request: str) -> None:
     ensure_ollama_models()
 
     def _pipeline(shutdown: threading.Event | None = None) -> Workflow | None:
-
         """Run plan -> implement pipeline.
 
         *shutdown* is a ``threading.Event`` set by ``_run_tui_multi`` when the

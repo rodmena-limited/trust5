@@ -131,8 +131,9 @@ def _detect_stub_files(owned_files: list[str], project_root: str) -> list[str]:
         try:
             with open(full, encoding="utf-8") as fh:
                 content = fh.read().strip()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
+
         if len(content) < _STUB_THRESHOLD:
             lower = content.lower()
             if "implementation required" in lower:

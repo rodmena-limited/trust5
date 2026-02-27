@@ -16,7 +16,7 @@ def _read_file_safe(path: str, max_len: int = MAX_FILE_CONTENT) -> str:
         if len(content) > max_len:
             return content[:max_len] + f"\n... [{len(content) - max_len} chars truncated]"
         return content
-    except OSError as e:  # file read error
+    except (OSError, UnicodeDecodeError) as e:  # file read or encoding error
         return f"[Error reading {path}: {e}]"
 
 
@@ -246,8 +246,9 @@ def build_project_context(project_root: str) -> str:
                 filename = os.path.basename(file_path)
                 content = f.read()
                 parts.append(f"--- PROJECT: {filename} ---\n{content}")
-        except OSError:  # project doc read error
+        except (OSError, UnicodeDecodeError):  # project doc read error
             logger.debug("Failed to read project doc %s", file_path, exc_info=True)
+
     return "\n\n".join(parts)
 
 

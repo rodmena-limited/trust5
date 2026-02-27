@@ -283,7 +283,7 @@ class Tools:
                 try:
                     with open(real_path, encoding="utf-8") as f:
                         old_content = f.read()
-                except OSError:  # read existing: filesystem errors
+                except (OSError, UnicodeDecodeError):  # read existing: filesystem or encoding errors
                     logger.debug("Failed to read existing file content at %s", real_path, exc_info=True)
 
             emit(M.TWRT, f"Writing {len(content)} chars to {real_path}")
@@ -323,8 +323,9 @@ class Tools:
             try:
                 with open(fp, encoding="utf-8") as f:
                     results[fp] = f.read()
-            except OSError as e:  # read_files: filesystem errors
+            except (OSError, UnicodeDecodeError) as e:  # read_files: filesystem or encoding errors
                 results[fp] = f"Error: {e}"
+
         return json.dumps(results, ensure_ascii=False)
 
     def edit_file(self, file_path: str, old_string: str, new_string: str) -> str:
@@ -339,6 +340,8 @@ class Tools:
             return f"Error: file not found: {real_path}"
         except OSError as e:  # edit_file read: filesystem errors
             return f"Error reading {real_path}: {e}"
+        except UnicodeDecodeError:
+            return f"Error: {real_path} is not a valid UTF-8 text file"
 
         count = content.count(old_string)
         if count == 0:
