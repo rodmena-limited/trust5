@@ -191,7 +191,7 @@ class RepairTask(Task):
                 lang_profile = LanguageProfile(**profile_data)
                 system_prompt += "\n\n" + build_language_context(lang_profile)
             except (TypeError, KeyError):
-                pass
+                logger.debug("Failed to build LanguageProfile from context data", exc_info=True)
 
         # Inject watchdog audit findings so the repairer is aware of
         # file-system anomalies (garbled files, missing manifests, stubs).

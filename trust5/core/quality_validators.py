@@ -521,7 +521,7 @@ class ProjectCompletenessValidator(_ValidatorBase):
                         )
                     )
         except OSError:
-            pass
+            logger.debug("Failed to scan directory for garbled files", exc_info=True)
 
         if garbled_count == 0:
             score += 1.0
@@ -597,7 +597,7 @@ class TrustGate:
                     try:
                         coverage_pct = float(issue.message.split("=")[1].rstrip("%"))
                     except (IndexError, ValueError):
-                        pass
+                        logger.debug("Failed to parse coverage from %r", issue.message)
         score = round(total_score, 3)
         # Completeness is a pass/fail gate (weight=0), not a scored pillar.
         # If completeness fails, the report fails regardless of the score.

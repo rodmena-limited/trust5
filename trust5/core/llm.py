@@ -24,6 +24,7 @@ from .constants import (
 )
 from .llm_backends import LLMBackendsMixin
 from .llm_constants import (
+    MODEL_CONTEXT_WINDOW,
     _ANTHROPIC_THINKING_BUDGET,  # noqa: F401 — re-export
     _GEMINI_25_THINKING_BUDGET,  # noqa: F401 — re-export
 )
@@ -48,6 +49,29 @@ RETRY_BUDGET_RATE = LLM_RETRY_BUDGET_RATE
 RETRY_DELAY_CONNECT = _LLC_RETRY_DELAY_CONNECT
 RETRY_DELAY_SERVER = _LLC_RETRY_DELAY_SERVER
 MAX_BACKOFF_DELAY = LLM_MAX_BACKOFF_DELAY
+
+
+# ── C5: Context window pre-validation ─────────────────────────────────
+
+
+def estimate_token_count(messages: list[dict[str, str]]) -> int:
+    """Estimate token count from messages using ~4 chars per token heuristic."""
+    total_chars = sum(len(m.get("content", "")) for m in messages)
+    return total_chars // 4
+
+
+def _trim_messages_to_context(messages: list[dict[str, str]], max_tokens: int) -> list[dict[str, str]]:
+    """Trim oldest non-system messages until estimated tokens fit within max_tokens.
+
+    System messages are always preserved. At least one non-system message is kept.
+    """
+    system = [m for m in messages if m.get("role") == "system"]
+    non_system = [m for m in messages if m.get("role") != "system"]
+
+    while estimate_token_count(system + non_system) > max_tokens and len(non_system) > 1:
+        non_system.pop(0)
+
+    return system + non_system
 
 # Backoff strategies per error class (using resilient-circuit)
 _BACKOFF_CONNECT = ExponentialDelay(
@@ -303,6 +327,18 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
         Rate limit errors get 1 hour (respect server Retry-After, jittered).
         Sleep is interruptible via ``self._abort`` so watchdog can cancel.
         """
+        # C5: Pre-validate context window and trim if oversized
+        context_limit = MODEL_CONTEXT_WINDOW.get(model)
+        if context_limit is not None:
+            estimated = estimate_token_count(messages)
+            threshold = int(context_limit * 0.9)
+            if estimated > threshold:
+                emit(
+                    M.ARTY,
+                    f"Estimated {estimated} tokens exceeds 90% of {model} context window ({context_limit}), trimming messages",
+                )
+                messages = _trim_messages_to_context(messages, threshold)
+
         start = time.monotonic()
         attempt = 0
         while True:
@@ -461,8 +497,34 @@ class LLM(LLMBackendsMixin, LLMStreamsMixin):
                 )
 
         if response.status_code != 200:
+            # H7: Parse response body for provider-specific error classification
+            error_detail = response.text[:200]
+            try:
+                body = response.json()
+                if isinstance(body, dict):
+                    # Anthropic: {"type": "error", "error": {"type": "invalid_request_error", ...}}
+                    if body.get("type") == "error" and isinstance(body.get("error"), dict):
+                        anthropic_error = body["error"]
+                        error_type = anthropic_error.get("type", "")
+                        error_msg = anthropic_error.get("message", error_detail)
+                        if error_type == "invalid_request_error":
+                            raise LLMError(
+                                f"Anthropic invalid request for {model}: {error_msg}",
+                                retryable=False,
+                                error_class="permanent",
+                            )
+                    # Generic: extract better error message from body for 400-level errors
+                    if 400 <= response.status_code < 500:
+                        err_obj = body.get("error")
+                        if isinstance(err_obj, dict) and "message" in err_obj:
+                            error_detail = err_obj["message"]
+                        elif isinstance(err_obj, str):
+                            error_detail = err_obj
+            except (ValueError, KeyError, AttributeError):
+                pass  # Keep original error_detail from response.text
+
             raise LLMError(
-                f"HTTP {response.status_code} from {model}: {response.text[:200]}",
+                f"HTTP {response.status_code} from {model}: {error_detail}",
                 retryable=False,
                 error_class="permanent",
             )

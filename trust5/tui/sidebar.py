@@ -244,7 +244,7 @@ class WatchdogLog(RichLog):
     def _available_width(self) -> int:
         try:
             return max(self.size.width - 6, 20)
-        except Exception:
+        except (AttributeError, ValueError):  # widget not yet mounted or zero-size
             return 32
 
     def add_narrative(self, content: str, level: str = "ok") -> None:

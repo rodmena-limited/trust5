@@ -60,7 +60,7 @@ def check_stage_failures(workflow: Workflow) -> tuple[bool, bool, bool, bool, li
                 if outputs.get("compliance_passed") is False:
                     has_compliance_failure = True
             except (ValueError, TypeError):
-                pass
+                logger.debug("Failed to parse compliance data from stage %r", stage.ref_id, exc_info=True)
 
         # --- Test failure detection (only for failed/terminal stages) ---
         if stage.status not in (WorkflowStatus.FAILED_CONTINUE, WorkflowStatus.TERMINAL):

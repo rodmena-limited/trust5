@@ -488,6 +488,8 @@ def create_parallel_develop_workflow(
                 "_max_jumps": per_module_jumps,
                 "language_profile": profile_dict,
                 "development_mode": dev_mode,
+                "ancestor_outputs": {"plan": plan_output},
+                "plan_output": plan_output,
                 **module_context,
             },
             requisite_stage_ref_ids={val_ref},
@@ -501,6 +503,8 @@ def create_parallel_develop_workflow(
             ],
         )
         stages.append(repair)
+        if plan_config_dict:
+            repair.context["plan_config"] = plan_config_dict
 
     # Aggregate all test files from all modules for integration stages
     all_test_files: list[str] = []
@@ -521,6 +525,8 @@ def create_parallel_develop_workflow(
         "jump_validate_ref": "integration_validate",
         "jump_implement_ref": "integration_repair",
         "test_files": all_test_files or None,
+        "ancestor_outputs": {"plan": plan_output},
+        "plan_output": plan_output,
     }
     if plan_config_dict:
         int_val_ctx["plan_config"] = plan_config_dict
@@ -560,6 +566,8 @@ def create_parallel_develop_workflow(
             "jump_quality_ref": "quality",
             "jump_review_ref": "review",
             "test_files": all_test_files or None,
+            "ancestor_outputs": {"plan": plan_output},
+            "plan_output": plan_output,
         },
         requisite_stage_ref_ids={"integration_validate"},
         tasks=[
@@ -572,6 +580,8 @@ def create_parallel_develop_workflow(
         ],
     )
     stages.append(int_rep)
+    if plan_config_dict:
+        int_rep.context["plan_config"] = plan_config_dict
 
     # Optional mutation testing stage (Oracle Problem mitigation)
     review_deps: set[str] = {"integration_repair"}
@@ -644,6 +654,8 @@ def create_parallel_develop_workflow(
         "test_first_completed": use_tdd,
         "jump_repair_ref": "integration_repair",
         "jump_review_ref": "review",
+        "ancestor_outputs": {"plan": plan_output},
+        "plan_output": plan_output,
     }
     if plan_config_dict:
         quality_ctx["plan_config"] = plan_config_dict

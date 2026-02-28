@@ -340,7 +340,7 @@ class AgentTask(Task):
                 profile = LanguageProfile(**profile_data)
                 system_prompt += "\n\n" + build_language_context(profile)
             except (TypeError, KeyError):
-                pass
+                logger.debug("Failed to build LanguageProfile from context data", exc_info=True)
 
         if agent_name and "planner" in agent_name.lower():
             system_prompt += "\n\n" + _build_ears_context()
@@ -533,7 +533,7 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
                 if isinstance(fm, dict):
                     return fm, parts[2]
             except yaml.YAMLError:
-                pass
+                logger.debug("Failed to parse YAML frontmatter in prompt file", exc_info=True)
     return {}, content
 
 

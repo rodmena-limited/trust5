@@ -105,7 +105,7 @@ class QualityTask(Task):
                     try:
                         assertion_density = float(issue.message.split("=")[1])
                     except (IndexError, ValueError):
-                        pass
+                        logger.debug("Failed to parse assertion density from %r", issue.message)
 
         # Extract mutation score from upstream mutation stage (if it ran)
         mutation_score = float(stage.context.get("mutation_score", -1.0))
@@ -134,7 +134,8 @@ class QualityTask(Task):
 
             try:
                 compliance_llm = LLM.for_tier("fast", thinking_level=None)
-            except Exception:
+            except (OSError, ValueError, RuntimeError) as exc:  # LLM init: auth/config/provider errors
+                logger.debug("Failed to create compliance LLM: %s", exc)
                 compliance_llm = None
             compliance_report = check_compliance(
                 acceptance_criteria,

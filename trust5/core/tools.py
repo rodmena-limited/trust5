@@ -11,6 +11,7 @@ from typing import Any
 from .init import ProjectInitializer
 from .message import M, emit, emit_block
 from .tool_definitions import build_ask_user_definition, build_tool_definitions
+from .constants import MAX_GLOB_RESULTS, MAX_READ_FILE_SIZE, MAX_READFILES_COUNT, MAX_READFILES_FILE_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +260,15 @@ class Tools:
         returns the full file content.
         """
         try:
+            # Size check only for full reads (no offset/limit)
+            if offset is None and limit is None:
+                size = os.path.getsize(file_path)
+                if size > MAX_READ_FILE_SIZE:
+                    return (
+                        f"Error: file {file_path} is too large ({size:,} bytes, "
+                        f"limit is {MAX_READ_FILE_SIZE:,} bytes). "
+                        f"Use offset/limit to read portions."
+                    )
             with open(file_path, encoding="utf-8") as f:
                 if offset is not None or limit is not None:
                     lines = f.readlines()
@@ -319,8 +329,21 @@ class Tools:
     @staticmethod
     def read_files(file_paths: list[str]) -> str:
         results: dict[str, str] = {}
+        if len(file_paths) > MAX_READFILES_COUNT:
+            results["__warning__"] = (
+                f"Requested {len(file_paths)} files, truncated to {MAX_READFILES_COUNT}. "
+                f"Reduce the number of files per call."
+            )
+            file_paths = file_paths[:MAX_READFILES_COUNT]
         for fp in file_paths:
             try:
+                size = os.path.getsize(fp)
+                if size > MAX_READFILES_FILE_SIZE:
+                    results[fp] = (
+                        f"Error: file too large ({size:,} bytes, "
+                        f"limit is {MAX_READFILES_FILE_SIZE:,} bytes)"
+                    )
+                    continue
                 with open(fp, encoding="utf-8") as f:
                     results[fp] = f.read()
             except (OSError, UnicodeDecodeError) as e:  # read_files: filesystem or encoding errors
@@ -416,6 +439,9 @@ class Tools:
         """Lists files matching a glob pattern."""
         try:
             files = glob.glob(os.path.join(workdir, pattern), recursive=True)
+            if len(files) > MAX_GLOB_RESULTS:
+                logger.warning("Glob pattern %r matched %d files, truncated to %d", pattern, len(files), MAX_GLOB_RESULTS)
+                files = files[:MAX_GLOB_RESULTS]
             return [os.path.relpath(f, workdir) for f in files]
         except (OSError, ValueError) as e:  # glob: filesystem/pattern errors
             return [f"Error listing files: {str(e)}"]

@@ -7,11 +7,14 @@ import json
 import os
 import re
 import subprocess
+import logging
 
 from pydantic import BaseModel, Field
 
 from .constants import QUALITY_PASS_THRESHOLD
 from .constants import SUBPROCESS_TIMEOUT as SUBPROCESS_TIMEOUT
+
+logger = logging.getLogger(__name__)
 
 # ── Principle names and weights ──────────────────────────────────────
 
@@ -146,7 +149,7 @@ def _check_file_sizes(files: list[str], max_lines: int) -> list[Issue]:
                     )
                 )
         except OSError:
-            pass
+            logger.debug("Failed to read %s for file-size check", fpath)
     return issues
 
 
@@ -171,7 +174,7 @@ def _check_doc_completeness(files: list[str], language: str) -> float:
             if pat.search(head):
                 documented += 1
         except OSError:
-            pass
+            logger.debug("Failed to read %s for doc-completeness check", fpath)
     return documented / max(total, 1)
 
 

@@ -206,7 +206,7 @@ class StatusBar1(Static):
         right.append(" scroll ", style=C_DIM)
         try:
             w = self.size.width
-        except Exception:
+        except (AttributeError, ValueError):  # widget not yet mounted or zero-size
             w = 120
         gap = max(w - len(left.plain) - len(right.plain), 1)
         left.append(" " * gap)
